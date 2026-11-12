@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Hashcat;
 
 namespace RecoverKit.Core;
@@ -19,6 +20,9 @@ public sealed class SessionResult
     public string? Error { get; init; }
     /// <summary>Key search: the recovered 40-bit RC4 key (hex).</summary>
     public string? Key { get; init; }
+
+    /// <summary>Stay attack: the password-free decrypted copy written next to the archive, when any.</summary>
+    public string? DecryptedCopy { get; init; }
 }
 
 /// <summary>Saved progress of an interrupted recovery, so it can continue later.</summary>
@@ -164,6 +168,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         native.StatusReceived += s => Status?.Invoke(s);
         native.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
 
+        string? stayKeysHex = null;   // Stay fast key search: recovered ZipCrypto cipher keys (hex)
+        string? stayCopy = null;
+
         for (int si = state.StepIndex; si < state.Steps.Count; si++)
         {
             var spec = state.Steps[si];
@@ -180,6 +187,39 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 var ks = await KeySearchStepAsync(runner, target, hashFile, key, si, state, attack, resume, ct);
                 if (ks is not null) return ks;
                 continue;
+            }
+
+            if (spec.Kind == AttackKind.StayZip)
+            {
+                if (!settings.TryStayZipAttack)
+                {
+                    Log?.Invoke(LogKind.Info, $"Step {si + 1}/{state.Steps.Count} skipped: the fast key search is disabled in Preferences.");
+                    continue;
+                }
+                StepStarted?.Invoke(si, state.Steps.Count, attack.Description, attack.Keyspace);
+                Log?.Invoke(LogKind.Step, $"Step {si + 1}/{state.Steps.Count}: {attack.Description} - {attack.Keyspace:N0} candidates");
+                state.StepIndex = si;
+                state.ModeIndex = 0;
+                state.HashcatSession = "";
+                state.Restorable = false;
+
+                StayStepOutcome stay;
+                try
+                {
+                    stay = await StayZipStep.RunAsync(target, filePath, settings, (k, m) => Log?.Invoke(k, m), ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    state.Save(settings);
+                    return new SessionResult { Outcome = SessionOutcome.Stopped, Key = stayKeysHex, DecryptedCopy = stayCopy };
+                }
+
+                if (stay.Keys is { } stayKeys)
+                {
+                    stayKeysHex = StayZipStep.KeysHex(stayKeys);
+                    stayCopy = stay.DecryptedCopy;
+                }
+                continue;   // keys in hand: keep going, the password attacks may still find the actual password
             }
 
             // A WPA-PMK Generator table used as the dictionary: test its precomputed PMKs (hashcat 22001).
@@ -266,7 +306,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                         var found = result.Passwords;
                         if (pmkTable is not null)   // hashcat reports the PMK; map it back to its password
                             found = found.Select(p => pmkTable.PasswordFor(p) ?? p).ToList();
-                        return new SessionResult { Outcome = SessionOutcome.Found, Passwords = found };
+                        return new SessionResult { Outcome = SessionOutcome.Found, Passwords = found, Key = stayKeysHex, DecryptedCopy = stayCopy };
                     case RunOutcome.Aborted:
                         state.Save(settings);
                         return new SessionResult { Outcome = SessionOutcome.Stopped };
@@ -283,7 +323,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             }
         }
         SessionState.Delete(settings, key);
-        return new SessionResult { Outcome = SessionOutcome.NotFound };
+        return stayKeysHex is null
+            ? new SessionResult { Outcome = SessionOutcome.NotFound }
+            : new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = stayKeysHex, DecryptedCopy = stayCopy };
     }
 
     /// <summary>

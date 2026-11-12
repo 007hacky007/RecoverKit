@@ -54,6 +54,9 @@ public sealed class Settings
     // Key search and rainbow tables
     public string? RainbowTablesPath { get; set; }
     public bool AutoDecrypt { get; set; }
+
+    /// <summary>Try Stay's fast key search on compatible ZipCrypto archives before password attacks.</summary>
+    public bool TryStayZipAttack { get; set; } = true;
     public string DecryptSuffix { get; set; } = "_decrypted";
 
     public Dictionary<int, double> SpeedByMode { get; set; } = new();
@@ -65,8 +68,8 @@ public sealed class Settings
 
     [JsonIgnore] public string PotfilePath => Path.Combine(AppDataDir, "recovered.potfile");
     [JsonIgnore] public string VolumePasswordCacheDir => Directory.CreateDirectory(Path.Combine(AppDataDir, "volume-passwords")).FullName;
-    [JsonIgnore] public string KeyCachePath => Path.Combine(AppDataDir, "keys.cache");
-    [JsonIgnore] public string SessionsDir => Directory.CreateDirectory(Path.Combine(AppDataDir, "sessions")).FullName;
+    [JsonIgnore] public string KeyCachePath { get; set; } = Path.Combine(AppDataDir, "keys.cache");
+    [JsonIgnore] public string SessionsDir { get; set; } = Directory.CreateDirectory(Path.Combine(AppDataDir, "sessions")).FullName;
 
     private static string FilePath => Path.Combine(AppDataDir, "settings.json");
 
