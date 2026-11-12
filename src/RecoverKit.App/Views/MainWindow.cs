@@ -337,7 +337,7 @@ public sealed partial class MainWindow : Window
         hint.Inlines.Add(new Run("). RecoverKit detects the format and picks the right attack."));
         _dropHint = hint;
         var chips = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 470, ItemSpacing = 6, LineSpacing = 6, ItemsAlignment = WrapPanelItemsAlignment.Center };
-        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup" })
+        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "KeePass", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup" })
             chips.Children.Add(new Border
             {
                 Background = Palette.ChipBrush, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3),
@@ -520,6 +520,7 @@ public sealed partial class MainWindow : Window
         "  • MS Office 97-2021 documents (Word, Excel, PowerPoint)",
         "  • OpenOffice / LibreOffice / OpenDocument files",
         "  • ZIP/WinZip archives and RAR 3.x-5.x archives",
+        "  • KeePass 1 KDB and KDBX 2/3/4 databases (optional keyfile)",
         "  • Adobe PDF 1.2-1.7 documents",
         "  • Apple iOS / iTunes backups (open the backup's Manifest.plist)",
         "  • BlackBerry .ipd backups (detection only; no hashcat kernel)",
@@ -847,6 +848,24 @@ public sealed partial class MainWindow : Window
         Detection det;
         try { det = await Task.Run(() => FormatDetector.Detect(path)); }
         finally { Cursor = Cursor.Default; }
+        // A tiny KDB can be attackable only after its keyfile has been selected.
+        if (det.TypeName.StartsWith("KeePass", StringComparison.Ordinal))
+        {
+            _busyDialog = true;
+            try
+            {
+                var answer = await Msg.Show(this, "Does this KeePass database also require a keyfile?\n\nChoose No for password-only recovery.",
+                    "KeePass keyfile", MsgButtons.YesNoCancel, MsgIcon.Question);
+                if (answer == MsgResult.Cancel) return;
+                if (answer == MsgResult.Yes)
+                {
+                    var keyfile = await Pick.Open(this, "All files|*.*", _settings.LastOpenedDirectory);
+                    if (keyfile is null) return;
+                    det = await Task.Run(() => FormatDetector.Detect(path, keyfile));
+                }
+            }
+            finally { _busyDialog = false; }
+        }
         await ShowDetectionAsync(det);
     }
 

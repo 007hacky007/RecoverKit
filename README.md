@@ -48,6 +48,7 @@ number at the end"), and it tests those combinations until it finds the right on
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5 |
+| KeePass databases | KeePass 1 KDB (AES/Twofish), KDBX 2/3 (AES), KDBX 4 (Argon2d/Argon2id, 253-byte headers) |
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
 with five or more encrypted files are opened in minutes without any password guessing: RecoverKit
@@ -160,6 +161,15 @@ quickest guesses.
 - For TrueCrypt/VeraCrypt volumes, File > Open As lets you add keyfiles. For VeraCrypt, enter the
   known PIM or leave it at 0 for the default. All selected keyfiles are required; system encryption
   does not support keyfiles.
+- For KeePass databases, opening the file offers an optional keyfile. The CLI accepts
+  `extract database.kdbx --keyfile database.key` and the same option for `crack`. XML v1/v2,
+  32-byte binary, 64-character hex and arbitrary keyfiles are supported. KeePass 1 hashes XML
+  keyfiles as arbitrary files. The keyfile must be available when recovering its password.
+  KDBX 4 Argon2 recovery is memory-hard and very slow. Hashcat 7.1.2 requires exactly 253 header
+  bytes; standard AES/Twofish Argon2 headers fit, while standard ChaCha20 headers and custom
+  headers usually do not. KDBX 4 AES-KDF, KDBX 2/3 non-AES ciphers, Windows account keys and
+  external key providers are unsupported. KDB contents over 8 MiB, and password-only KDB files
+  with exactly 32 encrypted bytes, exceed hashcat's limits.
 - For RAR 3 archives whose file names are visible, RecoverKit recovers the password of one encrypted
   file (it picks the most reliable one). Other files in the same archive may use a different
   password. Split (multi-volume) archives and files that need earlier files of a solid archive
