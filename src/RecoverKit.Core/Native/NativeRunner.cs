@@ -130,11 +130,15 @@ public sealed class NativeRunner
     /// </summary>
     internal static bool LowersProcessPriority => !OperatingSystem.IsMacOS();
 
-    internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => p switch
+    /// <summary>
+    /// Worker thread priority. On macOS a lowered priority moves the threads towards the efficiency
+    /// cores as soon as anything else runs: measured on an M1 Pro, RAR 3 fell from about 3,700 to
+    /// 1,800/s at "below normal", and PDF R6 next to hashcat from 58,000 to 25,000-40,000/s at "lowest".
+    /// There the engine runs at normal priority and macOS shares the cores between applications.
+    /// </summary>
+    internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => OperatingSystem.IsMacOS() && p != ProcessPriority.High ? ThreadPriority.Normal : p switch
     {
-        // macOS moves the lowest thread priority to the efficiency cores as soon as anything else runs
-        // (hashcat feeding the GPU in a hybrid attack): about 40% slower on an M1 Pro.
-        ProcessPriority.Idle => OperatingSystem.IsMacOS() ? ThreadPriority.BelowNormal : ThreadPriority.Lowest,
+        ProcessPriority.Idle => ThreadPriority.Lowest,
         ProcessPriority.BelowNormal => ThreadPriority.BelowNormal,
         ProcessPriority.High => ThreadPriority.AboveNormal,
         _ => ThreadPriority.Normal,
