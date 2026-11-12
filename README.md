@@ -157,6 +157,9 @@ quickest guesses.
   file (it picks the most reliable one). Other files in the same archive may use a different
   password. Split (multi-volume) archives and files that need earlier files of a solid archive
   cannot be used.
+- Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
+  cooled by the amount you choose) and can let the GPU work only part of the time to cut heat and
+  noise. Both are off by default. Paused attacks continue exactly where they stopped.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

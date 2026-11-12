@@ -147,6 +147,8 @@ recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an 
 ```
 
 `--new` ignores a saved session and starts over; `--no-potfile` disables the cache.
+`--temp-limit 85 [--temp-hysteresis 10]` turns on the GPU temperature guard and `--gpu-duty 50`
+the GPU load limit for one run (see GPU temperature guard below).
 
 Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
 containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
@@ -177,6 +179,37 @@ charset, `/u:` user charset, `/l:` national alphabet, `/m:` mask, `/ms:` mask sy
 `/min:` `/max:` lengths, `/1:`..`/8:` custom mask charsets, `/r:` rules (`*1s *1a *1c *2s
 *2a *3s` or a file), `/d:` dictionary (up to four; `*default` = configured default dictionary).
 
+
+## GPU temperature guard and load limit
+
+Optional, off by default (`Settings.GpuTempGuard`, `GpuTempLimit`, `GpuTempHysteresis`,
+`GpuDutyPercent`), and only for hashcat runs that use a GPU; the built-in CPU engine is never
+paused. The decisions live in `ThermalGuard` (pure, unit tested); `ThermalController` applies them
+to the running hashcat process.
+
+- Temperature: the hottest GPU from hashcat's `--status-json` (`temp`, NVML/ADL/sysfs). hashcat
+  reports -1 on Apple Silicon, so on those Macs the die and GPU sensors are read through the IOKit
+  HID event system (`AppleSiliconSensors`, no admin rights). With NVIDIA, `nvidia-smi` is used while
+  hashcat is suspended. Without any reading while paused the guard resumes after 90 s and lets the
+  next hashcat reading decide. Pause at `limit`, resume at `limit - hysteresis`. With the guard on,
+  `--hwmon-temp-abort` is set to limit + 10 (max 100) as a safety net, unless the extra arguments
+  already contain a `--hwmon` option.
+- Pausing suspends the hashcat process (SIGSTOP/SIGCONT, `NtSuspendProcess` on Windows). Measured
+  on an M1 Pro with a slow hash: GPU utilization (ioreg) fell from 99 % to about 10 % within 6 s,
+  the die cooled 3.6 °C in 28 s, and after SIGCONT the attack went on with no loss. Alternatives
+  that were tested and rejected: hashcat's `p` key works through a redirected stdin on macOS, but
+  hashcat checks for a pause only between batches, so with PBKDF2 the GPU stayed at 100 % for the
+  whole 90 s "pause"; on Windows `tty_getchar` uses `WaitForSingleObject`/`ReadConsoleInput`,
+  which do not work on a pipe, and stdin-fed attacks have no key thread at all. A checkpoint stop
+  plus `--restore` redoes the unfinished batch (minutes for slow hashes) and the kernel start-up.
+  The GPU finishes work already queued, a few seconds, so this does not trip driver watchdogs
+  (those limit a single kernel's run time). A user stop resumes the process first, then sends the
+  usual Ctrl+C/SIGINT, so the restore file is written as before.
+- Load limit: the GPU works `GpuDutyPercent` of every 60 s cycle and is suspended for the rest.
+  Speeds are reported scaled by that share so the ETA stays right. It does not cap peak power
+  (that needs administrator rights and vendor tools); the workload slider (`-w`) is separate.
+- Status passed to the UI: thermal pause time is added to `TimeStart` so the average speed ignores
+  it; after a resume the pre-pause speed is shown until hashcat's own averaged figure recovers.
 
 ## Continuous integration
 
