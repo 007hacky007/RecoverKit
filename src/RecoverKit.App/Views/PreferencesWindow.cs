@@ -223,7 +223,7 @@ public sealed class PreferencesWindow : Window
         var note = L.Text("Workload sets how big each piece of GPU work is: lower keeps the desktop responsive. " +
                           "Working only part of the time pauses hashcat in cycles of a minute, so the GPU idles in between: " +
                           "average power, heat and fan noise drop, and the attack takes correspondingly longer. " +
-                          "A real power cap would need administrator rights and vendor tools.", dim: true, wrap: true);
+                          "On NVIDIA GPUs a real power limit can also be set (needs administrator rights).", dim: true, wrap: true);
         note.FontSize = 12;
         return L.Column(6, L.Text("Workload"), L.Column(2, labels, _workload), duty, note);
     }
