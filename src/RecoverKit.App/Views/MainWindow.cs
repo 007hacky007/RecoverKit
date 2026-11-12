@@ -337,7 +337,7 @@ public sealed partial class MainWindow : Window
         hint.Inlines.Add(new Run("). RecoverKit detects the format and picks the right attack."));
         _dropHint = hint;
         var chips = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 470, ItemSpacing = 6, LineSpacing = 6, ItemsAlignment = WrapPanelItemsAlignment.Center };
-        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "7-Zip", "KeePass", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup", "Android backup", "Crypto wallets" })
+        foreach (var c in new[] { "Word, Excel, PowerPoint", "Access 97-2003", "PDF", "ZIP", "RAR 3 / 5", "7-Zip", "KeePass", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup", "Android backup", "Crypto wallets" })
             chips.Children.Add(new Border
             {
                 Background = Palette.ChipBrush, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3),
@@ -518,6 +518,7 @@ public sealed partial class MainWindow : Window
     {
         "Recovers passwords for:",
         "  • MS Office 97-2021 documents (Word, Excel, PowerPoint)",
+        "  • Access 97-2003 .mdb / .mde database passwords (instant recovery)",
         "  • OpenOffice / LibreOffice / OpenDocument files",
         "  • ZIP/WinZip, RAR 3.x-5.x and 7-Zip archives",
         "  • KeePass 1 KDB and KDBX 2/3/4 databases (optional keyfile)",

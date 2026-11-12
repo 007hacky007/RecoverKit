@@ -48,7 +48,8 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
-| PDF documents | Standard PDF passwords, including R3 RC4-40 (password search only) and current AES-256 ones |
+| PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
+| Access databases | Access 97-2003 databases (.mdb): the password is shown instantly |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
