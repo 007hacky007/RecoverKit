@@ -106,6 +106,42 @@ public sealed class CompoundFile
         return e.Size < _miniCutoff ? ReadMini(e.Start, size) : ReadRegular(e.Start, size);
     }
 
+    /// <summary>Replaces stream bytes in an existing copy without reallocating sectors.</summary>
+    internal void WriteStreamSameLength(string name, ReadOnlySpan<byte> data, Stream destination)
+    {
+        var entry = Find(name) ?? throw new FormatException("Compound stream is missing.");
+        if (data.Length != entry.Size) throw new FormatException("Compound stream length must not change.");
+        bool mini = entry.Size < _miniCutoff;
+        var chain = mini ? _miniFat : _fat;
+        int unit = mini ? _miniSectorSize : _sectorSize;
+        uint sid = entry.Start;
+        var seen = new HashSet<uint>();
+        for (int offset = 0; offset < data.Length; offset += unit)
+        {
+            if (sid >= chain.Length || !seen.Add(sid)) throw new FormatException("Invalid compound stream chain.");
+            long physical;
+            if (mini)
+            {
+                long logical = (long)sid * _miniSectorSize;
+                if (logical + unit > _miniStream.Length) throw new FormatException("Invalid compound mini sector.");
+                uint rootSector = Entries[0].Start;
+                for (long skip = logical / _sectorSize; skip > 0; skip--)
+                {
+                    if (rootSector >= _fat.Length) throw new FormatException("Invalid compound root chain.");
+                    rootSector = _fat[rootSector];
+                }
+                if (rootSector >= _fat.Length) throw new FormatException("Invalid compound root sector.");
+                physical = ((long)rootSector + 1) * _sectorSize + logical % _sectorSize;
+            }
+            else physical = ((long)sid + 1) * _sectorSize;
+            int count = Math.Min(unit, data.Length - offset);
+            if (physical + count > destination.Length) throw new FormatException("Truncated compound stream sector.");
+            destination.Position = physical;
+            destination.Write(data.Slice(offset, count));
+            sid = chain[sid];
+        }
+    }
+
     private byte[] ReadSector(uint sid)
     {
         long off = ((long)sid + 1) * _sectorSize;
