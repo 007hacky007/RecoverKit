@@ -114,7 +114,7 @@ public class StayStage1Tests
         var scalar = StayStage1.SearchScalar(files, truthWindow);
         Assert.Contains(scalar, s => s.K == k && s.A0 == a0 && s.BY == bY);
 
-        if (StayStage1.VectorWidth == 1) return;   // no SIMD on this host
+        if (StayTables.VectorWidth == 1) return;   // no SIMD on this host
         var simd = StayStage1.SearchVector(files, truthWindow);
         Assert.Equal(
             scalar.Select(s => (s.Cv, s.K, s.A0, s.BY)).OrderBy(x => x),
