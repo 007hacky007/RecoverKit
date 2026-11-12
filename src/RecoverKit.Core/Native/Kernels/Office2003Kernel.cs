@@ -31,7 +31,8 @@ public sealed unsafe class Office2003Kernel : NativeKernel, INativeFilter
         line = line.Trim();
         if (!line.StartsWith("$oldoffice$", StringComparison.Ordinal)) return null;
         var f = line["$oldoffice$".Length..].Split('*');
-        if (f.Length != 4 || f[0] is not ("3" or "4")) return null;
+        // The built-in search implements 40-bit keys only; type 4 needs hashcat's 128-bit path.
+        if (f.Length != 4 || f[0] != "3") return null;
         try
         {
             var salt = Convert.FromHexString(f[1]);

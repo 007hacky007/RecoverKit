@@ -1,6 +1,3 @@
-using System.Text;
-using System.Xml.Linq;
-
 namespace RecoverKit.Core.Formats;
 
 /// <summary>
@@ -48,12 +45,14 @@ public static class OfficeExtractor
 
         if (vMajor == 4 && vMinor == 4)
         {
+            OfficeKnownPasswords.CheckOoxml(info, d);
             ExtractAgile(info, d);
             return;
         }
         if (vMinor == 2 && vMajor is 2 or 3 or 4)
         {
             ExtractStandard(info, d);
+            OfficeKnownPasswords.CheckOoxml(info, d);
             return;
         }
         d.Message = $"Unsupported EncryptionInfo version {vMajor}.{vMinor}.";
@@ -61,15 +60,12 @@ public static class OfficeExtractor
 
     private static void ExtractAgile(byte[] info, Detection d)
     {
-        string xml = Encoding.UTF8.GetString(info, 8, info.Length - 8).TrimEnd('\0').Trim('﻿');
-        var doc = XDocument.Parse(xml);
-        var key = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "encryptedKey" && e.Attribute("spinCount") is not null)
-                  ?? throw new FormatException("Agile encryption descriptor has no password key encryptor.");
+        var key = OfficeKnownPasswords.AgileKey(info);
 
         string Attr(string n) => key.Attribute(n)?.Value ?? throw new FormatException($"Missing attribute '{n}'.");
-        int spin = int.Parse(Attr("spinCount"));
-        int keyBits = int.Parse(Attr("keyBits"));
-        string hashAlg = Attr("hashAlgorithm").ToUpperInvariant();
+        int spin = OfficeKnownPasswords.Number(Attr("spinCount"));
+        int keyBits = OfficeKnownPasswords.Number(Attr("keyBits"));
+        string hashAlg = OfficeDecryptor.HashName(Attr("hashAlgorithm"));
         string cipher = Attr("cipherAlgorithm");
         var salt = Convert.FromBase64String(Attr("saltValue"));
         var input = Convert.FromBase64String(Attr("encryptedVerifierHashInput"));
@@ -83,6 +79,8 @@ public static class OfficeExtractor
         };
         if (!cipher.Equals("AES", StringComparison.OrdinalIgnoreCase))
             throw new UnsupportedFormatException($"Agile encryption with cipher {cipher} is not supported by hashcat.");
+        if (keyBits != (mode == 9500 ? 128 : 256))
+            throw new UnsupportedFormatException($"Agile {hashAlg} with AES-{keyBits} is not supported by hashcat.");
         if (value.Length < 32) throw new FormatException("Encrypted verifier hash is too short.");
 
         d.TypeName = mode == 9600 ? "MS Office 2013-2021 document" : "MS Office 2010 document";
@@ -100,6 +98,7 @@ public static class OfficeExtractor
 
     private static void ExtractStandard(byte[] info, Detection d)
     {
+        Bin.Need(info, 8, 4);
         int headerSize = (int)Bin.U32(info, 8);
         int h = 12;
         Bin.Need(info, h, 32);
@@ -144,6 +143,7 @@ public static class OfficeExtractor
         var table = cf.ReadStream(table1 ? "1Table" : "0Table", 4096)
                     ?? throw new FormatException("Word table stream is missing.");
         d.Target = Rc4Header(table, 0, "Word 97-2003", isWord: true);
+        OfficeKnownPasswords.CheckRc4(table, 0, d, excel: false);
     }
 
     private static void ExtractExcel(CompoundFile cf, Detection d)
@@ -159,6 +159,7 @@ public static class OfficeExtractor
                 int encType = Bin.U16(wb, pos + 4);
                 if (encType == 0) { d.Message = "Workbook uses XOR obfuscation (weak protection, instant removal is not implemented)."; return; }
                 d.Target = Rc4Header(wb, pos + 6, "Excel 97-2003", isWord: false);
+                OfficeKnownPasswords.CheckRc4(wb, pos + 6, d, excel: true);
                 return;
             }
             if (type == 0x000A) break; // EOF
@@ -189,6 +190,7 @@ public static class OfficeExtractor
         }
         if (vMinor == 2 && vMajor is 2 or 3 or 4)
         {
+            Bin.Need(b, o, 12);
             int headerSize = (int)Bin.U32(b, o + 8);
             int h = o + 12;
             Bin.Need(b, h, 20);
@@ -202,7 +204,7 @@ public static class OfficeExtractor
                 FormatName = $"MS {app} document",
                 Protection = $"RC4 {keySize}-bit, SHA-1 (CryptoAPI)",
                 Modes = [9800],
-                HashLines = $"$oldoffice$3*{Bin.Hex(b, v + 4, 16)}*{Bin.Hex(b, v + 20, 16)}*{Bin.Hex(b, v + 40, 20)}",
+                HashLines = $"$oldoffice${(keySize == 40 ? 3 : 4)}*{Bin.Hex(b, v + 4, 16)}*{Bin.Hex(b, v + 20, 16)}*{Bin.Hex(b, v + 40, 20)}",
                 Speed = SpeedClass.Fast,
                 Utf16Password = true,
                 MaxPasswordLength = 15,

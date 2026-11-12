@@ -30,6 +30,7 @@
     <EmbeddedResource Include="Fixtures/Word/*" />
     <EmbeddedResource Include="Fixtures/Spreadsheets/*.xlsx" />
     <EmbeddedResource Include="Fixtures/Spreadsheets/*.xls" />
+    <EmbeddedResource Include="Fixtures/Office/*" />
   </ItemGroup>
 
 </Project>

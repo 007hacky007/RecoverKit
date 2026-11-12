@@ -52,6 +52,17 @@ Built-in word lists
   from the macOS /usr/share/dict/words list (Webster's Second International Dictionary, 1934,
   public domain), preceded by a short list of common passwords.
 
+Office test fixtures (tests only)
+  tests/RecoverKit.Tests/Fixtures/Office/rc4-*.xls, cryptoapi*.xls and cryptoapi-empty.doc
+  are modified Apache POI test-data files (Apache Software Foundation, Apache License 2.0):
+  https://github.com/apache/poi/blob/trunk/test-data/spreadsheet/password.xls
+  https://github.com/apache/poi/blob/trunk/test-data/spreadsheet/35897-type4.xls
+  https://github.com/apache/poi/blob/trunk/test-data/document/password_password_cryptoapi.doc
+  Resaved with Apache POI 5.4.1 using the default/empty password and, for cryptoapi40, a
+  40-bit key. The Apache license is in tests/RecoverKit.Tests/Fixtures/Office/LICENSE.txt.
+  Other Office fixtures were generated for RecoverKit with openpyxl, msoffcrypto-tool,
+  Apache POI and LibreOffice; no third-party implementation code is included.
+
 BouncyCastle.Cryptography 2.7.0 (bundled)
   https://www.bouncycastle.org/ - MIT License.
   Used for reference Whirlpool derivation and AES, Serpent and Twofish header checks.

@@ -203,6 +203,10 @@ quickest guesses.
 - **Excel sheet and workbook protection:** RecoverKit saves a copy without the protection and
   also shows a password that Excel accepts for old-style protection. Files that need a password to
   open must be recovered first. VBA project passwords and .xlsb files are not supported yet.
+- **Excel files that open in Excel without a password:** Excel sometimes encrypts a workbook with
+  its built-in default password "VelvetSweatshop", which other programs then ask for. RecoverKit
+  recognizes this (and empty passwords) instantly and can save a normal copy of .xlsx files; for
+  old .xls files it shows the password.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

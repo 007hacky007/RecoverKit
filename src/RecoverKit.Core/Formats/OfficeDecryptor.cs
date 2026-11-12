@@ -43,7 +43,7 @@ public static class OfficeDecryptor
         var doc = XDocument.Parse(xml);
         XElement El(string local) => doc.Descendants().First(e => e.Name.LocalName == local);
         var keyData = El("keyData");
-        var enc = El("encryptedKey");
+        var enc = OfficeKnownPasswords.AgileKey(info);
         string A(XElement e, string n) => e.Attribute(n)?.Value ?? throw new FormatException($"Missing {n} in EncryptionInfo.");
 
         string hash = A(enc, "hashAlgorithm");
@@ -59,11 +59,10 @@ public static class OfficeDecryptor
             throw new UnsupportedFormatException("Only CBC chaining is supported for agile decryption.");
 
         // Derive the intermediate key that unwraps the package key.
-        byte[] h = Hash(hash, pSalt, Encoding.Unicode.GetBytes(password));
-        var iter = new byte[4];
-        for (int i = 0; i < spin; i++) { BitConverter.TryWriteBytes(iter, i); h = Hash(hash, iter, h); }
+        byte[] h = PasswordHash(hash, pSalt, password, spin);
         byte[] keyBytes = Fit(Hash(hash, h, BlockEncryptedKeyValue), keyBits / 8);
         byte[] secretKey = AesCbcNoPad(encKeyValue, keyBytes, Fit(pSalt, 16), decrypt: true);
+        secretKey = Fit(secretKey, int.Parse(A(keyData, "keyBits")) / 8);
 
         // Decrypt the package in 4096-byte segments, each with IV = Hash(keyDataSalt || segmentIndex).
         long total = (long)Bin.U64(package, 0);
@@ -97,17 +96,7 @@ public static class OfficeDecryptor
         int saltSize = (int)Bin.U32(info, v);
         var salt = Bin.Slice(info, v + 4, saltSize);
 
-        // H0 = SHA1(salt || UTF16LE(pwd)); iterate 50000; Hfinal = SHA1(H50000 || 0).
-        byte[] hv = SHA1.HashData([.. salt, .. Encoding.Unicode.GetBytes(password)]);
-        var iter = new byte[4];
-        for (int i = 0; i < 50000; i++) { BitConverter.TryWriteBytes(iter, i); hv = SHA1.HashData([.. iter, .. hv]); }
-        hv = SHA1.HashData([.. hv, 0, 0, 0, 0]);
-
-        int keyLen = keySizeBits / 8;
-        byte[] x1 = SHA1.HashData(Xor(hv, 0x36));
-        byte[] x2 = SHA1.HashData(Xor(hv, 0x5C));
-        byte[] key = [.. x1, .. x2];
-        key = Fit(key, keyLen);
+        byte[] key = StandardKey(salt, password, keySizeBits);
 
         long total = (long)Bin.U64(package, 0);
         byte[] cipher = package[8..];
@@ -123,11 +112,37 @@ public static class OfficeDecryptor
         return b;
     }
 
+    internal static byte[] StandardKey(byte[] salt, string password, int keyBits)
+    {
+        byte[] hv = Hash("SHA1", PasswordHash("SHA1", salt, password, 50000), new byte[4]);
+        return Fit([.. SHA1.HashData(Xor(hv, 0x36)), .. SHA1.HashData(Xor(hv, 0x5C))], keyBits / 8);
+    }
+
+    // Reuse the hash state and buffers: detection runs this once per candidate, without package I/O.
+    internal static byte[] PasswordHash(string algorithm, byte[] salt, string password, int spin)
+    {
+        using var hash = IncrementalHash.CreateHash(new HashAlgorithmName(HashName(algorithm)));
+        hash.AppendData(salt);
+        hash.AppendData(Encoding.Unicode.GetBytes(password));
+        byte[] value = hash.GetHashAndReset();
+        Span<byte> iteration = stackalloc byte[4];
+        for (int i = 0; i < spin; i++)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(iteration, i);
+            hash.AppendData(iteration);
+            hash.AppendData(value);
+            hash.GetHashAndReset(value);
+        }
+        return value;
+    }
+
     // ---------------------------------------------------------------- primitives
 
-    private static byte[] Hash(string alg, params byte[][] parts)
+    internal static string HashName(string algorithm) => algorithm.Replace("-", "").ToUpperInvariant();
+
+    internal static byte[] Hash(string alg, params byte[][] parts)
     {
-        using HashAlgorithm h = alg.ToUpperInvariant() switch
+        using HashAlgorithm h = HashName(alg) switch
         {
             "SHA1" => SHA1.Create(),
             "SHA256" => SHA256.Create(),
@@ -141,7 +156,7 @@ public static class OfficeDecryptor
     }
 
     /// <summary>Truncates to <paramref name="len"/>, or right-pads with 0x36 when shorter (MS-OFFCRYPTO).</summary>
-    private static byte[] Fit(byte[] b, int len)
+    internal static byte[] Fit(byte[] b, int len)
     {
         if (b.Length == len) return b;
         var r = new byte[len];
@@ -150,7 +165,7 @@ public static class OfficeDecryptor
         return r;
     }
 
-    private static byte[] AesCbcNoPad(byte[] data, byte[] key, byte[] iv, bool decrypt)
+    internal static byte[] AesCbcNoPad(byte[] data, byte[] key, byte[] iv, bool decrypt)
     {
         using var aes = Aes.Create();
         aes.Key = key;
@@ -162,7 +177,7 @@ public static class OfficeDecryptor
         return dec.TransformFinalBlock(data, 0, usable);
     }
 
-    private static byte[] AesEcbNoPad(byte[] data, byte[] key, bool decrypt)
+    internal static byte[] AesEcbNoPad(byte[] data, byte[] key, bool decrypt)
     {
         using var aes = Aes.Create();
         aes.Key = key;
