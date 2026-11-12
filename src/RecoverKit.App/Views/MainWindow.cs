@@ -337,7 +337,7 @@ public sealed partial class MainWindow : Window
         hint.Inlines.Add(new Run("). RecoverKit detects the format and picks the right attack."));
         _dropHint = hint;
         var chips = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 470, ItemSpacing = 6, LineSpacing = 6, ItemsAlignment = WrapPanelItemsAlignment.Center };
-        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "7-Zip", "KeePass", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup" })
+        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "7-Zip", "KeePass", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup", "Crypto wallets" })
             chips.Children.Add(new Border
             {
                 Background = Palette.ChipBrush, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3),
@@ -526,6 +526,7 @@ public sealed partial class MainWindow : Window
         "  • BlackBerry .ipd backups (detection only; no hashcat kernel)",
         "  • TrueCrypt and VeraCrypt volumes (File > Open As)",
         "  • WPA/WPA2 handshakes (.22000, .hccapx, .hccap)",
+        "  • Ethereum v3, Electrum, MetaMask and Blockchain.com wallets",
         "  • any other hash supported by hashcat (File > Open As)",
         "",
         "Main features:",

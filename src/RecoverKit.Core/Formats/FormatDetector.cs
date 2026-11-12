@@ -5,7 +5,7 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
@@ -16,6 +16,7 @@ public static class FormatDetector
         "WPA handshakes|*.22000;*.hccapx;*.hccap",
         "Apple iOS backup manifest|*.plist",
         "Self-extracting archives|*.exe",
+        "Cryptocurrency wallets|*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet",
         "All files|*.*",
     ];
 
@@ -82,6 +83,10 @@ public static class FormatDetector
                 d.TypeName = "Network capture";
                 d.Message = "Raw captures must be converted to the hashcat 22000 format first, e.g. " +
                             "hcxpcapngtool -o handshake.22000 capture.pcapng, then open the .22000 file.";
+            }
+            else if (WalletExtractor.TryExtract(s, d))
+            {
+                // Wallets have varied names; the extractor validates their content.
             }
             else
             {

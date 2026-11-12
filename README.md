@@ -55,6 +55,7 @@ number at the end"), and it tests those combinations until it finds the right on
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
 | Wi-Fi | WPA/WPA2 handshakes from your own network |
 | KeePass databases | KeePass 1 KDB (AES/Twofish), KDBX 2/3 (AES), KDBX 4 (Argon2d/Argon2id, 253-byte headers) |
+| Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
 with five or more encrypted files are opened in minutes without any password guessing: RecoverKit
@@ -192,6 +193,24 @@ quickest guesses.
   value back when the attack ends (also if RecoverKit crashes); RecoverKit itself never runs as
   administrator. If you decline, the attack runs without the limit. Not available on Macs and for
   AMD or Intel GPUs.
+- Wallet recovery needs the wallet file from your own device, not a wallet address or public key.
+  Wallets are identified by content, including extensionless `UTC--*` and `default_wallet` files.
+  Ethereum v3 supports PBKDF2-SHA256 and scrypt (32-byte salt; N must be a power of two, at least 1024).
+  scrypt and MetaMask's newer 600,000-iteration vaults can be very slow.
+- MetaMask accepts extracted vault JSON, nested/escaped vault strings, or a chosen `.ldb`/`.log`
+  file up to 32 MiB containing a complete vault record. Compressed, split or deleted LevelDB
+  records require extracting the vault first. If several vaults exist, the first complete
+  supported record is selected; it may be an older vault with a different password.
+- Electrum supports encrypted seeds, BIP32/private keys and BIE1 full-file encryption. Large
+  Electrum wallets and MetaMask vaults use partial plaintext checks; verify found passwords in
+  the original wallet. Large Electrum wallets (mode 21800) need a compatible GPU or OpenCL CPU
+  runtime; hashcat disables this mode on Apple GPUs. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
+  Python dictionaries support string keys, strings, numbers, booleans and null values.
+- Blockchain.com recovery handles the main password (legacy base64 with 10 PBKDF2 iterations,
+  or version 2-4 JSON backups with explicit iterations), not the second spending password.
+  Legacy base64 has no unique signature; confirm the backup's origin before recovery.
+- Exodus `seed.seco` files are recognized but not extracted: the SECO binary layout has not
+  been verified against mode 28200. Use an independently verified extractor and Open As for hashes.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
