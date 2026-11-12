@@ -47,7 +47,7 @@ number at the end"), and it tests those combinations until it finds the right on
 
 | Kind of file | Examples |
 |---|---|
-| Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
+| Microsoft Office documents | Word 6/95 and Excel 5/95 XOR; Word, Excel and PowerPoint from Office 97 up to Microsoft 365 |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
@@ -57,6 +57,12 @@ number at the end"), and it tests those combinations until it finds the right on
 | Wi-Fi | WPA/WPA2 handshakes from your own network |
 | Password managers | KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx) databases, with an optional keyfile |
 | Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
+
+Word 6/95, Excel 5/95 and Office 97-2003 XOR passwords can be recovered instantly when the
+document contains enough known plaintext. Recovery supports printable ASCII passwords of 1-15
+characters and returns a password to open the original file. Files without enough usable data
+are reported as inconclusive; matching only the stored verifier and key does not guarantee correct
+decryption. Saving an unprotected XOR copy is not supported.
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
 with five or more encrypted files are opened in minutes without any password guessing: RecoverKit

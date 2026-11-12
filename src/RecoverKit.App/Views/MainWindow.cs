@@ -518,6 +518,7 @@ public sealed partial class MainWindow : Window
     {
         "Recovers passwords for:",
         "  • MS Office 97-2021 documents (Word, Excel, PowerPoint)",
+        "  • Word 6/95 and Excel 5/95 XOR passwords (when recoverable)",
         "  • OpenOffice / LibreOffice / OpenDocument files",
         "  • ZIP/WinZip, RAR 3.x-5.x and 7-Zip archives",
         "  • KeePass 1 KDB and KDBX 2/3/4 databases (optional keyfile)",

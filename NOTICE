@@ -1,6 +1,12 @@
 RecoverKit third-party notices
 ==============================
 
+Office XOR regression fixtures
+  tests/RecoverKit.Tests/Fixtures/OfficeXor/poi-xor-abc.xls is from Apache POI test-data;
+  excel95-kit95.xls, word6-kit6.doc and word95-word95.doc.gz are modified POI samples.
+  https://github.com/apache/poi/tree/trunk/test-data - Apache License 2.0.
+  The fixture folder contains the upstream license, notice and source details.
+
 RecoverKit's Windows installer, portable zip and macOS app contain RecoverKit, Bouncy Castle
 (license below), the Avalonia UI framework and the libraries it ships with (listed below) and,
 in the self-contained builds, the .NET runtime (MIT License, https://github.com/dotnet/runtime).

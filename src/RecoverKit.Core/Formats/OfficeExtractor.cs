@@ -12,6 +12,7 @@ public static class OfficeExtractor
 {
     public static void Extract(CompoundFile cf, Detection d)
     {
+        if (OfficeXor.TryExtract(cf, d)) return;
         if (cf.HasStream("EncryptionInfo") && cf.HasStream("EncryptedPackage"))
         {
             ExtractOoxml(cf, d);
