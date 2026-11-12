@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\RecoverKit.Core\RecoverKit.Core.csproj" />
     <None Update="Fixtures\SevenZip\*.7z" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="Fixtures/KeePass/*" />
+    <EmbeddedResource Include="Fixtures/android-v*.ab" />
   </ItemGroup>
 
 </Project>

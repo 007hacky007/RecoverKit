@@ -5,7 +5,7 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
@@ -15,6 +15,7 @@ public static class FormatDetector
         "PDF files|*.pdf",
         "WPA handshakes|*.22000;*.hccapx;*.hccap",
         "Apple iOS backup manifest|*.plist",
+        "Android backups|*.ab",
         "Self-extracting archives|*.exe",
         "Cryptocurrency wallets|*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet",
         "All files|*.*",
@@ -55,6 +56,10 @@ public static class FormatDetector
             else if (KeePassExtractor.IsKeePass(head))
             {
                 KeePassExtractor.Extract(s, d, keePassKeyfile);
+            }
+            else if (AndroidBackupExtractor.IsBackup(head))
+            {
+                AndroidBackupExtractor.Extract(s, d);
             }
             else if (WpaExtractor.IsHashLines(head) || WpaExtractor.IsHccapx(head) || path.EndsWith(".hccap", StringComparison.OrdinalIgnoreCase))
             {

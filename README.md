@@ -53,8 +53,9 @@ number at the end"), and it tests those combinations until it finds the right on
 | OpenDocument files | LibreOffice and OpenOffice documents |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
+| Android backups | Encrypted adb / Helium `.ab` backups, versions 1-5 |
 | Wi-Fi | WPA/WPA2 handshakes from your own network |
-| KeePass databases | KeePass 1 KDB (AES/Twofish), KDBX 2/3 (AES), KDBX 4 (Argon2d/Argon2id, 253-byte headers) |
+| Password managers | KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx) databases, with an optional keyfile |
 | Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
