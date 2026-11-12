@@ -48,10 +48,12 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
+| Word editing restrictions | Instant unrestricted copies of unencrypted .docx/.docm/.dotx and Word 97-2003 .doc; includes password to modify |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Access databases | Access 97-2003 databases (.mdb): the password is shown instantly |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
+| OpenDocument text restrictions | Instant removal of protected sections and the read-only flag in unencrypted .odt files |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
 | Android backups | Encrypted adb / Helium `.ab` backups, versions 1-5 |
@@ -194,6 +196,9 @@ quickest guesses.
   Apple GPUs) but work with Windows and Linux GPUs. Blockchain.com: the main password only, not the
   second password. Exodus wallets are recognized but not supported yet. Always confirm a found
   password in the wallet itself.
+- **Word editing restrictions:** "read-only", "comments only", "filling in forms" and "password to
+  modify" can be removed from .docx, .doc and .odt files that open without a password. RecoverKit
+  saves a separate copy and never changes the original.
 - **Android backups:** RecoverKit finds the backup password; it does not unpack the backup.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 

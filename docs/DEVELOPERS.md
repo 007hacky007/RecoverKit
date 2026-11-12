@@ -319,6 +319,30 @@ notes are taken from it, and the release job fails if the section is missing.
   parser and verified password-verifier extraction; the existing Office entry point expects
   compound-file streams and cannot be used directly. ACE page decryption also differs from
   OOXML package decryption. Never send ACE password fields through the reversible Jet path.
+- Word restrictions use `InstantUnlock`, with no hashcat target or scenario. `WordRestrictions`
+  removes `documentProtection` and `writeProtection` from `word/settings.xml` in unencrypted
+  OOXML packages, including Strict namespaces. Other ZIP entries are left untouched.
+  `BinaryWordRestrictions` reads the FIB, DopBase/Dop2003 and SttbfAssoc entry 17 in Word
+  97-2003 files. It clears form/comment/revision locks, style/enforcement flags, the editing
+  verifier, FIB write reservation/read-only recommendation and the associated reservation
+  password. `CompoundFile.WriteStreamRange` patches regular and mini streams without changing
+  their sizes or allocation. Ordinary revision recording and VBA protection flags are preserved.
+  Associated-string passwords can be shown directly; four-digit legacy `w:password` verifiers
+  get an equivalent 15-character password, never a claim to the original. Binary Word's 32-bit
+  editing verifiers and modern SHA password hashes are not recovered. Their restrictions can
+  still be removed. Other binary Word generations and file-sharing variants are not supported.
+  ODT support covers `text:section` protection and LibreOffice's `LoadReadonly` setting, not
+  change-recording passwords or protected tables. Restriction XML is limited to 4 MiB per part;
+  binary property ranges must fit in the first 32 MiB of the table stream.
+  `RestrictionCopy` writes a temporary sibling, checks source/output aliases and moves it into
+  place only after a successful update. Package signatures become invalid after XML changes.
+  The tiny Word fixtures were generated from synthetic content with LibreOffice 26.2.4.2;
+  the reservation variant adds a synthetic SttbfAssoc password (`kit42`). Tests need no Office
+  installation. Manual checks used python-docx 1.2.0 packages with added protection settings,
+  an Apache POI protected sample kept in scratch only, and LibreOffice reopening saved copies.
+  Field definitions: [MS-DOC DopBase](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/f885b87a-15b3-460e-aecc-213bd17f960e),
+  [Dop2003](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/8783a51d-da22-4e5f-a8f0-d98ae25215c5)
+  and [SttbfAssoc](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/f6f1030e-2e5e-46ff-92f0-b228c5585308).
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with

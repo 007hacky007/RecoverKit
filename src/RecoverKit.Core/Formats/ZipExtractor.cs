@@ -30,13 +30,14 @@ public static class ZipExtractor
         d.TypeName = "ZIP archive";
         d.Add("Entries", entries.Count.ToString());
 
-        bool isOdf = entries.Any(e => e.Name == "mimetype") && entries.Any(e => e.Name == "META-INF/manifest.xml");
+        bool isOdf = entries.Any(e => e.Name == "mimetype") && entries.Any(e => e.Name == "META-INF/manifest.xml") && entries.All(e => !e.Encrypted);
         if (isOdf) { ExtractOdf(s, entries, delta, d); return; }
 
-        if (entries.Any(e => e.Name == "[Content_Types].xml"))
+        if (entries.Any(e => e.Name == "[Content_Types].xml") && entries.All(e => !e.Encrypted))
         {
             d.TypeName = "Office Open XML document";
             d.Message = "Document is not password protected to open (OOXML packages are only encrypted when stored as OLE containers).";
+            WordRestrictions.ExtractPackage(s, d);
             return;
         }
 
@@ -149,13 +150,13 @@ public static class ZipExtractor
     private static void ExtractOdf(Stream s, List<ZipEntry> entries, long delta, Detection d)
     {
         d.TypeName = "OpenDocument file";
-        var manifestEntry = entries.First(e => e.Name == "META-INF/manifest.xml");
-        var manifestBytes = ReadEntryContent(s, manifestEntry, delta);
-        var doc = XDocument.Parse(Encoding.UTF8.GetString(manifestBytes).Trim('﻿'));
+        using var package = new ZipArchive(s, ZipArchiveMode.Read, leaveOpen: true);
+        var doc = RestrictionCopy.ReadXml(package, "META-INF/manifest.xml")
+            ?? throw new FormatException("OpenDocument manifest is missing.");
         XNamespace m = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
 
         var fileEntries = doc.Descendants(m + "file-entry").Where(fe => fe.Element(m + "encryption-data") is not null).ToList();
-        if (fileEntries.Count == 0) { d.Message = "Document is not password protected to open."; return; }
+        if (fileEntries.Count == 0) { d.Message = "Document is not password protected to open."; OdtRestrictions.ExtractPackage(s, d); return; }
 
         var fe = fileEntries.FirstOrDefault(x => (string?)x.Attribute(m + "full-path") == "content.xml") ?? fileEntries[0];
         string path = (string)fe.Attribute(m + "full-path")!;

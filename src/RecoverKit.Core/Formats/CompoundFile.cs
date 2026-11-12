@@ -106,6 +106,53 @@ public sealed class CompoundFile
         return e.Size < _miniCutoff ? ReadMini(e.Start, size) : ReadRegular(e.Start, size);
     }
 
+    /// <summary>Patches existing bytes only; stream sizes, directory entries and allocation stay unchanged.</summary>
+    internal void WriteStreamRange(string name, long offset, byte[] data)
+    {
+        var entry = Find(name) ?? throw new FormatException($"Missing compound stream '{name}'.");
+        if (offset < 0 || offset > entry.Size - data.Length) throw new FormatException("Patch is outside the compound stream.");
+        bool mini = entry.Size < _miniCutoff;
+        int blockSize = mini ? _miniSectorSize : _sectorSize;
+        var chunks = new List<(long Position, int Offset, int Count)>();
+        for (int done = 0; done < data.Length;)
+        {
+            long logical = offset + done;
+            uint sid = SectorAt(entry.Start, logical / blockSize, mini ? _miniFat : _fat);
+            long position = mini ? (long)sid * _miniSectorSize + logical % blockSize : logical % blockSize;
+            if (mini)
+            {
+                if (position + Math.Min(blockSize - logical % blockSize, data.Length - done) > Entries[0].Size)
+                    throw new FormatException("Patch is outside the compound mini stream.");
+                sid = SectorAt(Entries[0].Start, position / _sectorSize, _fat);
+                position %= _sectorSize;
+            }
+            position += ((long)sid + 1) * _sectorSize;
+            int count = (int)Math.Min(blockSize - logical % blockSize, data.Length - done);
+            if (position > _s.Length - count) throw new FormatException("Patch sector is outside the file.");
+            chunks.Add((position, done, count));
+            done += count;
+        }
+        foreach (var chunk in chunks)
+        {
+            _s.Position = chunk.Position;
+            _s.Write(data, chunk.Offset, chunk.Count);
+        }
+    }
+
+    private static uint SectorAt(uint start, long index, uint[] fat)
+    {
+        if (index < 0 || index >= fat.Length) throw new FormatException("Invalid compound stream offset.");
+        var seen = new HashSet<uint>();
+        uint sid = start;
+        for (long i = 0; i <= index; i++)
+        {
+            if (sid >= fat.Length || !seen.Add(sid)) throw new FormatException("Invalid compound stream chain.");
+            if (i == index) return sid;
+            sid = fat[sid];
+        }
+        throw new FormatException("Invalid compound stream chain.");
+    }
+
     private byte[] ReadSector(uint sid)
     {
         long off = ((long)sid + 1) * _sectorSize;

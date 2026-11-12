@@ -138,7 +138,7 @@ public static class OfficeExtractor
         bool encrypted = (flags & 0x0100) != 0;
         bool table1 = (flags & 0x0200) != 0;
         bool obfuscated = (flags & 0x8000) != 0;
-        if (!encrypted) { d.Message = "Document is not password protected to open."; return; }
+        if (!encrypted) { d.Message = "Document is not password protected to open."; BinaryWordRestrictions.Extract(cf, d); return; }
         if (obfuscated) { d.Message = "Document uses XOR obfuscation (weak protection, instant removal is not implemented)."; return; }
 
         var table = cf.ReadStream(table1 ? "1Table" : "0Table", 4096)
