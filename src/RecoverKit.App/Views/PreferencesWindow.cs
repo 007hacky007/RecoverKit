@@ -30,7 +30,9 @@ public sealed class PreferencesWindow : Window
     private readonly ComboBox _priority = new() { ItemsSource = Priorities, MinWidth = 240 };
     private readonly NumericUpDown _maxThreads = L.Number(1, Math.Max(1, Environment.ProcessorCount), Environment.ProcessorCount);
     private readonly CheckBox _optimized = Check("Use optimized kernels for brute-force (faster, limits password length to 27)");
-    private readonly CheckBox _native = Check("Use the built-in CPU engine when no GPU is used (ZIP, Office 97-2003, PDF R2-R4 and R6, RAR 3.x)");
+    private readonly CheckBox _native = Check("Use the built-in CPU engine (ZIP, Office 97-2003, PDF, RAR 3.x, TrueCrypt Whirlpool)");
+    private readonly CheckBox _hybrid = Check("Run it next to the GPUs: CPU and GPUs share brute-force and mask attacks on these formats");
+    private readonly CheckBox _hashcatCpu = Check("For other formats, also give hashcat the CPU next to the GPUs (OpenCL CPU runtime)");
     private readonly TextBox _extra = new();
     private readonly StackPanel _gpuList = new() { Spacing = 2 };
     private readonly List<(CheckBox Box, BackendDevice Device)> _gpuChecks = new();
@@ -162,13 +164,29 @@ public sealed class PreferencesWindow : Window
         var hc = L.Grid("Auto,*", rowSpacing: 10, columnSpacing: 12);
         hc.Put(_optimized, 0, 0, 2);
         hc.Put(_native, 1, 0, 2);
-        hc.Put(L.Text("Extra hashcat arguments"), 2, 0);
-        hc.Put(_extra, 2, 1);
+        _hybrid.Margin = new Thickness(28, 0, 0, 0);
+        hc.Put(_hybrid, 2, 0, 2);
+        var cpuNote = L.Text(HashcatCpuNote(), dim: true, wrap: true);
+        cpuNote.FontSize = 12;
+        hc.Put(L.Column(4, _hashcatCpu, cpuNote), 3, 0, 2);
+        hc.Put(L.Text("Extra hashcat arguments"), 4, 0);
+        hc.Put(_extra, 4, 1);
+        _native.IsCheckedChanged += (_, _) => _hybrid.IsEnabled = _native.IsChecked == true;
 
         return L.Column(16,
             L.Group("CPU/GPU performance strategy", StrategyBox()),
             L.Group("", grid),
             L.Group("Recovery engines", hc));
+    }
+
+    /// <summary>What adding the CPU to hashcat can be expected to bring, or why it is unavailable here.</summary>
+    private string HashcatCpuNote()
+    {
+        bool cpuDevice = _devices.Any(d => !d.IsSkippedAlias && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+        if (!cpuDevice)
+            return "hashcat sees no processor device on this computer" + (Platform.IsMac ? " (Apple silicon has none)" : " (install the CPU runtime from Tools)") + ", so this has no effect.";
+        return "Usually adds a few percent at most: hashcat's CPU kernels are far slower than a GPU and need the cores that feed the GPUs. " +
+               "Check with Tools > Benchmark before leaving it on. The \"Use all CPU threads\" strategy does the same for every format.";
     }
 
     /// <summary>The strategy list, with a note where hashcat has no CPU device (Apple silicon).</summary>
@@ -405,6 +423,9 @@ public sealed class PreferencesWindow : Window
         _maxThreads.Value = _s.MaxCpuThreads <= 0 ? _maxThreads.Maximum : Math.Clamp(_s.MaxCpuThreads, 1, (int)_maxThreads.Maximum);
         _optimized.IsChecked = _s.OptimizedKernels;
         _native.IsChecked = _s.UseNativeCpuEngine;
+        _hybrid.IsChecked = _s.HybridCpuGpu;
+        _hybrid.IsEnabled = _s.UseNativeCpuEngine;
+        _hashcatCpu.IsChecked = _s.HashcatCpuWithGpu;
         _extra.Text = _s.ExtraArguments;
         _workload.Value = Math.Clamp(_s.Workload, 1, 4);
         int duty = Array.FindIndex(Duties, d => d.Percent >= _s.GpuDutyPercent && d.Percent - 25 < _s.GpuDutyPercent);
@@ -464,6 +485,8 @@ public sealed class PreferencesWindow : Window
         _s.MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue();
         _s.OptimizedKernels = _optimized.IsChecked == true;
         _s.UseNativeCpuEngine = _native.IsChecked == true;
+        _s.HybridCpuGpu = _hybrid.IsChecked == true;
+        _s.HashcatCpuWithGpu = _hashcatCpu.IsChecked == true;
         _s.ExtraArguments = (_extra.Text ?? "").Trim();
         _s.Workload = (int)Math.Round(_workload.Value);
         _s.GpuDutyPercent = Duties[Math.Max(0, _duty.SelectedIndex)].Percent;
