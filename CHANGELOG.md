@@ -12,6 +12,18 @@ All notable changes to RecoverKit. Downloads are on the
 - Cryptocurrency wallets: Ethereum keystore files, Electrum, MetaMask vaults and Blockchain.com
   wallet backups.
 - Encrypted Android backups (.ab) made with adb or Helium.
+- Instant unlocks, no attack needed:
+  - Access 97-2003 database passwords are shown right away.
+  - Word 6/95, Excel 5/95 and Office 97-2003 "XOR" passwords are shown right away.
+  - Excel files encrypted with Excel's built-in default password ("VelvetSweatshop") or an empty
+    password are recognized, and .xlsx copies can be saved without it.
+  - Excel sheet and workbook protection, Word editing restrictions and "password to modify" are
+    removed into a saved copy (.xlsx, .xls, .ods, .docx, .doc, .odt); old-style Excel and Word
+    protection also shows a password the program accepts.
+  - PDF printing and copying restrictions are removed into a saved copy when the PDF opens without
+    a password.
+  - A file with several restrictions can be saved once without all of them.
+- PDF files encrypted with 40-bit RC4 at revision 3 get their own, faster password search.
 
 ## [1.3.0] - 2026-11-12
 
