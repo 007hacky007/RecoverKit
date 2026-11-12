@@ -107,7 +107,8 @@ well-known commercial password-recovery program, both using only the processor:
 </p>
 
 RecoverKit is faster for nearly every format, and almost four times as fast on current PDF files.
-TrueCrypt volumes protected with Whirlpool are the one case where it is slower for now.
+For TrueCrypt volumes protected with Whirlpool and a single cipher, the built-in CPU engine
+tests about **4,000 passwords per second**, 1.44 times the commercial benchmark.
 
 What do the numbers mean in practice? For a current PDF, RecoverKit tests about **19,000
 passwords per second** on that PC. Every possible 5-character password made of lower case letters

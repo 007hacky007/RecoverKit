@@ -21,38 +21,38 @@
 <text class="t1" x="200" y="131.5" font-size="13" text-anchor="end">TrueCrypt (RIPEMD-160)</text>
 <path class="bar" d="M210,116 h174.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-174.8 z"><title>TrueCrypt (RIPEMD-160): 1.49x</title></path>
 <text class="t1" x="394.8" y="131.5" font-size="12.5" font-weight="600">1.49x</text>
-<text class="t1" x="200" y="161.5" font-size="13" text-anchor="end">Word 2007</text>
-<path class="bar" d="M210,146 h164.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-164.0 z"><title>Word 2007: 1.40x</title></path>
-<text class="t1" x="384.0" y="161.5" font-size="12.5" font-weight="600">1.40x</text>
-<text class="t1" x="200" y="191.5" font-size="13" text-anchor="end">Word 2003</text>
-<path class="bar" d="M210,176 h154.4 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-154.4 z"><title>Word 2003: 1.32x</title></path>
-<text class="t1" x="374.4" y="191.5" font-size="12.5" font-weight="600">1.32x</text>
-<text class="t1" x="200" y="221.5" font-size="13" text-anchor="end">PowerPoint 2013+</text>
-<path class="bar" d="M210,206 h150.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-150.8 z"><title>PowerPoint 2013+: 1.29x</title></path>
-<text class="t1" x="370.8" y="221.5" font-size="12.5" font-weight="600">1.29x</text>
-<text class="t1" x="200" y="251.5" font-size="13" text-anchor="end">RAR 5</text>
-<path class="bar" d="M210,236 h149.6 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-149.6 z"><title>RAR 5: 1.28x</title></path>
-<text class="t1" x="369.6" y="251.5" font-size="12.5" font-weight="600">1.28x</text>
-<text class="t1" x="200" y="281.5" font-size="13" text-anchor="end">RAR 3</text>
-<path class="bar" d="M210,266 h147.2 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-147.2 z"><title>RAR 3: 1.26x</title></path>
-<text class="t1" x="367.2" y="281.5" font-size="12.5" font-weight="600">1.26x</text>
-<text class="t1" x="200" y="311.5" font-size="13" text-anchor="end">Word 97</text>
-<path class="bar" d="M210,296 h144.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-144.8 z"><title>Word 97: 1.24x</title></path>
-<text class="t1" x="364.8" y="311.5" font-size="12.5" font-weight="600">1.24x</text>
-<text class="t1" x="200" y="341.5" font-size="13" text-anchor="end">PDF (RC4, older)</text>
-<path class="bar" d="M210,326 h134.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-134.0 z"><title>PDF (RC4, older): 1.15x</title></path>
-<text class="t1" x="354.0" y="341.5" font-size="12.5" font-weight="600">1.15x</text>
-<text class="t1" x="200" y="371.5" font-size="13" text-anchor="end">Wi-Fi (WPA/WPA2)</text>
-<path class="bar" d="M210,356 h128.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-128.0 z"><title>Wi-Fi (WPA/WPA2): 1.10x</title></path>
-<text class="t1" x="348.0" y="371.5" font-size="12.5" font-weight="600">1.10x</text>
-<text class="t1" x="200" y="401.5" font-size="13" text-anchor="end">WinZip AES</text>
-<path class="bar" d="M210,386 h119.6 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-119.6 z"><title>WinZip AES: 1.03x</title></path>
-<text class="t1" x="339.6" y="401.5" font-size="12.5" font-weight="600">1.03x</text>
-<text class="t1" x="200" y="431.5" font-size="13" text-anchor="end">TrueCrypt (SHA-512)</text>
-<path class="bar" d="M210,416 h116.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-116.0 z"><title>TrueCrypt (SHA-512): 1.00x</title></path>
-<text class="t1" x="336.0" y="431.5" font-size="12.5" font-weight="600">1.00x</text>
-<text class="t1" x="200" y="461.5" font-size="13" text-anchor="end">TrueCrypt (Whirlpool)</text>
-<path class="slow" d="M210,446 h72.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-72.8 z"><title>TrueCrypt (Whirlpool): 0.64x</title></path>
-<text class="t1" x="338.0" y="461.5" font-size="12.5" font-weight="600">0.64x</text>
+<text class="t1" x="200" y="161.5" font-size="13" text-anchor="end">TrueCrypt (Whirlpool)</text>
+<path class="bar" d="M210,146 h168.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-168.8 z"><title>TrueCrypt (Whirlpool): 1.44x</title></path>
+<text class="t1" x="388.8" y="161.5" font-size="12.5" font-weight="600">1.44x</text>
+<text class="t1" x="200" y="191.5" font-size="13" text-anchor="end">Word 2007</text>
+<path class="bar" d="M210,176 h164.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-164.0 z"><title>Word 2007: 1.40x</title></path>
+<text class="t1" x="384.0" y="191.5" font-size="12.5" font-weight="600">1.40x</text>
+<text class="t1" x="200" y="221.5" font-size="13" text-anchor="end">Word 2003</text>
+<path class="bar" d="M210,206 h154.4 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-154.4 z"><title>Word 2003: 1.32x</title></path>
+<text class="t1" x="374.4" y="221.5" font-size="12.5" font-weight="600">1.32x</text>
+<text class="t1" x="200" y="251.5" font-size="13" text-anchor="end">PowerPoint 2013+</text>
+<path class="bar" d="M210,236 h150.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-150.8 z"><title>PowerPoint 2013+: 1.29x</title></path>
+<text class="t1" x="370.8" y="251.5" font-size="12.5" font-weight="600">1.29x</text>
+<text class="t1" x="200" y="281.5" font-size="13" text-anchor="end">RAR 5</text>
+<path class="bar" d="M210,266 h149.6 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-149.6 z"><title>RAR 5: 1.28x</title></path>
+<text class="t1" x="369.6" y="281.5" font-size="12.5" font-weight="600">1.28x</text>
+<text class="t1" x="200" y="311.5" font-size="13" text-anchor="end">RAR 3</text>
+<path class="bar" d="M210,296 h147.2 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-147.2 z"><title>RAR 3: 1.26x</title></path>
+<text class="t1" x="367.2" y="311.5" font-size="12.5" font-weight="600">1.26x</text>
+<text class="t1" x="200" y="341.5" font-size="13" text-anchor="end">Word 97</text>
+<path class="bar" d="M210,326 h144.8 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-144.8 z"><title>Word 97: 1.24x</title></path>
+<text class="t1" x="364.8" y="341.5" font-size="12.5" font-weight="600">1.24x</text>
+<text class="t1" x="200" y="371.5" font-size="13" text-anchor="end">PDF (RC4, older)</text>
+<path class="bar" d="M210,356 h134.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-134.0 z"><title>PDF (RC4, older): 1.15x</title></path>
+<text class="t1" x="354.0" y="371.5" font-size="12.5" font-weight="600">1.15x</text>
+<text class="t1" x="200" y="401.5" font-size="13" text-anchor="end">Wi-Fi (WPA/WPA2)</text>
+<path class="bar" d="M210,386 h128.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-128.0 z"><title>Wi-Fi (WPA/WPA2): 1.10x</title></path>
+<text class="t1" x="348.0" y="401.5" font-size="12.5" font-weight="600">1.10x</text>
+<text class="t1" x="200" y="431.5" font-size="13" text-anchor="end">WinZip AES</text>
+<path class="bar" d="M210,416 h119.6 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-119.6 z"><title>WinZip AES: 1.03x</title></path>
+<text class="t1" x="339.6" y="431.5" font-size="12.5" font-weight="600">1.03x</text>
+<text class="t1" x="200" y="461.5" font-size="13" text-anchor="end">TrueCrypt (SHA-512)</text>
+<path class="bar" d="M210,446 h116.0 a4,4 0 0 1 4,4 v14 a4,4 0 0 1 -4,4 h-116.0 z"><title>TrueCrypt (SHA-512): 1.00x</title></path>
+<text class="t1" x="336.0" y="461.5" font-size="12.5" font-weight="600">1.00x</text>
 <line class="ref" x1="330.0" y1="50" x2="330.0" y2="482" stroke-width="1.5" stroke-dasharray="4 3"/>
 </svg>

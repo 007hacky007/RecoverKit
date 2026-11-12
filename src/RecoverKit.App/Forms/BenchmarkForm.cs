@@ -53,7 +53,7 @@ public sealed class BenchmarkForm : Form
     private readonly Dictionary<int, string> _engines = new();
 
     private bool UseNative(int mode) =>
-        _settings.UseNativeCpuEngine && NativeKernels.Supports(mode) && (!GpuNames().Any() || _settings.Strategy == DeviceStrategy.CpuOnly)
+        _settings.UseNativeCpuEngine && string.IsNullOrWhiteSpace(_settings.ExtraArguments) && NativeKernels.Supports(mode) && (!GpuNames().Any() || _settings.Strategy == DeviceStrategy.CpuOnly)
         && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
     private readonly CancellationTokenSource _cts = new();
     private DateTime _started, _finished;

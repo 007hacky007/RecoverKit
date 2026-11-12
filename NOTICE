@@ -1,10 +1,11 @@
 RecoverKit third-party notices
 ==============================
 
-RecoverKit's installer contains only RecoverKit itself (and, in the self-contained build, the
-.NET runtime, MIT License, https://github.com/dotnet/runtime). The components below are not
-bundled: RecoverKit downloads them from their official sources on first use, checks their
-SHA-256, and stores them in the user's profile. Each remains under its own license.
+RecoverKit's installer contains RecoverKit, Bouncy Castle (license below), and, in the
+self-contained build, the .NET runtime (MIT License, https://github.com/dotnet/runtime).
+The downloadable components below are not bundled: RecoverKit downloads them from their
+official sources on first use, checks their SHA-256, and stores them in the user's profile.
+Each remains under its own license.
 
 hashcat 7.1.2
   https://hashcat.net - MIT License.
@@ -21,3 +22,23 @@ Built-in word lists
   src/RecoverKit.Core/Attacks/Resources/SmallEnglish.txt and MediumEnglish.txt are a selection
   from the macOS /usr/share/dict/words list (Webster's Second International Dictionary, 1934,
   public domain), preceded by a short list of common passwords.
+
+BouncyCastle.Cryptography 2.7.0 (bundled)
+  https://www.bouncycastle.org/ - MIT License.
+  Used for reference Whirlpool derivation and AES, Serpent and Twofish header checks.
+
+MIT License (https://opensource.org/licenses/MIT)
+
+Copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org).
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sub license, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions: The above copyright notice and this
+permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

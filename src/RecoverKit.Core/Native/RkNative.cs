@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 4;
+    private const int RequiredVersion = 5;
 
     [Flags]
     public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8 }
@@ -41,6 +41,9 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_pdf6_search")]
     public static partial int Pdf6Search(byte* u48, byte* pws, int len, int n, int* hits, int maxHits);
+
+    [LibraryImport(Lib, EntryPoint = "rk_whirlpool_pbkdf2")]
+    public static partial int WhirlpoolPbkdf2(byte* salt64, byte* pws, int len, int n, byte* out64);
 
     [LibraryImport(Lib, EntryPoint = "rk_bench")]
     public static partial double Bench(int which, int reps);

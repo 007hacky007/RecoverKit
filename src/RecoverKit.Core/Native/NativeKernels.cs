@@ -9,6 +9,7 @@ public static class NativeKernels
     /// <summary>Creates the kernel for a hashcat mode and hash line, or null if the format is not built in.</summary>
     public static NativeKernel? TryCreate(int mode, string hashLine) => mode switch
     {
+        29331 when RkNative.Available => TrueCryptWhirlpoolKernel.TryParse(hashLine),
         17200 or 17210 => ZipCryptoKernel.TryParse(hashLine),
         // The vector kernels need hardware AVX2 / NEON; emulated Vector256 would be slower than hashcat.
         12500 when Rar3Kernel.NativeFast => Rar3Kernel.TryParse(hashLine),
@@ -33,6 +34,7 @@ public static class NativeKernels
         // is the time's), a typical small-file sample: with large entries the cost of
         // confirming false positives dominates.
         [17210] = "$pkzip2$1*1*2*0*29*1d*972eca9f*0*0*0*29*5220*5220*b3118b537bee6e1d72a8f76e6050fed3dca090b2ffbcade89854b9278e640b3abe76b02ac2a710c944*$/pkzip2$",
+        [29331] = "$truecrypt$cf53d4153414b63285e701e52c2d99e148c6ccc4508132f82cb41862d0a0ac9ea16274285ac261c339c1508eec9fea54c33e382458662913678f2a88a84959a6$78e238973985ec670d50252677430587ee28b72bfa5edfb2f79c40b734ba8a54a3662642a6ab067e75f41154688ad4adb5d6decd891462dd537188195a51e06fa5baf22b69d0f472cfeeae77ab9a90091731863af1d8b5b380da179fa7d5227ef031732b1ae06e0fe34c0b28b7a64eac34e5a08e09d7001394b3afc804ac69bf819cdd2d383fe96a721f7c683628da8e529d84bdaa68d702573d8f7ef26f75d1bd5c91efa88cb33b1e9c006b87981c55ed3b8063ab7068f8e99b128bc56ea3e883efa55d6f340b2681e50405d91f5f6d76cdbeac404944164d329d3ee01311de0bc6547310f126b5a4c0e9fb74825f91faefa60b7ac828819d4544c1872ff5041e61d5cf093553f427358b2181046376d7b876e1bccf0774d5d251b7c922c214bb5c70c715165d028e1dca73e7adeca3396d77f6e597a10dd4c58f37fdbbdc1d04cd8890ba4c5025776a88a349bb925add13193becf1ca10fe32536db0c0b06a1ef799fb692e304b3716ca5a8a80859c4012ca3e06701b46b5a32f4d10e285a0cdaf6c24e0d98139e7f306e52503c9b503aa28f1fbbb236284907068074fcb3e267e3c4aab2bd3b79b24a7a08106bb55850fa2bb8e2f6d9919a6743cb822c164",
         [9700] = "$oldoffice$0*55045061647456688860411218030058*e7e24d163fbd743992d4b8892bf3f2f7*493410dbc832557d3fe1870ace8397e2",
         [9800] = "$oldoffice$3*83328705222323020515404251156288*2855956a165ff6511bc7f4cd77b9e101*941861655e73a09c40f7b1e9dfd0c256ed285acd",
         [10400] = "$pdf$1*2*40*-1*0*16*01221086741440841668371056103222*32*27c3fecef6d46a78eb61b8b4dbc690f5f8a2912bbb9afc842c12d79481568b74*32*0000000000000000000000000000000000000000000000000000000000000000",

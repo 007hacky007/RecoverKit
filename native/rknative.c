@@ -23,7 +23,7 @@
 #define AVX2 __attribute__((target("avx2")))
 #endif
 
-#define RK_API_VERSION 4
+#define RK_API_VERSION 5
 
 enum { RK_FEAT_AVX2 = 1, RK_FEAT_SHANI = 2, RK_FEAT_AESNI = 4, RK_FEAT_NEON = 8 };
 
@@ -3060,3 +3060,5 @@ RK_EXPORT double rk_bench(int which, int reps)
     volatile uint8_t sink = S[K[0]]; (void)sink;
     return (double)(t1 - t0) / (double)items;
 }
+
+#include "whirlpool.h"

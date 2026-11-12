@@ -1,0 +1,9 @@
+Run 1
+Built-in CPU engine, 8 threads, AVX2=True
+mode  29331: 4,121 p/s
+Run 2
+Built-in CPU engine, 8 threads, AVX2=True
+mode  29331: 4,011 p/s
+Run 3
+Built-in CPU engine, 8 threads, AVX2=True
+mode  29331: 4,038 p/s

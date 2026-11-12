@@ -1,0 +1,27 @@
+Run 1
+# version: v7.1.2
+Initializing bridges. Please be patient...Initialized bridgesInitializing backend runtimes. Please be patient...Initialized backend runtimesInitializing backend devices. Please be patient...Initialized backend devices# option: --backend-devices-virtmulti=1
+# option: --backend-devices-virthost=1
+# option: --opencl-device-types=1
+# option: --workload-profile=3
+1:29331:4294967295:4294967295:100.17:1794
+Started: Thu Nov 12 16:14:12 2026
+Stopped: Thu Nov 12 16:14:21 2026
+Run 2
+# version: v7.1.2
+Initializing bridges. Please be patient...Initialized bridgesInitializing backend runtimes. Please be patient...Initialized backend runtimesInitializing backend devices. Please be patient...Initialized backend devices# option: --backend-devices-virtmulti=1
+# option: --backend-devices-virthost=1
+# option: --opencl-device-types=1
+# option: --workload-profile=3
+1:29331:4294967295:4294967295:98.03:1723
+Started: Thu Nov 12 16:14:22 2026
+Stopped: Thu Nov 12 16:14:31 2026
+Run 3
+# version: v7.1.2
+Initializing bridges. Please be patient...Initialized bridgesInitializing backend runtimes. Please be patient...Initialized backend runtimesInitializing backend devices. Please be patient...Initialized backend devices# option: --backend-devices-virtmulti=1
+# option: --backend-devices-virthost=1
+# option: --opencl-device-types=1
+# option: --workload-profile=3
+1:29331:4294967295:4294967295:100.84:1678
+Started: Thu Nov 12 16:14:31 2026
+Stopped: Thu Nov 12 16:14:40 2026
