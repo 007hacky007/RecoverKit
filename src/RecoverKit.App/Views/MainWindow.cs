@@ -756,7 +756,7 @@ public sealed partial class MainWindow : Window
             MaxPasswordLength = pmk ? 63 : 256,
         };
         var ctx = new PlannerContext { DataPath = _settings.DataPath, HashcatDir = _hashcat!.Directory, DefaultDictionary = _settings.DefaultDictionary };
-        var w = new WizardWindow(target, "", LoadScenarios(), _settings, ctx, _hashcat, mode);
+        var w = new WizardWindow(target, "", LoadScenarios(), _settings, ctx, _hashcat, mode, _devices);
         _busyDialog = true;
         bool ok;
         try { ok = await w.ShowDialog<bool>(this) && w.Steps.Count > 0; }
@@ -917,6 +917,8 @@ public sealed partial class MainWindow : Window
     /// <summary>Snapshot mode: show a detection without asking anything or starting the wizard.</summary>
     internal void DebugShowDetection(Detection det) => ShowDetectionInfo(det);
 
+    internal IReadOnlyList<BackendDevice> DebugDevices => _devices;
+
     /// <summary>Snapshot mode: the drop zone as it looks while a file is dragged over the window.</summary>
     internal void DebugDrag(bool on, string name)
     {
@@ -1000,7 +1002,7 @@ public sealed partial class MainWindow : Window
         var w = new WizardWindow(_current.Target, _current.FilePath, scenarios, _settings, new PlannerContext
         {
             DataPath = _settings.DataPath, HashcatDir = _hashcat!.Directory, DefaultDictionary = _settings.DefaultDictionary,
-        }, _hashcat);
+        }, _hashcat, devices: _devices);
         _busyDialog = true;
         bool ok;
         try { ok = await w.ShowDialog<bool>(this) && w.Steps.Count > 0; }

@@ -63,7 +63,7 @@ public sealed class WizardWindow : Window
     private Scenario? _scenario;
 
     public WizardWindow(HashTarget target, string filePath, List<Scenario> scenarios, Settings settings, PlannerContext ctx, HashcatTool? tool = null,
-        WizardMode mode = WizardMode.Recover)
+        WizardMode mode = WizardMode.Recover, IReadOnlyList<BackendDevice>? devices = null)
     {
         Mode = mode;
         _target = target;
@@ -72,6 +72,7 @@ public sealed class WizardWindow : Window
         _settings = settings;
         _ctx = ctx;
         _tool = tool;
+        _devices = devices ?? [];
 
         Title = mode switch { WizardMode.DictionaryGenerator => "Dictionary Generator", WizardMode.PmkGenerator => "WPA-PMK Generator", _ => "Password Recovery Wizard" };
         Icon = Icons.AppIcon();
@@ -108,7 +109,7 @@ public sealed class WizardWindow : Window
         Content = root;
 
         _scenario = scenarios.FirstOrDefault(s => s.DefaultFor.Contains(target.FormatId)) ?? scenarios.FirstOrDefault();
-        Closed += (_, _) => _estimateCts?.Cancel();
+        Closed += (_, _) => { _estimateCts?.Cancel(); _measureCts?.Cancel(); };
 
         // Enter advances (this replaces IsDefault on Next, so it cannot fire twice). Radio buttons and check
         // boxes derive from Button and would swallow Enter, so they are caught on the way down; fields that
@@ -400,21 +401,162 @@ public sealed class WizardWindow : Window
             _ = EstimateCardsAsync(cards, scenarioOnly: true);
         };
 
-        var note = L.Text("", dim: true, wrap: true);
-        note.FontSize = 12;
-        double? speed = MeasuredSpeed();
-        note.Text = speed is { } sp
-            ? $"Estimates are for the whole search at your last measured speed: {sp:N0} passwords per second for {_target.FormatName}."
-            : "Run Tools > Benchmark (or one attack) on this computer to see time estimates here.";
-        if (Mode != WizardMode.Recover) note.IsVisible = false;
+        _speedNote = new Border { IsVisible = Mode == WizardMode.Recover };
+        _noteCards = cards;
+        RenderSpeedNote();
         _ = EstimateCardsAsync(cards, scenarioOnly: false);
         UpdateAttackTypeButtons();
-        return L.Column(12, grid, note);
+        return L.Column(12, grid, _speedNote);
     }
 
-    /// <summary>The speed RecoverKit measured for this hash mode (benchmark or an earlier attack), if any.</summary>
+    private readonly IReadOnlyList<BackendDevice> _devices;
+    private Border? _speedNote;
+    private List<AttackCard>? _noteCards;
+    private CancellationTokenSource? _measureCts;
+    private string _measureStatus = "";
+    private string? _measureError;
+#if DEBUG
+    internal bool DebugNoSave { get; set; }
+#endif
+
+    private IEnumerable<int> TargetModes => _target.Modes.Distinct();
+
+    /// <summary>
+    /// The measured speed for this file (benchmark, "Measure speed" or an earlier attack). With several
+    /// hash modes (e.g. TrueCrypt KDFs) every one is tried, so the times add up: 1 / sum(1 / speed).
+    /// </summary>
     private double? MeasuredSpeed()
-        => Mode == WizardMode.Recover && _target.Modes.Count > 0 && _settings.SpeedByMode.TryGetValue(_target.Modes[0], out var s) && s > 0 ? s : null;
+    {
+        if (Mode != WizardMode.Recover || _target.Modes.Count == 0) return null;
+        double inverse = 0;
+        foreach (var m in TargetModes)
+        {
+            if (!_settings.SpeedByMode.TryGetValue(m, out var s) || s <= 0) return null;
+            inverse += 1 / s;
+        }
+        return 1 / inverse;
+    }
+
+    private static Button LinkButton(string text, Action click)
+    {
+        var b = new Button { Content = text, Padding = new Thickness(4, 1), Foreground = Palette.LinkBrush, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        b.Classes.Add("tool");
+        b.Click += (_, _) => click();
+        return b;
+    }
+
+    /// <summary>The note under the attack cards: the speed the estimates use, a "Measure speed" offer, or the measurement in progress.</summary>
+    private void RenderSpeedNote()
+    {
+        if (_speedNote is null) return;
+        TextBlock Small(string s, IBrush? color = null)
+        {
+            var t = L.Text(s, dim: color is null, wrap: true);
+            t.FontSize = 12;
+            if (color is not null) t.Foreground = color;
+            return t;
+        }
+        int modes = TargetModes.Count();
+        if (_measureCts is not null)
+        {
+            var bar = new ProgressBar { IsIndeterminate = true, Height = 4, MinHeight = 4, Width = 120, VerticalAlignment = VerticalAlignment.Center };
+            var row = new DockPanel();
+            var cancel = LinkButton("Cancel", () => _measureCts?.Cancel());
+            DockPanel.SetDock(bar, Dock.Left);
+            DockPanel.SetDock(cancel, Dock.Right);
+            bar.Margin = new Thickness(0, 0, 10, 0);
+            row.Children.Add(bar);
+            row.Children.Add(cancel);
+            row.Children.Add(Small(_measureStatus));
+            _speedNote.Child = NoteBox(row);
+            return;
+        }
+        if (MeasuredSpeed() is { } sp)
+        {
+            var text = Small($"Estimates are for the whole search at your last measured speed: {sp:N0} passwords per second for {_target.FormatName}" +
+                             (modes > 1 ? $" ({modes} hash modes combined)." : "."));
+            var p = new StackPanel { Spacing = 2, Children = { text } };
+            if (_tool is not null)
+            {
+                var again = LinkButton("Measure again", () => _ = MeasureSpeedAsync());
+                again.HorizontalAlignment = HorizontalAlignment.Left;
+                again.Margin = new Thickness(-4, 0, 0, 0);
+                p.Children.Add(again);
+            }
+            _speedNote.Child = p;
+            return;
+        }
+        var lines = new StackPanel { Spacing = 8 };
+        lines.Children.Add(Small("Time estimates need a speed measurement for this file type.", Palette.ForegroundBrush));
+        if (_measureError is not null) lines.Children.Add(Small(_measureError, Palette.WarningBrush));
+        if (_tool is not null)
+        {
+            var measure = L.Button(_measureError is null ? "Measure speed (about 10 s)" : "Try again", () => _ = MeasureSpeedAsync(), 0);
+            measure.HorizontalAlignment = HorizontalAlignment.Left;
+            ToolTip.SetTip(measure, "Runs a short benchmark for this file type only, on the same devices an attack would use");
+            lines.Children.Add(measure);
+        }
+        else lines.Children.Add(Small("Run Tools > Benchmark on this computer to see time estimates here."));
+        _speedNote.Child = NoteBox(lines);
+    }
+
+    private static Border NoteBox(Control c) => new()
+    {
+        Background = Palette.ChipBrush, BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+        Padding = new Thickness(12, 10), Child = c,
+    };
+
+    /// <summary>"Measure speed": a quick benchmark of this file's hash mode(s); the wizard stays usable meanwhile.</summary>
+    private async Task MeasureSpeedAsync()
+    {
+        if (_tool is null || _measureCts is not null) return;
+        var cts = _measureCts = new CancellationTokenSource();
+        _measureError = null;
+        var modes = TargetModes.ToList();
+        var measured = new Dictionary<int, double>();
+        try
+        {
+            for (int i = 0; i < modes.Count; i++)
+            {
+                _measureStatus = modes.Count > 1 ? $"Measuring hash mode {modes[i]} ({i + 1} of {modes.Count})..." : "Measuring...";
+                RenderSpeedNote();
+                using var limit = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                limit.CancelAfter(TimeSpan.FromSeconds(90));
+                double speed;
+                try { (speed, _) = await SpeedProbe.MeasureAsync(_tool, _settings, _devices, modes[i], TimeSpan.FromSeconds(5), limit.Token); }
+                catch (OperationCanceledException) when (!cts.IsCancellationRequested) { throw new TimeoutException(); }
+                DebugLog.Info($"Wizard speed measurement, mode {modes[i]}: {speed:N0} p/s");
+                if (speed <= 0) throw new InvalidOperationException($"hash mode {modes[i]} cannot run on the selected devices.");
+                measured[modes[i]] = speed;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (TimeoutException) { _measureError = "The measurement took too long. Try again, or run Tools > Benchmark."; }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            _measureError = "Could not measure the speed: " + ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_measureCts, cts)) _measureCts = null;
+            cts.Dispose();
+        }
+        if (measured.Count > 0)
+        {
+            foreach (var (m, s) in measured) _settings.SpeedByMode[m] = s;
+#if DEBUG
+            if (!DebugNoSave)
+#endif
+            _settings.Save();
+        }
+        RenderSpeedNote();
+        if (_noteCards is not null && _attackCards is not null) _ = EstimateCardsAsync(_noteCards, scenarioOnly: false);
+    }
+
+#if DEBUG
+    /// <summary>Snapshot mode: starts "Measure speed" (the measurement itself runs for real).</summary>
+    internal Task DebugMeasureAsync() => MeasureSpeedAsync();
+#endif
 
     /// <summary>
     /// Time badges on the attack cards: the full keyspace of the scenario, or of the last brute-force,

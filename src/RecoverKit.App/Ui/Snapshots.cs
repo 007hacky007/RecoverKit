@@ -7,6 +7,7 @@ using RecoverKit.App.Views;
 using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Hashcat;
 
 namespace RecoverKit.App.Ui;
 
@@ -73,10 +74,20 @@ internal static class Snapshots
         owiz.Close();
         var nospeed = Settings.Load();
         nospeed.SpeedByMode.Remove(9400);
-        owiz = new WizardWindow(office.Target!, office.FilePath, ScenarioParser.LoadDefault(), nospeed, wctx);
+        // "Measure speed" runs for real (without saving the settings) when hashcat is available.
+        var tool = HashcatTool.Locate(nospeed.HashcatPath);
+        owiz = new WizardWindow(office.Target!, office.FilePath, ScenarioParser.LoadDefault(), nospeed, wctx, tool, devices: main.DebugDevices) { DebugNoSave = true };
         owiz.Show(main);
         owiz.DebugShow(1);
         await Save(owiz, Path.Combine(dir, "wizard-cards-nospeed.png"));
+        if (tool is not null)
+        {
+            var measuring = owiz.DebugMeasureAsync();
+            await Save(owiz, Path.Combine(dir, "wizard-measuring.png"));
+            await Task.WhenAny(measuring, Task.Delay(TimeSpan.FromSeconds(120)));
+            await Task.Delay(1500);   // estimates
+            await Save(owiz, Path.Combine(dir, "wizard-measured.png"));
+        }
         owiz.Close();
 
         var found = new PasswordFoundWindow(["kaja2019"], "Quarterly-report.docx", TimeSpan.FromSeconds(580), _ => Task.CompletedTask);

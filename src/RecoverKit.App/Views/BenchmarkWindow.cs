@@ -62,9 +62,6 @@ public sealed class BenchmarkWindow : Window
     private DateTime _started, _finished;
     private bool _running;
 
-    private bool UseNative(int mode) =>
-        _settings.UseNativeCpuEngine && string.IsNullOrWhiteSpace(_settings.ExtraArguments) && NativeKernels.Supports(mode) && (!GpuNames().Any() || _settings.Strategy == DeviceStrategy.CpuOnly)
-        && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
 
     public BenchmarkWindow(HashcatTool hashcat, Settings settings, List<BackendDevice> devices)
     {
@@ -135,8 +132,6 @@ public sealed class BenchmarkWindow : Window
         _running = true;
         _started = DateTime.Now;
         Header();
-        var deviceArgs = HashcatRunner.DeviceArguments(_settings, _devices);
-        deviceArgs.AddRange(["-w", _settings.Workload.ToString()]);
         try
         {
             for (int i = 0; i < Entries.Length; i++)
@@ -146,20 +141,10 @@ public sealed class BenchmarkWindow : Window
                 _step.Text = $"Step {i + 1} of {Entries.Length}";
                 _progress.Text = e.Type;
                 // Same engine choice as a real attack: the built-in CPU kernels when no GPU is used.
-                bool native = UseNative(e.Mode);
+                bool native = SpeedProbe.UseNative(_settings, _devices, e.Mode);
                 double speed;
-                if (native)
-                {
-                    int threads = _settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount;
-                    speed = await Task.Run(() => NativeKernels.Benchmark(e.Mode, threads, TimeSpan.FromSeconds(8), _cts.Token));
-                }
-                else
-                {
-                    var args = new List<string>(deviceArgs);
-                    if (_settings.OptimizedKernels && (await _hashcat.ModeInfoAsync(e.Mode))?.HasOptimizedKernel == true) args.Add("-O");
-                    try { speed = await _hashcat.BenchmarkAsync(e.Mode, args, _cts.Token); }
-                    catch (TimeoutException) { speed = 0; }
-                }
+                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token); }
+                catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
                 _engines[e.Mode] = native ? "built-in CPU engine" : GpuNames().Any() ? "hashcat, GPU" : "hashcat, CPU (OpenCL)";
                 _results.Add((e, speed));
