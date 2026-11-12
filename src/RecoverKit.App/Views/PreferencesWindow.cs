@@ -36,6 +36,20 @@ public sealed class PreferencesWindow : Window
     private readonly List<(CheckBox Box, int Id)> _gpuChecks = new();
     private readonly Slider _workload = new() { Minimum = 1, Maximum = 4, TickFrequency = 1, IsSnapToTickEnabled = true, TickPlacement = Avalonia.Controls.TickPlacement.BottomRight };
     private readonly TextBlock _backendLabel = L.Text("", dim: true);
+    private static readonly (string Text, int Percent)[] Duties =
+    [
+        ("All the time (no limit)", 100),
+        ("75% of the time", 75),
+        ("Half of the time", 50),
+        ("25% of the time", 25),
+    ];
+    private readonly ComboBox _duty = new() { ItemsSource = Duties.Select(d => d.Text).ToArray(), MinWidth = 220 };
+    private readonly CheckBox _tempGuard = Check("Pause when the GPU gets too hot");
+    private readonly NumericUpDown _tempLimit = L.Number(ThermalGuard.MinLimit, ThermalGuard.MaxLimit, 85, 110);
+    private readonly NumericUpDown _tempHysteresis = L.Number(ThermalGuard.MinHysteresis, ThermalGuard.MaxHysteresis, 10, 110);
+    private readonly TextBlock _tempNow = L.Text("", dim: true, wrap: true);
+    private readonly TextBlock _tempResume = L.Text("", dim: true);
+    private Control? _tempRows;
     private readonly CheckBox _screensaver = Check("Keep the display and system awake while an attack runs");
     private readonly CheckBox _useScenario = Check("Use external scenario file");
     private readonly TextBox _scenarioFile = new();
@@ -181,15 +195,74 @@ public sealed class PreferencesWindow : Window
         {
             if (_hashcat is null) return;
             Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Wait);
-            try { _devices = await _hashcat.DevicesAsync(); FillDevices(); }
+            try { _devices = await _hashcat.DevicesAsync(); FillDevices(); await RefreshTemperatureAsync(); }
             finally { Cursor = Avalonia.Input.Cursor.Default; }
         }, 84), 0, 1);
 
         return L.Column(16,
             L.Group("Devices", list),
-            L.Group("Workload", L.Column(2, labels, _workload)),
+            L.Group("GPU load", LoadBox(labels)),
+            L.Group("GPU temperature", TemperatureBox()),
             detectRow,
             _screensaver);
+    }
+
+    /// <summary>Workload profile (hashcat -w) and the share of time the GPU works.</summary>
+    private Control LoadBox(Control labels)
+    {
+        var duty = L.Grid("Auto,Auto", columnSpacing: 12);
+        duty.Put(L.Text("Let the GPU work"), 0, 0);
+        duty.Put(_duty, 0, 1);
+        var note = L.Text("Workload sets how big each piece of GPU work is: lower keeps the desktop responsive. " +
+                          "Working only part of the time pauses hashcat in cycles of a minute, so the GPU idles in between: " +
+                          "average power, heat and fan noise drop, and the attack takes correspondingly longer. " +
+                          "A real power cap would need administrator rights and vendor tools.", dim: true, wrap: true);
+        note.FontSize = 12;
+        return L.Column(6, L.Text("Workload"), L.Column(2, labels, _workload), duty, note);
+    }
+
+    private Control TemperatureBox()
+    {
+        var g = L.Grid("Auto,Auto,*", rowSpacing: 8, columnSpacing: 10);
+        g.Put(L.Text("Pause at"), 0, 0);
+        g.Put(_tempLimit, 0, 1);
+        g.Put(L.Text("°C", dim: true), 0, 2);
+        g.Put(L.Text("Resume when it cools by"), 1, 0);
+        g.Put(_tempHysteresis, 1, 1);
+        g.Put(_tempResume, 1, 2);
+        _tempRows = g;
+        void Sync()
+        {
+            g.IsEnabled = _tempGuard.IsChecked == true && _tempGuard.IsEnabled;
+            _tempResume.Text = $"°C (resumes at {_tempLimit.IntValue() - _tempHysteresis.IntValue()} °C)";
+        }
+        _tempGuard.IsCheckedChanged += (_, _) => Sync();
+        _tempLimit.ValueChanged += (_, _) => Sync();
+        _tempHysteresis.ValueChanged += (_, _) => Sync();
+        Opened += (_, _) => { Sync(); _ = RefreshTemperatureAsync(); };
+        var note = L.Text("hashcat is suspended while the GPU cools and continues exactly where it stopped. " +
+                          "As a safety net hashcat also aborts on its own 10 °C above the limit.", dim: true, wrap: true);
+        note.FontSize = 12;
+        return L.Column(8, _tempGuard, g, _tempNow, note);
+    }
+
+    /// <summary>Shows the current temperature, or why the guard is unavailable.</summary>
+    private async Task RefreshTemperatureAsync()
+    {
+        bool hasGpu = _devices.Any(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase));
+        var (temp, source) = await Task.Run(() =>
+        {
+            var src = GpuTemperature.External;
+            int t = src?.ReadHottest() ?? -1;
+            return t >= 0 ? (t, src!.Name) : (GpuTemperature.LastReported, "hashcat");
+        });
+        bool unsupported = !hasGpu || (temp < 0 && GpuTemperature.HashcatReportsNone);
+        _tempNow.Text = !hasGpu ? "No GPU detected: the temperature guard only applies to GPUs."
+            : temp >= 0 ? $"Current temperature: {temp} °C (from {source})."
+            : unsupported ? "Temperature not reported by this GPU / driver, so the guard is unavailable."
+            : "Temperature not reported yet: hashcat shows it once an attack runs on the GPU.";
+        _tempGuard.IsEnabled = !unsupported;
+        if (_tempRows is not null) _tempRows.IsEnabled = !unsupported && _tempGuard.IsChecked == true;
     }
 
     private Control HashcatRow()
@@ -291,6 +364,11 @@ public sealed class PreferencesWindow : Window
         _native.IsChecked = _s.UseNativeCpuEngine;
         _extra.Text = _s.ExtraArguments;
         _workload.Value = Math.Clamp(_s.Workload, 1, 4);
+        int duty = Array.FindIndex(Duties, d => d.Percent >= _s.GpuDutyPercent && d.Percent - 25 < _s.GpuDutyPercent);
+        _duty.SelectedIndex = duty < 0 ? 0 : duty;
+        _tempGuard.IsChecked = _s.GpuTempGuard;
+        _tempLimit.Value = Math.Clamp(_s.GpuTempLimit, ThermalGuard.MinLimit, ThermalGuard.MaxLimit);
+        _tempHysteresis.Value = Math.Clamp(_s.GpuTempHysteresis, ThermalGuard.MinHysteresis, ThermalGuard.MaxHysteresis);
         _screensaver.IsChecked = _s.PreventScreensaver;
         _useScenario.IsChecked = _s.UseExternalScenarioFile;
         _scenarioFile.Text = _s.ExternalScenarioFile ?? "";
@@ -329,7 +407,7 @@ public sealed class PreferencesWindow : Window
             _gpuChecks.Add((cb, d.Id));
         }
         if (gpus.Count == 0) _gpuList.Children.Add(L.Text("No compatible GPU devices detected.", dim: true));
-        _workload.IsEnabled = gpus.Count > 0;
+        _workload.IsEnabled = _duty.IsEnabled = gpus.Count > 0;
         _backendLabel.Text = gpus.Count == 0 ? ""
             : string.Join(", ", gpus.Select(d => d.Backend + (d.BackendVersion.Length > 0 ? " " + d.BackendVersion : "")).Distinct());
     }
@@ -343,6 +421,10 @@ public sealed class PreferencesWindow : Window
         _s.UseNativeCpuEngine = _native.IsChecked == true;
         _s.ExtraArguments = (_extra.Text ?? "").Trim();
         _s.Workload = (int)Math.Round(_workload.Value);
+        _s.GpuDutyPercent = Duties[Math.Max(0, _duty.SelectedIndex)].Percent;
+        _s.GpuTempGuard = _tempGuard.IsChecked == true;
+        _s.GpuTempLimit = _tempLimit.IntValue();
+        _s.GpuTempHysteresis = _tempHysteresis.IntValue();
         _s.PreventScreensaver = _screensaver.IsChecked == true;
         _s.DisabledDevices = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Id).ToList();
         _s.UseExternalScenarioFile = _useScenario.IsChecked == true;
