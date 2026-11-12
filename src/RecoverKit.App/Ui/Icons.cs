@@ -1,92 +1,85 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Shapes;
+using Avalonia.Controls.Documents;
 using Avalonia.Media;
 
 namespace RecoverKit.App.Ui;
 
-/// <summary>Toolbar and window icons, drawn as vectors on a 32x32 canvas so they stay sharp at any scale.</summary>
+/// <summary>
+/// Monochrome line icons (24x24 strokes, like the toolbar of the design study). They paint with the
+/// inherited text foreground, so they follow the button state (hover, accent, disabled) and the theme.
+/// </summary>
 internal static class Icons
 {
-    private static Color C(uint argb) => Color.FromUInt32(argb);
+    public const string OpenData = "M3,7 H9 L11,9 H21 V18 A2,2 0 0 1 19,20 H5 A2,2 0 0 1 3,18 Z M12,17 V12 M9.5,14.5 L12,12 L14.5,14.5";
+    public const string StartData = "M8,5.5 V18.5 L18,12 Z";
+    public const string StopData = "M8.5,6.5 H15.5 A2,2 0 0 1 17.5,8.5 V15.5 A2,2 0 0 1 15.5,17.5 H8.5 A2,2 0 0 1 6.5,15.5 V8.5 A2,2 0 0 1 8.5,6.5 Z";
+    public const string BenchData = "M4,19 V9 M9,19 V5 M14,19 V12 M19,19 V8";
+    public const string HelpData = "M21,12 A9,9 0 1 1 3,12 A9,9 0 1 1 21,12 Z M9.5,9.5 A2.5,2.5 0 1 1 13,11.8 C12.4,12.1 12,12.6 12,13.3 V13.7 M12,17 H12.01";
+    public const string LockData = "M7,10 H17 A2,2 0 0 1 19,12 V18 A2,2 0 0 1 17,20 H7 A2,2 0 0 1 5,18 V12 A2,2 0 0 1 7,10 Z M8,10 V7 A4,4 0 0 1 16,7 V10 M12,14 V16";
+    public const string CheckData = "M5,12.5 L9.5,17 L19,7.5";
 
-    private static Viewbox Box(double size, params Control[] shapes)
+    /// <summary>A gear outline: eight rounded teeth around a ring with a hole.</summary>
+    public static string GearData
     {
-        var canvas = new Canvas { Width = 32, Height = 32 };
-        foreach (var s in shapes) canvas.Children.Add(s);
-        return new Viewbox { Width = size, Height = size, Child = canvas };
-    }
-
-    private static LinearGradientBrush Vertical(uint top, uint bottom) => new()
-    {
-        StartPoint = new RelativePoint(0.5, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(0.5, 1, RelativeUnit.Relative),
-        GradientStops = { new GradientStop(C(top), 0), new GradientStop(C(bottom), 1) },
-    };
-
-    private static Avalonia.Controls.Shapes.Path P(string data, IBrush? fill, IBrush? stroke = null, double thickness = 1)
-        => new() { Data = Geometry.Parse(data), Fill = fill, Stroke = stroke, StrokeThickness = thickness };
-
-    public static Control Open(double size) => Box(size,
-        P("M2,9 H28 V28 H2 Z M2,6 H13 V11 H2 Z", Vertical(0xFFFFD678, 0xFFE6961E)),
-        P("M4,14 H30 L27,28 H2 Z", new SolidColorBrush(C(0xFFFABE46))),
-        P("M16,2 L24,11 H19.5 V22 H12.5 V11 H8 Z", new SolidColorBrush(C(0xFF28A03C)), new SolidColorBrush(C(0xFF146E28))));
-
-    private static Control Disc(double size, uint light, uint dark, Control glyph)
-    {
-        var fill = new RadialGradientBrush
+        get
         {
-            Center = new RelativePoint(0.38, 0.3, RelativeUnit.Relative), GradientOrigin = new RelativePoint(0.38, 0.3, RelativeUnit.Relative),
-            RadiusX = new RelativeScalar(0.75, RelativeUnit.Relative), RadiusY = new RelativeScalar(0.75, RelativeUnit.Relative),
-            GradientStops = { new GradientStop(C(light), 0), new GradientStop(C(dark), 1) },
-        };
-        var shadow = new Ellipse { Width = 27, Height = 27, Fill = new SolidColorBrush(C(0x3C000000)) };
-        Canvas.SetLeft(shadow, 3); Canvas.SetTop(shadow, 4);
-        var disc = new Ellipse { Width = 27, Height = 27, Fill = fill, Stroke = new SolidColorBrush(C(0xFF5A5A5A)), StrokeThickness = 1.2 };
-        Canvas.SetLeft(disc, 2); Canvas.SetTop(disc, 2);
-        return Box(size, shadow, disc, glyph);
-    }
-
-    public static Control Start(double size, bool enabled = true) => Disc(size,
-        enabled ? 0xFF8CE678 : 0xFFDCDCDC, enabled ? 0xFF1E8C28 : 0xFF8C8C8C,
-        P("M12.5,9 L22,15.5 L12.5,22 Z", Brushes.White));
-
-    public static Control Stop(double size, bool enabled = true) => Disc(size,
-        enabled ? 0xFF969696 : 0xFFDCDCDC, enabled ? 0xFF323232 : 0xFF8C8C8C,
-        P("M11,11 H20.5 V20.5 H11 Z", Brushes.White));
-
-    public static Control Gear(double size)
-    {
-        const int teeth = 8;
-        var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < teeth * 4; i++)
-        {
-            double a = i * Math.PI * 2 / (teeth * 4);
-            double r = (i % 4) is 0 or 1 ? 14.5 : 11;
-            sb.Append(i == 0 ? 'M' : 'L').Append(FormattableString.Invariant($"{16 + r * Math.Cos(a):0.##},{16 + r * Math.Sin(a):0.##} "));
+            var sb = new System.Text.StringBuilder();
+            const int teeth = 8;
+            for (int i = 0; i < teeth * 4; i++)
+            {
+                double a = (i - 0.5) * Math.PI * 2 / (teeth * 4);
+                double r = (i % 4) is 0 or 1 ? 9.6 : 7.4;
+                sb.Append(i == 0 ? 'M' : 'L').Append(FormattableString.Invariant($"{12 + r * Math.Cos(a):0.##},{12 + r * Math.Sin(a):0.##} "));
+            }
+            sb.Append("Z M15,12 A3,3 0 1 1 9,12 A3,3 0 1 1 15,12 Z");
+            return sb.ToString();
         }
-        sb.Append("Z M21,16 A5,5 0 1 0 11,16 A5,5 0 1 0 21,16 Z");
-        var fill = new LinearGradientBrush
-        {
-            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
-            GradientStops = { new GradientStop(C(0xFFFFB43C), 0), new GradientStop(C(0xFFDC640A), 1) },
-        };
-        var path = P("F0 " + sb, fill, new SolidColorBrush(C(0xFFA04600)));
-        return Box(size, path);
     }
 
-    public static Control Help(double size)
-    {
-        var page = P("M6,2 H20 L26,8 V30 H6 Z", Vertical(0xFFFFFFFF, 0xFFDCE6F5), new SolidColorBrush(C(0xFF5A6E8C)), 1.2);
-        var fold = P("M20,2 V8 H26", null, new SolidColorBrush(C(0xFF5A6E8C)), 1.2);
-        var q = new TextBlock { Text = "?", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(C(0xFF1E5AC8)) };
-        Canvas.SetLeft(q, 11); Canvas.SetTop(q, 7);
-        return Box(size, page, fold, q);
-    }
+    public static LineIcon Open(double size = 20) => new(OpenData, size);
+    public static LineIcon Start(double size = 20) => new(StartData, size);
+    public static LineIcon Stop(double size = 20) => new(StopData, size);
+    public static LineIcon Bench(double size = 20) => new(BenchData, size);
+    public static LineIcon Gear(double size = 20) => new(GearData, size);
+    public static LineIcon Help(double size = 20) => new(HelpData, size);
+    public static LineIcon Lock(double size = 44) => new(LockData, size, 1.4);
+    public static LineIcon Check(double size = 20) => new(CheckData, size, 2.4);
 
     /// <summary>The window icon, from the embedded multi-resolution .ico.</summary>
     public static WindowIcon? AppIcon()
     {
         using var s = typeof(Icons).Assembly.GetManifestResourceStream("RecoverKit.App.Icon.ico");
         return s is null ? null : new WindowIcon(s);
+    }
+}
+
+/// <summary>Strokes a 24x24 path geometry scaled to its size, in <see cref="Brush"/> or the inherited foreground.</summary>
+internal sealed class LineIcon : Control
+{
+    public static readonly StyledProperty<IBrush?> BrushProperty = AvaloniaProperty.Register<LineIcon, IBrush?>(nameof(Brush));
+
+    static LineIcon() => AffectsRender<LineIcon>(BrushProperty, TextElement.ForegroundProperty);
+
+    private readonly Geometry _geometry;
+    private readonly double _thickness;
+
+    public LineIcon(string data, double size, double thickness = 1.7)
+    {
+        _geometry = Geometry.Parse(data);
+        _thickness = thickness;
+        Width = Height = size;
+    }
+
+    /// <summary>Overrides the inherited foreground.</summary>
+    public IBrush? Brush { get => GetValue(BrushProperty); set => SetValue(BrushProperty, value); }
+
+    public override void Render(DrawingContext context)
+    {
+        var brush = Brush ?? GetValue(TextElement.ForegroundProperty) ?? Palette.ForegroundBrush;
+        double scale = Math.Min(Bounds.Width, Bounds.Height) / 24;
+        var pen = new Pen(brush, _thickness) { LineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+        using (context.PushTransform(Matrix.CreateScale(scale, scale)))
+            context.DrawGeometry(null, pen, _geometry);
     }
 }

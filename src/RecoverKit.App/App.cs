@@ -21,6 +21,10 @@ public sealed class App : Application
     {
         Name = MainWindow.AppName;
         RequestedThemeVariant = ThemeVariant.Default;   // follow the system's light/dark setting
+#if DEBUG
+        if (Snapshots.Theme is "light") RequestedThemeVariant = ThemeVariant.Light;
+        else if (Snapshots.Theme is "dark") RequestedThemeVariant = ThemeVariant.Dark;
+#endif
         Styles.Add(new FluentTheme());
         Styles.Add(Ui.Styles.App());
     }

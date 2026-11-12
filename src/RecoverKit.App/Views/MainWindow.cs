@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Rectangle = Avalonia.Controls.Shapes.Rectangle;
+using Ellipse = Avalonia.Controls.Shapes.Ellipse;
 using Avalonia.Platform.Storage;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -33,13 +34,30 @@ public sealed partial class MainWindow : Window
     private string _hashcatVersion = "";
     private string _deviceStatus = "";   // right status pane text between attacks
 
-    private readonly SelectableTextBlock _info = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(12, 10, 12, 10) };
+    private readonly SelectableTextBlock _info = new() { TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = new Thickness(16, 10, 16, 10) };
     private readonly ScrollViewer _infoScroll;
-    private readonly TextBlock _curPassword = Value(), _estTime = Value(), _curSpeed = Value(), _avgSpeed = Value();
-    private readonly ProgressBar _progress = new() { Minimum = 0, Maximum = 1000, Height = 6, MinHeight = 6, Margin = new Thickness(0, 6, 0, 0) };
+    // Status band: four labelled values and the progress bar.
+    private readonly TextBlock _curPassword = Value(mono: true), _estTime = Value(), _curSpeed = Value(), _tested = Value();
+    private readonly ProgressStrip _progress = new() { Margin = new Thickness(0, 10, 0, 0) };
+    private Border _band = null!;
     private readonly TextBlock _statusLeft = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock _statusRight = new() { VerticalAlignment = VerticalAlignment.Center };
     private Button _tbStart = null!, _tbStop = null!;
+    // Device pill on the right of the toolbar.
+    private readonly Ellipse _pillDot = new() { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _pillText = new() { FontSize = 11, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private Border _pill = null!;
+    private PillState _pillState = PillState.Busy;
+    private int _gpuTemp = -1;
+    // Empty state: the drop zone. Loaded: the file card above the log.
+    private DropFrame _dropZone = null!;
+    private Border _dropLayer = null!;
+    private readonly TextBlock _dropTitle = new() { FontSize = 15, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap };
+    private Control _dropHint = null!, _dropChips = null!;
+    private readonly StackPanel _dropNotices = new() { Spacing = 4, MaxWidth = 460, HorizontalAlignment = HorizontalAlignment.Center };
+    private bool _dragging;
+    private DockPanel _filePane = null!;
+    private readonly FileCard _fileCard = new();
     private NativeMenuItem _miStart = null!, _miStop = null!;
     private readonly List<NativeMenuItem> _idleOnly = new();   // File and Options items, disabled during an attack
 
@@ -60,9 +78,9 @@ public sealed partial class MainWindow : Window
         Title = AppName;
         Icon = Icons.AppIcon();
         MinWidth = 560;
-        MinHeight = 420;
-        Width = 680;
-        Height = 520;
+        MinHeight = 460;
+        Width = 700;
+        Height = 600;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         if (_settings.WindowBounds is { Length: 4 } wb && wb[2] >= MinWidth && wb[3] >= MinHeight)
         {
@@ -91,16 +109,22 @@ public sealed partial class MainWindow : Window
         root.Children.Add(statusPane);
         root.Children.Add(new Border
         {
-            Child = _infoScroll, Background = Palette.PaneBrush, BorderBrush = Palette.LineBrush,
+            Child = BuildPane(), Background = Palette.PaneBrush, BorderBrush = Palette.LineBrush,
             BorderThickness = new Thickness(0, 1, 0, 1),
         });
         Content = root;
 
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, (object? _, DragEventArgs e) =>
-            e.DragEffects = e.DataTransfer.TryGetFiles() is { Length: > 0 } ? DragDropEffects.Copy : DragDropEffects.None);
+        {
+            var files = e.DataTransfer.TryGetFiles();
+            e.DragEffects = files is { Length: > 0 } ? DragDropEffects.Copy : DragDropEffects.None;
+            SetDragging(files is { Length: > 0 } && _cts is null && !_busyDialog, files);
+        });
+        AddHandler(DragDrop.DragLeaveEvent, (object? _, DragEventArgs _) => SetDragging(false, null));
         AddHandler(DragDrop.DropEvent, async (object? _, DragEventArgs e) =>
         {
+            SetDragging(false, null);
             var files = e.DataTransfer.TryGetFiles()?.Select(f => f.TryGetLocalPath()).OfType<string>().ToArray() ?? [];
             if (files.Length == 0) return;
             if (files.Length > 1) { await Warn("Cannot process multiple files at once, please drop only one at a time."); return; }
@@ -120,7 +144,16 @@ public sealed partial class MainWindow : Window
         ShowStartPage();
     }
 
-    private static TextBlock Value() => new() { FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private static TextBlock Value(bool mono = false)
+    {
+        var t = new TextBlock
+        {
+            FontSize = mono ? 14 : 15, FontWeight = mono ? FontWeight.Normal : FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, Text = "-", FontFeatures = Ui.Styles.TabularDigits,
+        };
+        if (mono) t.FontFamily = Ui.Styles.Mono;
+        return t;
+    }
 
     /// <summary>A file opened from Finder (or the Dock) while the app runs.</summary>
     public void OpenFromShell(string path)
@@ -199,59 +232,180 @@ public sealed partial class MainWindow : Window
 
     private Control BuildToolbar()
     {
-        const double sz = 26;
-        Button B(Control icon, string tip, Action a)
+        Button B(LineIcon icon, string label, string tip, Action a)
         {
-            var b = new Button { Content = icon, Padding = new Thickness(5), Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+            icon.HorizontalAlignment = HorizontalAlignment.Center;
+            var b = new Button
+            {
+                Content = L.Column(2, icon, new TextBlock { Text = label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center }),
+                Padding = new Thickness(10, 5, 10, 4), MinWidth = 52, HorizontalContentAlignment = HorizontalAlignment.Center,
+            };
             b.Classes.Add("tool");
             ToolTip.SetTip(b, tip);
-            AutomationProperties(b, tip);
+            AutomationProperties(b, label);
             b.Click += (_, _) => a();
             return b;
         }
-        Control Sep() => new Rectangle { Width = 1, Height = 26, Fill = Palette.LineBrush, Margin = new Thickness(6, 0) };
-        _tbStart = B(Icons.Start(sz), "Start", StartWizard);
-        _tbStop = B(Icons.Stop(sz), "Stop", StopAttack);
-        _tbStart.PropertyChanged += (_, e) => { if (e.Property == IsEnabledProperty) _tbStart.Content = Icons.Start(sz, _tbStart.IsEnabled); };
-        _tbStop.PropertyChanged += (_, e) => { if (e.Property == IsEnabledProperty) _tbStop.Content = Icons.Stop(sz, _tbStop.IsEnabled); };
-        var bar = new StackPanel
+        Control Sep() => new Rectangle { Width = 1, Height = 30, Fill = Palette.LineBrush, Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center };
+        _tbStart = B(Icons.Start(), "Start", $"Start ({(Platform.IsMac ? "Cmd+R" : "F5")})", StartWizard);
+        _tbStop = B(Icons.Stop(), "Stop", $"Stop ({(Platform.IsMac ? "Cmd+." : "Shift+F5")})", StopAttack);
+        var left = new StackPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(6, 4),
+            Orientation = Orientation.Horizontal, Spacing = 2,
             Children =
             {
-                B(Icons.Open(sz), $"Open file ({Platform.Shortcut("O")})", OpenDialog), Sep(),
+                B(Icons.Open(), "Open", $"Open file ({Platform.Shortcut("O")})", OpenDialog), Sep(),
                 _tbStart, _tbStop, Sep(),
-                B(Icons.Gear(sz), Platform.IsMac ? "Settings" : "Preferences", () => ShowPreferences(0)),
-                B(Icons.Help(sz), "Help", () => _ = ShowHelpAsync()),
+                B(Icons.Bench(), "Benchmark", "Measure the recovery speed of each format on this computer", () => _ = ShowBenchmarkAsync()),
+                B(Icons.Gear(), "Settings", Platform.IsMac ? "Settings (Cmd+,)" : "Preferences", () => ShowPreferences(0)),
+                B(Icons.Help(), "Help", "Help", () => _ = ShowHelpAsync()),
             },
         };
+        _pill = new Border
+        {
+            CornerRadius = new CornerRadius(999), Padding = new Thickness(9, 4), Background = Palette.ChipBrush,
+            BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 2, 0),
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { _pillDot, _pillText } },
+        };
+        _pillText.Foreground = Palette.DimBrush;
+        SetPill(PillState.Busy, "Starting...");
+        var bar = new DockPanel { Margin = new Thickness(10, 6) };
+        DockPanel.SetDock(left, Dock.Left);
+        bar.Children.Add(left);
+        _pill.HorizontalAlignment = HorizontalAlignment.Right;
+        bar.Children.Add(_pill);
         return bar;
+    }
+
+    private enum PillState { Busy, Ready, Cpu, Problem, Hot }
+
+    private string _pillBase = "";
+
+    /// <summary>Device pill: a coloured dot and a short engine status (plus the hottest GPU while an attack runs).</summary>
+    private void SetPill(PillState state, string? text = null)
+    {
+        _pillState = state;
+        if (text is not null) _pillBase = text;
+        _pillDot.Fill = state switch
+        {
+            PillState.Ready => Palette.GoodBrush,
+            PillState.Cpu => Palette.AccentBrush,
+            PillState.Problem => Palette.ErrorBrush,
+            PillState.Hot => Palette.WarnBrush,
+            _ => Palette.DimBrush,
+        };
+        _pillText.Text = _gpuTemp >= 0 && state != PillState.Hot ? $"{_pillBase}  ·  GPU {_gpuTemp} °C" : _pillBase;
     }
 
     private static void AutomationProperties(Control c, string name) => Avalonia.Automation.AutomationProperties.SetName(c, name);
 
     private Control BuildStatusPane()
     {
-        var t = L.Grid("Auto,*,Auto,*", rowSpacing: 3, columnSpacing: 8);
-        t.Margin = new Thickness(12, 8, 12, 8);
-        t.Put(L.Text("Current password:", dim: true), 0, 0); t.Put(_curPassword, 0, 1);
-        t.Put(L.Text("Estimated time:", dim: true), 0, 2); t.Put(_estTime, 0, 3);
-        t.Put(L.Text("Current speed:", dim: true), 1, 0); t.Put(_curSpeed, 1, 1);
-        t.Put(L.Text("Average speed:", dim: true), 1, 2); t.Put(_avgSpeed, 1, 3);
-        t.Put(_progress, 2, 0, 4);
-        return t;
+        var g = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*"), ColumnSpacing = 12 };
+        void Stat(string label, TextBlock value, int col)
+        {
+            var l = new TextBlock { Text = label.ToUpperInvariant(), FontSize = 10.5, LetterSpacing = 0.7, Foreground = Palette.DimBrush };
+            var p = L.Column(1, l, value);
+            Grid.SetColumn(p, col);
+            g.Children.Add(p);
+        }
+        Stat("Trying", _curPassword, 0);
+        Stat("Speed", _curSpeed, 1);
+        Stat("Time left", _estTime, 2);
+        Stat("Tested", _tested, 3);
+        _band = new Border
+        {
+            Padding = new Thickness(16, 12), Background = Palette.StatusBandBrush,
+            Child = L.Column(0, g, _progress),
+        };
+        return _band;
+    }
+
+    /// <summary>The pane between toolbar and status band: drop zone when empty, file card and log when a file is open.</summary>
+    private Control BuildPane()
+    {
+        // ---- drop zone
+        var hint = new TextBlock { Foreground = Palette.DimBrush, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+        hint.Inlines!.Add(new Run("or choose Open ("));
+        hint.Inlines.Add(new InlineUIContainer(new Border
+        {
+            BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 0),
+            Child = new TextBlock { Text = Platform.Shortcut("O").Replace('+', ' '), FontFamily = Ui.Styles.Mono, FontSize = 11 },
+        }) { BaselineAlignment = BaselineAlignment.Center });
+        hint.Inlines.Add(new Run("). RecoverKit detects the format and picks the right attack."));
+        _dropHint = hint;
+        var chips = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 470, ItemSpacing = 6, LineSpacing = 6, ItemsAlignment = WrapPanelItemsAlignment.Center };
+        foreach (var c in new[] { "Word, Excel, PowerPoint", "PDF", "ZIP", "RAR 3 / 5", "OpenDocument", "VeraCrypt", "TrueCrypt", "Wi-Fi handshake", "iTunes backup" })
+            chips.Children.Add(new Border
+            {
+                Background = Palette.ChipBrush, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3),
+                Child = new TextBlock { Text = c, FontSize = 11, Foreground = Palette.DimBrush },
+            });
+        _dropChips = chips;
+        var lockIcon = Icons.Lock();
+        lockIcon.Brush = Palette.StepBrush;
+        lockIcon.HorizontalAlignment = HorizontalAlignment.Center;
+        _dropTitle.Text = "Drop a protected file here";
+        var dropContent = L.Column(12, lockIcon, _dropTitle, hint, chips, _dropNotices);
+        dropContent.HorizontalAlignment = HorizontalAlignment.Center;
+        dropContent.VerticalAlignment = VerticalAlignment.Center;
+        dropContent.Margin = new Thickness(16);
+        _dropZone = new DropFrame
+        {
+            Margin = new Thickness(18),
+            Child = new ScrollViewer { Content = dropContent, VerticalAlignment = VerticalAlignment.Center, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
+        };
+
+        // ---- file pane
+        _filePane = new DockPanel { IsVisible = false };
+        DockPanel.SetDock(_fileCard, Dock.Top);
+        _filePane.Children.Add(_fileCard);
+        _filePane.Children.Add(_infoScroll);
+
+        _dropLayer = new Border { Background = Palette.PaneBrush, Child = _dropZone };
+        return new Grid { Children = { _filePane, _dropLayer } };
+    }
+
+    /// <summary>Shows the drop zone (empty state) or the file pane; while files are dragged over the window the zone lights up on top.</summary>
+    private void UpdatePane()
+    {
+        bool empty = _current is null;
+        _filePane.IsVisible = !empty;
+        _dropLayer.IsVisible = empty || _dragging;
+        _dropZone.Active = _dragging;
+        _dropHint.IsVisible = _dropChips.IsVisible = !_dragging;
+        _dropNotices.IsVisible = !_dragging && _dropNotices.Children.Count > 0;
+        if (!_dragging) _dropTitle.Text = "Drop a protected file here";
+    }
+
+    private void SetDragging(bool on, IStorageItem[]? files)
+    {
+        if (on) _dropTitle.Text = files is { Length: > 1 } ? "Drop one file at a time" : $"Release to open {files?[0].Name}";
+        if (_dragging == on) return;
+        _dragging = on;
+        UpdatePane();
+    }
+
+    /// <summary>A notice on the empty screen (hashcat missing, no GPU, ...); also written to the log.</summary>
+    private void Notice(string text, IBrush color)
+    {
+        Line(text, color);
+        _dropNotices.Children.Add(new TextBlock { Text = text, Foreground = color, FontSize = 12, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center });
+        UpdatePane();
     }
 
     private Control BuildStatusBar()
     {
         var g = L.Grid("*,Auto", columnSpacing: 10);
         g.Put(_statusLeft, 0, 0);
-        g.Put(new Border { BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(1, 0, 0, 0), Padding = new Thickness(10, 0, 0, 0), Child = _statusRight }, 0, 1);
-        _statusLeft.FontSize = _statusRight.FontSize = 12;
+        g.Put(_statusRight, 0, 1);
+        _statusLeft.FontSize = _statusRight.FontSize = 11;
         _statusLeft.Foreground = _statusRight.Foreground = Palette.DimBrush;
+        _statusRight.Text = IdleStatusRight;
         return new Border
         {
-            Child = g, Padding = new Thickness(12, 5), Background = Palette.BandBrush,
+            Child = g, Padding = new Thickness(16, 5), Background = Palette.StatusBandBrush,
             BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(0, 1, 0, 0),
         };
     }
@@ -338,43 +492,41 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private static string IdleStatusRight => $"{AppName} {AppVersion}";
+
+    /// <summary>The empty state: no file, the drop zone with format chips.</summary>
     private void ShowStartPage()
     {
         ClearInfo();
-        Write(AppName, bold: true);
-        Line($" {AppVersion} {Platform.Arch} recovers passwords for:");
-        Line();
-        foreach (var s in new[]
-                 {
-                     "MS Office 97-2021 documents (Word, Excel, PowerPoint);",
-                     "OpenOffice / LibreOffice / OpenDocument files;",
-                     "ZIP/WinZip archives and RAR 3.x-5.x archives;",
-                     "Adobe PDF 1.2-1.7 documents;",
-                     "Apple iOS / iTunes backups (open the backup's Manifest.plist);",
-                     "BlackBerry .ipd backups (detection only; no hashcat kernel);",
-                     "TrueCrypt and VeraCrypt volumes (File > Open As);",
-                     "WPA/WPA2 handshakes (.22000, .hccapx, .hccap);",
-                     "any other hash supported by hashcat (File > Open As).",
-                 })
-            Line("  • " + s);
-        Line();
-        Line("Main features are:");
-        foreach (var s in new[]
-                 {
-                     Platform.IsMac
-                         ? "GPU acceleration on Apple silicon (Metal and OpenCL), and a CPU engine tuned for its NEON and crypto instructions"
-                         : "GPU acceleration on a wide range of GPUs: NVIDIA (CUDA/OpenCL), AMD (HIP/OpenCL) and Intel Arc (OpenCL)",
-                     "Several types of attacks: brute-force, brute-force with extended mask, and dictionary based ones",
-                     "Automated password recovery with predefined and user-defined scenarios",
-                     "User-defined sets of mutation rules for dictionary attacks and multi-word combinations",
-                     "Supports Unicode, UTF-8 and ANSI dictionaries",
-                     "Interrupted attacks can be continued later; recovered passwords are cached",
-                     "After a successful attack the document can be decrypted automatically (MS Office)",
-                 })
-            Line("  • " + s);
-        Line();
-        Line($"Open a protected file with File > Open ({Platform.Shortcut("O")}) or drag and drop it here.", Palette.DimBrush);
+        _dropNotices.Children.Clear();
+        UpdatePane();
     }
+
+    /// <summary>Formats and features, shown in About (the start page used to list them).</summary>
+    internal static string FeatureList() => string.Join("\n", new[]
+    {
+        "Recovers passwords for:",
+        "  • MS Office 97-2021 documents (Word, Excel, PowerPoint)",
+        "  • OpenOffice / LibreOffice / OpenDocument files",
+        "  • ZIP/WinZip archives and RAR 3.x-5.x archives",
+        "  • Adobe PDF 1.2-1.7 documents",
+        "  • Apple iOS / iTunes backups (open the backup's Manifest.plist)",
+        "  • BlackBerry .ipd backups (detection only; no hashcat kernel)",
+        "  • TrueCrypt and VeraCrypt volumes (File > Open As)",
+        "  • WPA/WPA2 handshakes (.22000, .hccapx, .hccap)",
+        "  • any other hash supported by hashcat (File > Open As)",
+        "",
+        "Main features:",
+        "  • " + (Platform.IsMac
+            ? "GPU acceleration on Apple silicon (Metal and OpenCL), and a CPU engine tuned for its NEON and crypto instructions"
+            : "GPU acceleration on NVIDIA (CUDA/OpenCL), AMD (HIP/OpenCL) and Intel Arc (OpenCL) GPUs"),
+        "  • Brute-force, brute-force with extended mask, and dictionary attacks",
+        "  • Automated recovery with predefined and user-defined scenarios",
+        "  • User-defined mutation rules for dictionaries and multi-word combinations",
+        "  • Unicode, UTF-8 and ANSI dictionaries",
+        "  • Interrupted attacks can be continued later; recovered passwords are cached",
+        "  • After a successful attack the document can be decrypted (MS Office)",
+    });
 
     // ------------------------------------------------------------------ hashcat
 
@@ -386,10 +538,11 @@ public sealed partial class MainWindow : Window
         if (_hashcat is null)
         {
             _statusLeft.Text = "hashcat not found";
+            SetPill(PillState.Problem, "hashcat not found");
             Line();
             Line("hashcat was not found.", Palette.ErrorBrush, true);
-            Line((Platform.IsMac ? "Use Tools > Install hashcat" : "Use Tools > Download hashcat") + " to set it up automatically, or set its location in " +
-                 (Platform.IsMac ? "RecoverKit > Settings > Files and Paths." : "Options > Preferences > Files and Paths."), Palette.DimBrush);
+            Notice((Platform.IsMac ? "hashcat was not found. Use Tools > Install hashcat" : "hashcat was not found. Use Tools > Download hashcat") + " to set it up automatically, or set its location in " +
+                   (Platform.IsMac ? "RecoverKit > Settings > Files and Paths." : "Options > Preferences > Files and Paths."), Palette.ErrorBrush);
             Dispatcher.UIThread.Post(() => _ = OfferHashcatDownloadAsync());
             return;
         }
@@ -399,31 +552,35 @@ public sealed partial class MainWindow : Window
         try
         {
             _hashcatVersion = await _hashcat.VersionAsync();
-            _statusLeft.Text = $"© {DateTime.Now.Year} {AppName} contributors  |  hashcat {_hashcatVersion}";
-            _statusRight.Text = "Detecting GPUs...";
+            _statusLeft.Text = $"hashcat {_hashcatVersion}  ·  © {DateTime.Now.Year} {AppName} contributors";
+            SetPill(PillState.Busy, "Detecting GPUs...");
             _devices = await _hashcat.DevicesAsync();
             var usable = _devices.Where(d => !d.IsSkippedAlias).ToList();
             var gpus = usable.Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
             bool cpu = usable.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
-            _statusRight.Text = _deviceStatus = gpus.Count switch
+            int threads = _settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount;
+            _deviceStatus = gpus.Count switch
             {
                 1 => gpus[0].Name + (gpus[0].Backend.Length > 0 ? $" ({gpus[0].Backend})" : ""),
                 > 1 => $"{gpus.Count} GPU devices",
-                _ => cpu ? "No GPU detected, using CPU" : "No GPU detected",
+                _ => cpu ? $"No GPU, using the CPU ({threads} threads)" : "No GPU detected",
             };
+            SetPill(gpus.Count > 0 ? PillState.Ready : cpu ? PillState.Cpu : PillState.Problem,
+                    gpus.Count > 0 ? "GPU ready: " + _deviceStatus : _deviceStatus);
+            var deviceLines = usable.Select(d =>
+                $"Device #{d.Id}: {d.Name} ({d.Backend}{(d.Processors > 0 ? $", {d.Processors} compute units" : "")}{(d.MemoryMb > 0 ? $", {d.MemoryMb} MB" : "")})"
+                + (_settings.DisabledDevices.Contains(d.Id) ? ", disabled" : "")).ToList();
+            ToolTip.SetTip(_pill, deviceLines.Count > 0 ? string.Join("\n", deviceLines) : null);
             Line();
             if (gpus.Count == 0 && cpu)
-                Line("No compatible GPU devices detected. Passwords are recovered on the processor " +
-                     $"({(_settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount)} threads).", Palette.DimBrush);
+                Line($"No compatible GPU devices detected. Passwords are recovered on the processor ({threads} threads).", Palette.DimBrush);
             else if (gpus.Count == 0) NoDevicesNotice();
-            foreach (var d in usable)
-                Line($"Device #{d.Id}: {d.Name} ({d.Backend}{(d.Processors > 0 ? $", {d.Processors} compute units" : "")}{(d.MemoryMb > 0 ? $", {d.MemoryMb} MB" : "")})"
-                     + (_settings.DisabledDevices.Contains(d.Id) ? " - disabled" : ""), Palette.DimBrush);
+            foreach (var d in deviceLines) Line(d, Palette.DimBrush);
         }
         catch (Exception ex) when (ex is TimeoutException or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            _statusRight.Text = "hashcat error";
-            Line("Cannot run hashcat: " + ex.Message, Palette.ErrorBrush);
+            SetPill(PillState.Problem, "hashcat error");
+            Notice("Cannot run hashcat: " + ex.Message, Palette.ErrorBrush);
         }
     }
 
@@ -505,18 +662,18 @@ public sealed partial class MainWindow : Window
     {
         if (CpuRuntime.BlockedByElevation)
         {
-            Line("No compatible devices detected. RecoverKit is running as administrator, and Windows does not let an " +
-                 "administrator process load the per-user CPU runtime. Start RecoverKit normally to recover passwords on the processor.",
-                 Palette.WarningBrush);
+            Notice("No compatible devices detected. RecoverKit is running as administrator, and Windows does not let an " +
+                   "administrator process load the per-user CPU runtime. Start RecoverKit normally to recover passwords on the processor.",
+                   Palette.WarningBrush);
             return;
         }
         if (!CpuRuntime.IsSupportedPlatform)
         {
-            Line("No compatible devices detected. The built-in CPU engine still works for the formats it supports.", Palette.WarningBrush);
+            Notice("No compatible devices detected. The built-in CPU engine still works for the formats it supports.", Palette.WarningBrush);
             return;
         }
-        Line("No compatible GPU devices detected. Install the NVIDIA, AMD or Intel graphics driver, or use the processor: " +
-             "Tools > Download CPU runtime (OpenCL).", Palette.WarningBrush);
+        Notice("No compatible GPU devices detected. Install the NVIDIA, AMD or Intel graphics driver, or use the processor: " +
+               "Tools > Download CPU runtime (OpenCL).", Palette.WarningBrush);
         Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: false));
     }
 
@@ -612,9 +769,11 @@ public sealed partial class MainWindow : Window
         var progress = new Progress<long>(n =>
         {
             double secs = Math.Max(0.5, (DateTime.Now - started).TotalSeconds);
-            _curPassword.Text = $"{Fmt.Count(n)} of {Fmt.Count(total)}";
-            _avgSpeed.Text = Fmt.Speed(n / secs);
-            _progress.Value = total > 0 ? Math.Clamp((double)n / (double)total * 1000, 0, 1000) : 0;
+            _curPassword.Text = pmk ? "PMKs" : "words";
+            _tested.Text = $"{Fmt.Count(n)} of {Fmt.Count(total)}";
+            _curSpeed.Text = Fmt.Speed(n / secs);
+            _estTime.Text = n > 0 ? Fmt.Duration((double)(total - n) / (n / secs)) : "-";
+            _progress.Value = total > 0 ? Math.Clamp((double)n / (double)total, 0, 1) : 0;
         });
         try
         {
@@ -683,9 +842,31 @@ public sealed partial class MainWindow : Window
             DebugLog.Info(_settings.DebugLogIncludeHashes
                 ? "  extracted hash: " + (hl.Length > 4000 ? hl[..4000] + $"... ({hl.Length} chars)" : hl)
                 : $"  extracted hash: <{hl.Length} chars>  (enable \"Include extracted hashes\" in Preferences > Other to log it)");
+        if (!ShowDetectionInfo(det)) return;
+
+        if (!await RequireHashcatAsync()) return;
+        var saved = SessionState.Load(_settings, det.Target!);
+        if (saved is not null)
+        {
+            var r = await Msg.Show(this,
+                $"Attack was interrupted ({saved.SavedUtc.ToLocalTime():g}, step {saved.StepIndex + 1} of {saved.Steps.Count}).\n\nContinue the interrupted attack?\n(No starts a new attack.)",
+                AppName, MsgButtons.YesNoCancel, MsgIcon.Question);
+            if (r == MsgResult.Yes) { await RunAsync(saved.Steps, saved); return; }
+            if (r != MsgResult.No) return;
+            SessionState.Delete(_settings, saved.Key);
+        }
+        StartWizard();
+    }
+
+    /// <summary>Shows a detection result: file card and the details in the log. False when there is nothing to attack.</summary>
+    private bool ShowDetectionInfo(Detection det)
+    {
+        _current = det;
         Title = $"{AppName} - {Path.GetFileName(det.FilePath)}";
         ClearInfo();
         ResetStatus();
+        _fileCard.Show(det);
+        UpdatePane();
         void Row(string k, string v) { Write(k + "  ", Palette.DimBrush); Line(v, bold: true); }
         Row("File:", det.FilePath);
         Row("Type:", det.TypeName);
@@ -702,25 +883,37 @@ public sealed partial class MainWindow : Window
         {
             Line(det.Message ?? "Nothing to attack.", Palette.WarningBrush, true);
             SetRunning(false);
-            return;
+            return false;
         }
         Line("File is password protected to open.", bold: true);
         if (det.Target.Notes is { } notes) Line(notes, Palette.DimBrush);
         SetRunning(false);
-
-        if (!await RequireHashcatAsync()) return;
-        var saved = SessionState.Load(_settings, det.Target);
-        if (saved is not null)
-        {
-            var r = await Msg.Show(this,
-                $"Attack was interrupted ({saved.SavedUtc.ToLocalTime():g}, step {saved.StepIndex + 1} of {saved.Steps.Count}).\n\nContinue the interrupted attack?\n(No starts a new attack.)",
-                AppName, MsgButtons.YesNoCancel, MsgIcon.Question);
-            if (r == MsgResult.Yes) { await RunAsync(saved.Steps, saved); return; }
-            if (r != MsgResult.No) return;
-            SessionState.Delete(_settings, saved.Key);
-        }
-        StartWizard();
+        return true;
     }
+
+#if DEBUG
+    /// <summary>Snapshot mode: show a detection without asking anything or starting the wizard.</summary>
+    internal void DebugShowDetection(Detection det) => ShowDetectionInfo(det);
+
+    internal static HashcatStatus DebugStatus(double fraction, double speed, int temp = 71) => new()
+    {
+        Status = 3, GuessBase = "kaja?1?1?1?1", MaskLength = 8, ProgressDone = (long)(1_679_616 * fraction), ProgressTotal = 1_679_616,
+        TimeStart = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 40,
+        Devices = [new DeviceSpeed { Id = 1, Name = "Apple M1 Pro", Type = "GPU", Speed = speed, Temperature = temp }],
+    };
+
+    /// <summary>Snapshot mode: walks the main window through its states with made-up status data.</summary>
+    internal async Task DebugStatesAsync(Func<string, Task> save)
+    {
+        SetRunning(true);
+        UpdateStatus(DebugStatus(0.42, 41_800));
+        _progress.Snap(0.42);
+        await save("running-band");
+        SetRunning(false);
+        ShowFound();
+        await save("found-band");
+    }
+#endif
 
     // ------------------------------------------------------------------ attack
 
@@ -774,7 +967,7 @@ public sealed partial class MainWindow : Window
         {
             _stepStarted = DateTime.Now;
             _stepKeyspace = ks;
-            _progress.Value = 0;
+            _progress.Snap(0);
             _curPassword.Text = "starting...";
         });
         session.Status += s => Dispatcher.UIThread.Post(() => UpdateStatus(s));
@@ -793,7 +986,9 @@ public sealed partial class MainWindow : Window
         {
             Platform.KeepAwake(false);
             Title = $"{AppName} - {Path.GetFileName(det.FilePath)}";
-            _statusRight.Text = _deviceStatus;
+            _statusRight.Text = IdleStatusRight;
+            _gpuTemp = -1;
+            SetPill(_pillState);
             _cts.Dispose();
             _cts = null;
             SetRunning(false);
@@ -805,8 +1000,7 @@ public sealed partial class MainWindow : Window
         {
             case SessionOutcome.Found:
             case SessionOutcome.FoundInCache:
-                _progress.Value = _progress.Maximum;
-                if (_curPassword.Text == "starting...") _curPassword.Text = "";
+                ShowFound();
                 Line();
                 Log(LogKind.Success, result.Outcome == SessionOutcome.FoundInCache ? "Previously recovered password(s):" : "Password found:");
                 foreach (var p in result.Passwords) Write((p.Length == 0 ? "(empty)" : p) + "\n", Palette.SuccessBrush, true, 18, log: false);
@@ -883,24 +1077,69 @@ public sealed partial class MainWindow : Window
     private void UpdateStatus(HashcatStatus s)
     {
         double speed = s.TotalSpeed;
-        _curSpeed.Text = Fmt.Speed(speed);
         double elapsed = s.TimeStart > 0 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() - s.TimeStart : (DateTime.Now - _stepStarted).TotalSeconds;
-        _avgSpeed.Text = elapsed > 1 ? Fmt.Speed((s.ProgressDone - s.ResumedFrom) / elapsed) : Fmt.Speed(speed);
+        _curSpeed.Text = Fmt.Speed(speed);
+        ToolTip.SetTip(_curSpeed, "Average: " + (elapsed > 1 ? Fmt.Speed((s.ProgressDone - s.ResumedFrom) / elapsed) : Fmt.Speed(speed)));
         long remaining = Math.Max(0, s.ProgressTotal - s.ProgressDone);
         _estTime.Text = s.Status == 3 && speed > 0 ? Fmt.Duration(remaining / speed) : s.StatusText;
-        _curPassword.Text = s.MaskLength is int ml && ml > 0
-            ? $"{ml} symbol(s), {Fmt.Count(s.ProgressDone)} of {Fmt.Count(s.ProgressTotal)}"
-            : $"{Fmt.Count(s.ProgressDone)} of {Fmt.Count(s.ProgressTotal)} ({s.Fraction:P1})";
-        _progress.Value = Math.Clamp(s.Fraction * 1000, 0, 1000);
+        _curPassword.Text = TryingText(s);
+        _tested.Text = Fmt.Count(s.ProgressDone);
+        ToolTip.SetTip(_tested, $"{Fmt.Count(s.ProgressDone)} of {Fmt.Count(s.ProgressTotal)} ({s.Fraction:P1}) in this step");
+        _progress.Value = Math.Clamp(s.Fraction, 0, 1);
         if (_current is not null) Title = $"{(int)(s.Fraction * 100)}% - {AppName} - {Path.GetFileName(_current.FilePath)}";
-        var temps = s.Devices.Where(d => d.Temperature > 0).Select(d => $"{d.Temperature}°C").ToList();
-        _statusRight.Text = $"{s.StatusText}{(temps.Count > 0 ? "  " + string.Join(" ", temps) : "")}";
+        _statusRight.Text = s.StatusText;
+        _gpuTemp = HottestGpu(s);
+        SetPill(_pillState);
+    }
+
+    /// <summary>The hottest GPU in degrees Celsius, or -1 when hashcat reports no temperature.</summary>
+    internal static int HottestGpu(HashcatStatus s)
+    {
+        var temps = s.Devices.Where(d => d.Temperature >= 0 && !d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)).Select(d => d.Temperature).ToList();
+        return temps.Count > 0 ? temps.Max() : -1;
+    }
+
+    /// <summary>
+    /// What hashcat is working on: the mask or the wordlist (and rules), as its status reports it. hashcat
+    /// does not report single candidates in its JSON status, so this never shows invented passwords.
+    /// </summary>
+    internal static string TryingText(HashcatStatus s)
+    {
+        static string Short(string v) => v.Contains('/') || v.Contains('\\') ? Path.GetFileName(v) : v;
+        var b = Short(s.GuessBase);
+        if (s.GuessMod is { Length: > 0 } m) b = b.Length > 0 ? $"{b} + {Short(m)}" : Short(m);
+        if (s.MaskLength is int ml && ml > 0) b = b.Length > 0 ? $"{b} ({ml})" : $"{ml} characters";
+        return b.Length > 0 ? b : s.StatusText;
     }
 
     private void ResetStatus()
     {
-        foreach (var l in new[] { _curPassword, _estTime, _curSpeed, _avgSpeed }) l.Text = "";
-        _progress.Value = 0;
+        foreach (var l in new[] { _curPassword, _estTime, _curSpeed, _tested }) { l.Text = "-"; ToolTip.SetTip(l, null); }
+        _progress.Snap(0);
+        _progress.Fill = Palette.AccentBrush;
+        _progress.Sheen = false;
+        _band.Background = Palette.StatusBandBrush;
+    }
+
+    /// <summary>Status band after a find: full green bar and a green tint.</summary>
+    private void ShowFound()
+    {
+        _progress.Sheen = false;
+        _progress.Fill = Palette.GoodBrush;
+        _progress.Value = 1;
+        _band.Background = TintedBand(Palette.GoodSoftBrush);
+        _estTime.Text = "Done";
+        if (_curPassword.Text == "starting...") _curPassword.Text = "-";
+        _fileCard.SetBadge("Password found", FileCard.BadgeKind.Good);
+    }
+
+    private static IBrush TintedBand(IBrush tint)
+    {
+        var a = (Palette.StatusBandBrush as ISolidColorBrush)!.Color;
+        var b = (tint as ISolidColorBrush)!.Color;
+        double t = b.A / 255.0;
+        byte Mix(byte x, byte y) => (byte)Math.Round(x + (y - x) * t);
+        return new SolidColorBrush(Color.FromRgb(Mix(a.R, b.R), Mix(a.G, b.G), Mix(a.B, b.B)));
     }
 
     private void SetRunning(bool running)
@@ -908,7 +1147,9 @@ public sealed partial class MainWindow : Window
         bool canStart = !running && _current?.Target is not null && _hashcat is not null;
         _tbStart.IsEnabled = _miStart.IsEnabled = canStart;
         _tbStop.IsEnabled = _miStop.IsEnabled = running;
+        _tbStart.Classes.Set("accent", canStart);
         foreach (var m in _idleOnly) m.IsEnabled = !running;
+        _progress.Sheen = running;
     }
 
     private void Execute(string? path)
@@ -1019,6 +1260,7 @@ public sealed partial class MainWindow : Window
     internal void ShowAbout() => _ = Msg.Show(this,
         $"{AppName} {AppVersion} {Platform.Arch}\n\nGPU accelerated password recovery front-end.\n" +
         $"Password verification engine: hashcat {(_hashcatVersion.Length > 0 ? _hashcatVersion : "(not found)")} (MIT license, https://hashcat.net)\n\n" +
+        FeatureList() + "\n\n" +
         "Use only on files you own or are authorized to recover.",
         $"About {AppName}", MsgButtons.Ok, MsgIcon.Info);
 

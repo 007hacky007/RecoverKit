@@ -88,14 +88,35 @@ internal static class L
 /// <summary>App-wide style tweaks on top of the Fluent theme.</summary>
 internal static class Styles
 {
+    public static readonly FontFamily Mono = new("Menlo, SF Mono, Consolas, Cascadia Mono, monospace");
+
+    /// <summary>Digits of equal width, so counters do not jitter while they change.</summary>
+    public static FontFeatureCollection TabularDigits => [FontFeature.Parse("tnum")];
+
     public static Avalonia.Styling.Styles App()
     {
         var s = new Avalonia.Styling.Styles();
         s.Add(new Style(x => x.OfType<Window>()) { Setters = { new Setter(Avalonia.Controls.Primitives.TemplatedControl.FontSizeProperty, 13.0), new Setter(Avalonia.Controls.Primitives.TemplatedControl.BackgroundProperty, Palette.WindowBrush) } });
-        // Toolbar buttons: flat, also when disabled (Fluent paints a grey plate there); the icon itself shows the state.
+        // Toolbar buttons: flat with a rounded hover plate; Start uses the accent class when it is the next step.
+        s.Add(new Style(x => x.OfType<Button>().Class("tool"))
+        {
+            Setters = { new Setter(Avalonia.Controls.Primitives.TemplatedControl.CornerRadiusProperty, new CornerRadius(7)) },
+        });
+        s.Add(new Style(x => x.OfType<Button>().Class("tool").Not(y => y.Class("accent")))
+        {
+            Setters =
+            {
+                new Setter(Avalonia.Controls.Primitives.TemplatedControl.BackgroundProperty, Brushes.Transparent),
+                new Setter(Avalonia.Controls.Primitives.TemplatedControl.BorderThicknessProperty, new Thickness(0)),
+            },
+        });
         s.Add(new Style(x => x.OfType<Button>().Class("tool").Class(":disabled").Template().OfType<Avalonia.Controls.Presenters.ContentPresenter>())
         {
-            Setters = { new Setter(Avalonia.Controls.Presenters.ContentPresenter.BackgroundProperty, Avalonia.Media.Brushes.Transparent) },
+            Setters =
+            {
+                new Setter(Avalonia.Controls.Presenters.ContentPresenter.BackgroundProperty, Brushes.Transparent),
+                new Setter(Visual.OpacityProperty, 0.45),
+            },
         });
         return s;
     }

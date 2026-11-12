@@ -35,6 +35,51 @@ internal static partial class Platform
         else Shell(Path.GetDirectoryName(file) ?? ".");
     }
 
+    // ------------------------------------------------------------------ reduced motion
+
+    private static bool? _reduceMotion;
+
+    /// <summary>
+    /// The system asks for less motion: macOS "Reduce motion" (Accessibility > Display), Windows
+    /// "Animation effects" off. RECOVERKIT_REDUCE_MOTION=1/0 overrides it. Read once per run.
+    /// </summary>
+    public static bool ReduceMotion => _reduceMotion ??= ReadReduceMotion();
+
+    private static bool ReadReduceMotion()
+    {
+        if (Environment.GetEnvironmentVariable("RECOVERKIT_REDUCE_MOTION") is { Length: > 0 } env) return env != "0";
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                const uint SpiGetClientAreaAnimation = 0x1042;
+                int on = 1;
+                return SystemParametersInfo(SpiGetClientAreaAnimation, 0, ref on, 0) && on == 0;
+            }
+            if (IsMac)
+            {
+                using var p = Process.Start(new ProcessStartInfo("/usr/bin/defaults")
+                {
+                    ArgumentList = { "read", "com.apple.universalaccess", "reduceMotion" },
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+                });
+                if (p is null) return false;
+                var s = p.StandardOutput.ReadToEnd().Trim();
+                p.WaitForExit(2000);
+                return s == "1";
+            }
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            DebugLog.Warn("Reduce motion: " + ex.Message);
+        }
+        return false;
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SystemParametersInfo(uint uiAction, uint uiParam, ref int pvParam, uint fWinIni);
+
     // ------------------------------------------------------------------ keep awake
 
     private static Process? _caffeinate;
