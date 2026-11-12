@@ -93,7 +93,7 @@ public static class SpreadsheetProtection
             d.Unlocks.AddRange(findings);
             d.Message = findings.Count == 0 ? "Spreadsheet has no sheet or workbook editing protection." :
                 "Editing restrictions can be removed without a password attack. Each save action removes the selected restriction.";
-            d.Add("Notes", "These restrictions do not encrypt the file. Saved copies preserve other parts; XML changes invalidate document signatures. Reopen each saved copy to remove another restriction.");
+            d.Add("Notes", "These restrictions do not encrypt the file. Saved copies preserve other parts; XML changes invalidate document signatures. Use the save-all option to remove every restriction in one copy.");
             return true;
         }
         catch (Exception ex) when (ex is InvalidDataException or XmlException)

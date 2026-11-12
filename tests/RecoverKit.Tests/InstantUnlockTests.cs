@@ -43,4 +43,28 @@ public class InstantUnlockTests
         var u = new InstantUnlock { Title = "t", Description = "d", Password = "" };
         await Assert.ThrowsAsync<InvalidOperationException>(() => u.SaveAsync("a", "b"));
     }
+
+    [Fact]
+    public async Task AllAppliesEveryRestrictionInOneCopy()
+    {
+        var dir = Directory.CreateTempSubdirectory("rk-unlock-all").FullName;
+        try
+        {
+            var src = Path.Combine(dir, "a.txt");
+            File.WriteAllText(src, "ab");
+            InstantUnlock Remove(char c) => new()
+            {
+                Title = "t", Description = "d", SaveLabel = "s",
+                SaveCopyAsync = (i, o, ct) => File.WriteAllTextAsync(o, File.ReadAllText(i).Replace(c.ToString(), ""), ct),
+            };
+            Assert.Null(InstantUnlock.All([Remove('a')]));
+            var all = InstantUnlock.All([Remove('a'), new InstantUnlock { Title = "p", Description = "d", Password = "x" }, Remove('b')])!;
+            var dst = Path.Combine(dir, "out.txt");
+            await all.SaveAsync(src, dst);
+            Assert.Equal("", File.ReadAllText(dst));
+            Assert.Equal("ab", File.ReadAllText(src));
+            Assert.Equal(2, Directory.GetFiles(dir).Length);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 }

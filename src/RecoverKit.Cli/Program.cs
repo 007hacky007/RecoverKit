@@ -85,9 +85,18 @@ try
             var det = Open(argv[1], argv);
             Print(det);
             if (det.Unlocks.Count == 0) { Console.Error.WriteLine("Nothing to unlock instantly."); return 2; }
-            int index = int.Parse(Opt(argv, "--index") ?? "1", System.Globalization.CultureInfo.InvariantCulture);
-            if (index < 1 || index > det.Unlocks.Count) { Console.Error.WriteLine($"--index must be 1 to {det.Unlocks.Count}."); return 64; }
-            var u = det.Unlocks[index - 1];
+            InstantUnlock u;
+            if (Opt(argv, "--index") is "all")
+            {
+                if (InstantUnlock.All(det.Unlocks) is not { } all) { Console.Error.WriteLine("Fewer than two restrictions can be saved; use --index N."); return 64; }
+                u = all;
+            }
+            else
+            {
+                int index = int.Parse(Opt(argv, "--index") ?? "1", System.Globalization.CultureInfo.InvariantCulture);
+                if (index < 1 || index > det.Unlocks.Count) { Console.Error.WriteLine($"--index must be 1 to {det.Unlocks.Count} or all."); return 64; }
+                u = det.Unlocks[index - 1];
+            }
             if (u.SaveCopyAsync is null) return 0;
             var outPath = Opt(argv, "--out") ?? u.SuggestedPath(argv[1]);
             await u.SaveAsync(argv[1], outPath);
@@ -359,11 +368,13 @@ static void Print(Detection d)
         if (u.Password is { } pw) Console.WriteLine($"PASSWORD:   {pw}");
         if (u.SaveCopyAsync is not null) Console.WriteLine($"            recoverkit-cli unlock <file> --index {i + 1} [--out <path>]");
     }
+    if (InstantUnlock.All(d.Unlocks) is not null)
+        Console.WriteLine("UNLOCK ALL: recoverkit-cli unlock <file> --index all [--out <path>] removes every restriction above in one copy");
 }
 
 static int Usage()
 {
-    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
+    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");

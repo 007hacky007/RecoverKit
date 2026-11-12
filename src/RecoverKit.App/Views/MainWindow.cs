@@ -924,6 +924,7 @@ public sealed partial class MainWindow : Window
         }
         foreach (var kv in det.Info) Row(kv.Key + ":", kv.Value);
         Line();
+        if (InstantUnlock.All(det.Unlocks) is { } all) ShowUnlock(det, all);
         foreach (var u in det.Unlocks) ShowUnlock(det, u);
         if (det.Target is null)
         {

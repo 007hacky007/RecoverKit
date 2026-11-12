@@ -32,6 +32,45 @@ public sealed class InstantUnlock
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(source)) ?? ".",
             Path.GetFileNameWithoutExtension(source) + SuggestedSuffix + Path.GetExtension(source));
 
+    /// <summary>
+    /// When a file has several restrictions that can each be saved away, one extra unlock that
+    /// removes all of them into a single copy (each step works on the previous step's output).
+    /// </summary>
+    public static InstantUnlock? All(IReadOnlyList<InstantUnlock> unlocks)
+    {
+        var steps = unlocks.Where(u => u.SaveCopyAsync is not null).ToList();
+        if (steps.Count < 2) return null;
+        return new InstantUnlock
+        {
+            Title = "All restrictions can be removed at once",
+            Description = $"Saves one copy without any of the {steps.Count} restrictions listed below.",
+            SaveLabel = "Save copy without all restrictions...",
+            SuggestedSuffix = steps[0].SuggestedSuffix,
+            SaveCopyAsync = async (source, output, ct) =>
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(output)) ?? ".";
+                string ext = Path.GetExtension(output);
+                string current = source;
+                var temps = new List<string>();
+                try
+                {
+                    for (int i = 0; i < steps.Count; i++)
+                    {
+                        string next = i == steps.Count - 1 ? output : Path.Combine(dir, $".rk-unlock-{Guid.NewGuid():N}{ext}");
+                        if (next != output) temps.Add(next);
+                        await steps[i].SaveCopyAsync!(current, next, ct);
+                        current = next;
+                    }
+                }
+                finally
+                {
+                    foreach (var t in temps)
+                        try { File.Delete(t); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                }
+            },
+        };
+    }
+
     /// <summary>Runs the save action after checking the output does not replace the source.</summary>
     public async Task SaveAsync(string source, string output, CancellationToken ct = default)
     {
