@@ -56,6 +56,7 @@ public sealed partial class MainWindow : Window
     private Control _dropHint = null!, _dropChips = null!;
     private readonly StackPanel _dropNotices = new() { Spacing = 4, MaxWidth = 460, HorizontalAlignment = HorizontalAlignment.Center };
     private bool _dragging;
+    private bool _generatorView;   // no file open, but a generator's log is shown
     private DockPanel _filePane = null!;
     private readonly FileCard _fileCard = new();
     private NativeMenuItem _miStart = null!, _miStop = null!;
@@ -363,6 +364,8 @@ public sealed partial class MainWindow : Window
         _filePane.Children.Add(_fileCard);
         _filePane.Children.Add(_infoScroll);
 
+        BuildLive();
+
         _dropLayer = new Border { Background = Palette.PaneBrush, Child = _dropZone };
         return new Grid { Children = { _filePane, _dropLayer } };
     }
@@ -370,8 +373,9 @@ public sealed partial class MainWindow : Window
     /// <summary>Shows the drop zone (empty state) or the file pane; while files are dragged over the window the zone lights up on top.</summary>
     private void UpdatePane()
     {
-        bool empty = _current is null;
+        bool empty = _current is null && !_generatorView;
         _filePane.IsVisible = !empty;
+        _fileCard.IsVisible = _current is not null;
         _dropLayer.IsVisible = empty || _dragging;
         _dropZone.Active = _dragging;
         _dropHint.IsVisible = _dropChips.IsVisible = !_dragging;
@@ -482,6 +486,12 @@ public sealed partial class MainWindow : Window
     private void Log(LogKind kind, string text)
     {
         if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(() => Log(kind, text)); return; }
+        if (_liveActive && !_logVisible)
+        {
+            // Errors open the details; warnings are counted on the "Show details" toggle.
+            if (kind == LogKind.Error) SetDetails(true);
+            else if (kind == LogKind.Warning) { _warnCount++; SetDetails(false); }
+        }
         switch (kind)
         {
             case LogKind.Step: Line(text, Palette.StepBrush, true); break;
@@ -499,6 +509,7 @@ public sealed partial class MainWindow : Window
     {
         ClearInfo();
         _dropNotices.Children.Clear();
+        _generatorView = false;
         UpdatePane();
     }
 
@@ -608,18 +619,25 @@ public sealed partial class MainWindow : Window
             Line($"Automatic decryption is available for MS Office 2007-2021 documents; {t.FormatName} is not supported.", Palette.DimBrush);
             return;
         }
+        var dir = Path.GetDirectoryName(det.FilePath) ?? ".";
+        var name = Path.GetFileNameWithoutExtension(det.FilePath);
+        var ext = Path.GetExtension(det.FilePath);
+        DecryptTo(det, password, Path.Combine(dir, name + _settings.DecryptSuffix + ext), automatic: true);
+    }
+
+    /// <summary>Writes a decrypted copy of an MS Office document; the result goes to the log.</summary>
+    private bool DecryptTo(Detection det, string password, string outPath, bool automatic = false)
+    {
         try
         {
-            var dir = Path.GetDirectoryName(det.FilePath) ?? ".";
-            var name = Path.GetFileNameWithoutExtension(det.FilePath);
-            var ext = Path.GetExtension(det.FilePath);
-            var outPath = Path.Combine(dir, name + _settings.DecryptSuffix + ext);
             OfficeDecryptor.DecryptToFile(det.FilePath, password, outPath);
             Log(LogKind.Success, $"Document decrypted and saved to: {outPath}");
+            return true;
         }
         catch (Exception ex) when (ex is UnsupportedFormatException or IOException or FormatException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         {
-            Log(LogKind.Warning, "Automatic decryption failed: " + ex.Message);
+            Log(LogKind.Warning, (automatic ? "Automatic decryption failed: " : "Decryption failed: ") + ex.Message);
+            return false;
         }
     }
 
@@ -761,6 +779,9 @@ public sealed partial class MainWindow : Window
         _cts = new CancellationTokenSource();
         SetRunning(true);
         ResetStatus();
+        HideLive();
+        _generatorView = true;
+        UpdatePane();
         Line();
         Line(pmk ? $"WPA-PMK Generator: SSID \"{w.Ssid}\", {prepared.Count} step(s) -> {w.ResultFile}"
                  : $"Dictionary Generator: {prepared.Count} step(s), {w.OutputEncoding} -> {w.ResultFile}", bold: true);
@@ -865,6 +886,7 @@ public sealed partial class MainWindow : Window
         Title = $"{AppName} - {Path.GetFileName(det.FilePath)}";
         ClearInfo();
         ResetStatus();
+        HideLive();
         _fileCard.Show(det);
         UpdatePane();
         void Row(string k, string v) { Write(k + "  ", Palette.DimBrush); Line(v, bold: true); }
@@ -902,16 +924,61 @@ public sealed partial class MainWindow : Window
         Devices = [new DeviceSpeed { Id = 1, Name = "Apple M1 Pro", Type = "GPU", Speed = speed, Temperature = temp }],
     };
 
+    /// <summary>Snapshot mode: a real attack on a test file, saving the window while it runs and when it ends.</summary>
+    internal async Task DebugRealRunAsync(string file, IReadOnlyList<AttackSpec> steps, Func<string, Task> save)
+    {
+        var det = await Task.Run(() => FormatDetector.Detect(file));
+        if (!ShowDetectionInfo(det) || _hashcat is null) { await save("real-failed"); return; }
+        var run = RunAsync(steps, null, "Debug run");
+        for (int i = 0; i < 12 && !run.IsCompleted; i++) { await Task.Delay(1000); if (i == 3) await save("real-running"); }
+        // Close the found dialog when it comes up.
+        for (int i = 0; i < 30 && !run.IsCompleted; i++)
+        {
+            await Task.Delay(500);
+            var dialog = OwnedWindows.OfType<PasswordFoundWindow>().FirstOrDefault();
+            if (dialog is null) continue;
+            await Snapshots.Save(dialog, Path.Combine(Snapshots.Dir!, "real-dialog.png"));
+            dialog.Close();
+        }
+        await run;
+        await save("real-done");
+        SetDetails(true);
+        await save("real-details");
+    }
+
     /// <summary>Snapshot mode: walks the main window through its states with made-up status data.</summary>
     internal async Task DebugStatesAsync(Func<string, Task> save)
     {
+        List<AttackSpec> steps =
+        [
+            new() { Kind = AttackKind.Dictionary, Rules = RulesPreset.AsIs },
+            new() { Kind = AttackKind.BruteForce, Smalls = true, Digits = true, Mask = "kaja????" },
+            new() { Kind = AttackKind.Mask, HashcatMask = "?u?l?l?l?d?d" },
+            new() { Kind = AttackKind.Dictionary, Rules = RulesPreset.TwoWords },
+        ];
         SetRunning(true);
-        UpdateStatus(DebugStatus(0.42, 41_800));
+        BeginLive(steps, "Scenario: Fast formats");
+        Log(LogKind.Step, "Step 1/4: Dictionary: english.dic, rules: Check words «as is» - 14 344 391 candidates");
+        Log(LogKind.Info, "Step 1 finished, password not found (14 344 391 candidates tested).");
+        Log(LogKind.Step, "Step 2/4: Brute-force: smalls + digits, mask \"kaja????\" - 1 679 616 candidates");
+        OnStepStarted(1, 4, steps[1].Describe());
+        var rnd = new Random(7);
+        var t0 = DateTime.UtcNow.AddSeconds(-60);
+        for (int i = 0; i <= 60; i++) _spark.Add(41_000 + Math.Sin(i / 5.0) * 900 + rnd.NextDouble() * 700 - (i is > 38 and < 44 ? 9_000 : 0), t0.AddSeconds(i));
+        _latest = DebugStatus(0.42, 41_800);
+        OnUiTick();
         _progress.Snap(0.42);
-        await save("running-band");
+        _ring.Snap(0.42);
+        await save("running");
+        OnThermal(new ThermalEvent(ThermalState.Paused, 87, 85, 75));
+        await save("paused");
+        OnThermal(new ThermalEvent(ThermalState.Normal, 74, 85, 75));
         SetRunning(false);
-        ShowFound();
-        await save("found-band");
+        _gpuTemp = -1;
+        SetPill(_pillState);
+        FinishLive(new SessionResult { Outcome = SessionOutcome.Found, Passwords = ["kaja2019"] });
+        ShowFound(["kaja2019"]);
+        await save("found");
     }
 #endif
 
@@ -931,7 +998,7 @@ public sealed partial class MainWindow : Window
         try { ok = await w.ShowDialog<bool>(this) && w.Steps.Count > 0; }
         finally { _busyDialog = false; }
         DebugLog.Info(ok ? $"Wizard finished with {w.Steps.Count} step(s): " + string.Join(" | ", w.Steps.Select(s => s.Describe())) : "Wizard cancelled");
-        if (ok) await RunAsync(w.Steps, null);
+        if (ok) await RunAsync(w.Steps, null, w.ScenarioName is { } sn ? "Scenario: " + sn : null);
     }
 
     private List<Scenario> LoadScenarios()
@@ -950,13 +1017,14 @@ public sealed partial class MainWindow : Window
         return ScenarioParser.LoadDefault();
     }
 
-    private async Task RunAsync(IReadOnlyList<AttackSpec> steps, SessionState? resume)
+    private async Task RunAsync(IReadOnlyList<AttackSpec> steps, SessionState? resume, string? badge = null)
     {
         var det = _current!;
         var target = det.Target!;
         _cts = new CancellationTokenSource();
         SetRunning(true);
         ResetStatus();
+        BeginLive(steps, resume is not null ? "Resumed" : badge ?? (steps.Count == 1 ? ChipLabel(steps[0]) : $"{steps.Count} steps"));
         Line();
         Line(resume is null ? "Attack started." : "Continuing interrupted attack.", bold: true);
         if (_settings.PreventScreensaver) Platform.KeepAwake(true);
@@ -969,8 +1037,11 @@ public sealed partial class MainWindow : Window
             _stepKeyspace = ks;
             _progress.Snap(0);
             _curPassword.Text = "starting...";
+            OnStepStarted(i, n, desc);
         });
-        session.Status += s => Dispatcher.UIThread.Post(() => UpdateStatus(s));
+        // The UI timer picks up the newest status (at most 8 times a second).
+        session.Status += s => _latest = s;
+        session.Thermal += e => Dispatcher.UIThread.Post(() => OnThermal(e));
 
         SessionResult result;
         var token = _cts.Token;
@@ -995,12 +1066,13 @@ public sealed partial class MainWindow : Window
             _settings.Save();
         }
         if (_closeConfirmed) return;   // the window is closing; nothing more to show
+        FinishLive(result);
 
         switch (result.Outcome)
         {
             case SessionOutcome.Found:
             case SessionOutcome.FoundInCache:
-                ShowFound();
+                ShowFound(result.Passwords);
                 Line();
                 Log(LogKind.Success, result.Outcome == SessionOutcome.FoundInCache ? "Previously recovered password(s):" : "Password found:");
                 foreach (var p in result.Passwords) Write((p.Length == 0 ? "(empty)" : p) + "\n", Palette.SuccessBrush, true, 18, log: false);
@@ -1088,6 +1160,7 @@ public sealed partial class MainWindow : Window
         _progress.Value = Math.Clamp(s.Fraction, 0, 1);
         if (_current is not null) Title = $"{(int)(s.Fraction * 100)}% - {AppName} - {Path.GetFileName(_current.FilePath)}";
         _statusRight.Text = s.StatusText;
+        if (_thermal?.State == ThermalState.Paused) { _estTime.Text = "Paused"; _statusRight.Text = "Paused (GPU cooling)"; }
         _gpuTemp = HottestGpu(s);
         SetPill(_pillState);
     }
@@ -1122,14 +1195,14 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Status band after a find: full green bar and a green tint.</summary>
-    private void ShowFound()
+    private void ShowFound(IReadOnlyList<string> passwords)
     {
         _progress.Sheen = false;
         _progress.Fill = Palette.GoodBrush;
         _progress.Value = 1;
         _band.Background = TintedBand(Palette.GoodSoftBrush);
         _estTime.Text = "Done";
-        if (_curPassword.Text == "starting...") _curPassword.Text = "-";
+        _curPassword.Text = passwords.Count > 0 && passwords[0].Length > 0 ? passwords[0] : "-";
         _fileCard.SetBadge("Password found", FileCard.BadgeKind.Good);
     }
 

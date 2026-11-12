@@ -45,6 +45,15 @@ internal static class Snapshots
         main.DebugShowDetection(FakeDetection());
         await Save(main, Path.Combine(dir, "main-loaded.png"));
         await main.DebugStatesAsync(async name => await Save(main, Path.Combine(dir, $"main-{name}.png")));
+        if (Environment.GetEnvironmentVariable("RECOVERKIT_SNAPSHOT_REAL") is { Length: > 0 } real)
+        {
+            await main.DebugRealRunAsync(real,
+            [
+                new AttackSpec { Kind = AttackKind.Mask, HashcatMask = "?d?d?d?d?d?d?d" },
+                new AttackSpec { Kind = AttackKind.BruteForce, Smalls = true, Digits = true, MinLength = 1, MaxLength = 4 },
+            ], async name => await Save(main, Path.Combine(dir, $"main-{name}.png")));
+            Environment.Exit(0);
+        }
 
         var settings = Settings.Load();
         if (!OnlyMain)

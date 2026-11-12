@@ -28,6 +28,9 @@ public sealed class WizardWindow : Window
     public string Ssid { get; private set; } = "default";
     public List<AttackSpec> Steps { get; } = new();
 
+    /// <summary>The scenario chosen on the attack page, or null for a single attack.</summary>
+    public string? ScenarioName { get; private set; }
+
     /// <summary>RAR3 block validation choice (cosmetic; the hashcat 12500 kernel validates all blocks).</summary>
     public bool Rar3ValidateAllBlocks { get; private set; } = true;
 
@@ -174,6 +177,7 @@ public sealed class WizardWindow : Window
             case Choice.Scenario when _scenario is not null:
                 Steps.Clear();
                 Steps.AddRange(_scenario.Steps.Select(x => x.Clone()));
+                ScenarioName = _scenario.Name;
                 Close(true);
                 break;
             case Choice.Brute: Show(BrutePage, true); break;

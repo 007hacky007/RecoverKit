@@ -118,6 +118,25 @@ internal static class Styles
                 new Setter(Visual.OpacityProperty, 0.45),
             },
         });
+        // The current scenario step's dot pulses (not when the system asks for reduced motion).
+        if (!Platform.ReduceMotion)
+            s.Add(new Style(x => x.OfType<Avalonia.Controls.Shapes.Ellipse>().Class("pulse"))
+            {
+                Animations =
+                {
+                    new Avalonia.Animation.Animation
+                    {
+                        Duration = TimeSpan.FromMilliseconds(1200), IterationCount = Avalonia.Animation.IterationCount.Infinite,
+                        Easing = new Avalonia.Animation.Easings.SineEaseInOut(),
+                        Children =
+                        {
+                            new Avalonia.Animation.KeyFrame { Cue = new Avalonia.Animation.Cue(0), Setters = { new Setter(Visual.OpacityProperty, 1.0) } },
+                            new Avalonia.Animation.KeyFrame { Cue = new Avalonia.Animation.Cue(0.5), Setters = { new Setter(Visual.OpacityProperty, 0.3) } },
+                            new Avalonia.Animation.KeyFrame { Cue = new Avalonia.Animation.Cue(1), Setters = { new Setter(Visual.OpacityProperty, 1.0) } },
+                        },
+                    },
+                },
+            });
         return s;
     }
 }
