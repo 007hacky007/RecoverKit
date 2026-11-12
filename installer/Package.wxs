@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RecoverKit MSI installer (WiX v6).
+
+  Built by installer/build.ps1, which first publishes the app into a staging folder
+  and then passes that folder in as the StageDir bind path. By default the staged
+  publish is self-contained, so the installed app needs no separate .NET runtime.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="RecoverKit"
+           Manufacturer="RecoverKit"
+           Version="$(ProductVersion)"
+           UpgradeCode="86BC515B-8708-4417-AE6C-DB9EEEF1B1BA"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="RecoverKit - GPU-accelerated password recovery"
+                        Manufacturer="RecoverKit" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. Remove it first to install an older version." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- 64-bit only, matching the win-x64 build. -->
+    <Launch Condition="VersionNT64" Message="RecoverKit requires 64-bit Windows." />
+
+    <Icon Id="RecoverKitIcon" SourceFile="recoverkit.ico" />
+    <Property Id="ARPPRODUCTICON" Value="RecoverKitIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/007hacky007/RecoverKit" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/007hacky007/RecoverKit" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <Feature Id="Main" Title="RecoverKit" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcuts" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="AppPaths" />
+    </Feature>
+
+    <!-- Install into Program Files\RecoverKit. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RecoverKit" />
+    </StandardDirectory>
+
+    <!-- Harvest the whole staged publish tree into the install folder. -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.StageDir)\**" />
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppProgramMenuDir" Name="RecoverKit">
+        <Component Id="StartMenuShortcuts" Guid="EC858EEA-7BDB-4424-828B-420CE7AAF76F">
+          <Shortcut Id="StartMenuShortcut"
+                    Name="RecoverKit"
+                    Description="GPU-accelerated password recovery"
+                    Target="[INSTALLFOLDER]RecoverKit.exe"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="RecoverKitIcon" />
+          <RemoveFolder Id="RemoveAppProgramMenuDir" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\RecoverKit" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="7C6F6B3E-1C2A-4F0E-9E8B-2A4D5C7B9A10">
+        <Shortcut Id="DesktopShortcut"
+                  Name="RecoverKit"
+                  Description="GPU-accelerated password recovery"
+                  Target="[INSTALLFOLDER]RecoverKit.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="RecoverKitIcon" />
+        <RegistryValue Root="HKCU" Key="Software\RecoverKit" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- App Paths: lets "RecoverKit" launch from Win+R and Start search. -->
+    <Component Id="AppPaths" Directory="INSTALLFOLDER" Guid="3B1D9F42-6E77-4A2C-8F51-0C9E7D2B4A88">
+      <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\RecoverKit.exe">
+        <RegistryValue Type="string" Value="[INSTALLFOLDER]RecoverKit.exe" />
+        <RegistryValue Name="Path" Type="string" Value="[INSTALLFOLDER]" />
+      </RegistryKey>
+    </Component>
+
+    <!-- Standard install-dir wizard with license, banner and dialog artwork. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
+
+  </Package>
+</Wix>

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <AssemblyName>RecoverKit</AssemblyName>
+    <RootNamespace>RecoverKit.App</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>RecoverKit</Product>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationIcon>Resources\recoverkit.ico</ApplicationIcon>
+    <Company>RecoverKit</Company>
+    <Authors>RecoverKit</Authors>
+    <AssemblyTitle>RecoverKit</AssemblyTitle>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RecoverKit.Core\RecoverKit.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\recoverkit.ico" LogicalName="RecoverKit.App.Icon.ico" />
+  </ItemGroup>
+
+</Project>

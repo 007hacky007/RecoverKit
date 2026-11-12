@@ -1,0 +1,7 @@
+bin/
+obj/
+publish/
+*.user
+installer/stage/
+installer/out/
+.DS_Store

@@ -1,0 +1,246 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using RecoverKit.Core.Attacks;
+
+namespace RecoverKit.Core.Hashcat;
+
+public enum RunOutcome { Cracked, Exhausted, Aborted, Error }
+
+public sealed class RunRequest
+{
+    public required int Mode { get; init; }
+    public required string HashFile { get; init; }
+    public required PreparedAttack Attack { get; init; }
+    public required string SessionName { get; init; }
+    public required string SessionDir { get; init; }
+    public bool Restore { get; init; }
+    public Settings Settings { get; init; } = new();
+    public bool UseOptimizedKernel { get; init; }
+}
+
+public sealed class RunResult
+{
+    public RunOutcome Outcome { get; init; }
+    public int ExitCode { get; init; }
+    public List<string> Passwords { get; init; } = new();
+    /// <summary>Plaintexts exactly as hashcat wrote them ($HEX[..] kept), for binary results such as RC4 keys.</summary>
+    public List<string> RawPasswords { get; init; } = new();
+    public string? Error { get; init; }
+    public HashcatStatus? LastStatus { get; init; }
+}
+
+/// <summary>
+/// Runs one hashcat attack as a child process, streams --status-json updates,
+/// optionally feeds candidates through stdin, and stops it gracefully
+/// (Ctrl+C on Windows, SIGINT elsewhere) so the .restore file stays usable.
+/// </summary>
+public sealed class HashcatRunner(HashcatTool tool)
+{
+    public event Action<HashcatStatus>? StatusReceived;
+    public event Action<string>? OutputLine;
+
+    public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".restore");
+    public static string OutFile(string dir, string session) => Path.Combine(dir, session + ".out");
+
+    public List<string> BuildArguments(RunRequest r)
+    {
+        string restore = RestoreFile(r.SessionDir, r.SessionName);
+        if (r.Restore)
+            return ["--session", r.SessionName, "--restore", "--restore-file-path", restore];
+
+        var s = r.Settings;
+        var a = new List<string> { "-m", r.Mode.ToString(), r.HashFile };
+        a.AddRange(r.Attack.Args);
+        a.AddRange(["--session", r.SessionName, "--restore-file-path", restore]);
+        a.AddRange(["--status", "--status-json", "--status-timer", "2", "--quiet"]);
+        a.AddRange(["-o", OutFile(r.SessionDir, r.SessionName), "--outfile-format", "2"]);
+        if (s.DontUsePasswordCache) a.Add("--potfile-disable");
+        else a.AddRange(["--potfile-path", s.PotfilePath]);
+        a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
+        a.AddRange(DeviceArguments(s, KnownDevices));
+        if (r.UseOptimizedKernel) a.Add("-O");
+        if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
+        if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
+            a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return a;
+    }
+
+    /// <summary>-d / -D arguments derived from the GPU configuration and CPU/GPU strategy.</summary>
+    public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known)
+    {
+        var a = new List<string>();
+        // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
+        // instead of failing with "no devices found".
+        bool noGpu = known is not null && known.Count > 0 &&
+                     !known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase));
+        switch (s.Strategy)
+        {
+            case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", "1,2"]); break;
+            case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1"]); break;
+            case DeviceStrategy.FastGpu: a.AddRange(["-D", noGpu ? "1" : "2"]); break;
+            default: if (noGpu) a.AddRange(["-D", "1"]); break;
+        }
+        if (s.DisabledDevices.Count > 0 && known is not null)
+        {
+            var enabled = known.Where(d => !d.IsSkippedAlias && !s.DisabledDevices.Contains(d.Id)).Select(d => d.Id).ToList();
+            if (enabled.Count > 0) a.AddRange(["-d", string.Join(',', enabled)]);
+        }
+        return a;
+    }
+
+    public IReadOnlyList<BackendDevice>? KnownDevices { get; set; }
+
+    public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
+    {
+        var args = BuildArguments(r);
+        string outFile = OutFile(r.SessionDir, r.SessionName);
+        if (!r.Restore && File.Exists(outFile)) File.Delete(outFile);
+        OutputLine?.Invoke("hashcat " + string.Join(' ', args.Select(Quote)));
+
+        bool useStdin = r.Attack.Stdin is not null && !r.Restore;
+        var psi = tool.StartInfo(args, useStdin);
+        int logId = DebugLog.ProcessStart(psi, $"attack run, mode {r.Mode}, restore={r.Restore}, stdin generator={useStdin}, priority={r.Settings.Priority}");
+        var sw = Stopwatch.StartNew();
+        using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        HashcatStatus? last = null;
+        var tail = new Queue<string>();
+
+        p.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null) return;
+            DebugLog.ProcessOutput(logId, "stdout", e.Data);
+            var st = HashcatStatus.TryParse(e.Data);
+            if (st is not null) { last = st; StatusReceived?.Invoke(st); return; }
+            Remember(tail, e.Data);
+            if (e.Data.Length > 0) OutputLine?.Invoke(e.Data);
+        };
+        p.ErrorDataReceived += (_, e) =>
+        {
+            if (string.IsNullOrEmpty(e.Data)) return;
+            DebugLog.ProcessOutput(logId, "stderr", e.Data);
+            Remember(tail, e.Data);
+            OutputLine?.Invoke(e.Data);
+        };
+
+        p.Start();
+        TrySetPriority(p, r.Settings.Priority);
+        p.BeginOutputReadLine();
+        p.BeginErrorReadLine();
+
+        using var pumpCts = new CancellationTokenSource();
+        Task pump = Task.CompletedTask;
+        if (useStdin)
+        {
+            var source = r.Attack.Stdin!;
+            var stdin = p.StandardInput.BaseStream;
+            pump = Task.Run(() =>
+            {
+                try { Generators.Pump(source(), stdin, pumpCts.Token); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    OutputLine?.Invoke("Candidate generator failed: " + ex.Message);
+                    try { stdin.Close(); } catch (IOException) { }
+                }
+            });
+        }
+
+        bool stopped = false;
+        using (ct.Register(() => { stopped = true; pumpCts.Cancel(); _ = StopAsync(p); }))
+        {
+            await p.WaitForExitAsync(CancellationToken.None);
+        }
+        pumpCts.Cancel();
+        try { await pump.WaitAsync(TimeSpan.FromSeconds(5)); } catch (TimeoutException) { }
+        p.WaitForExit(); // flush async output handlers
+
+        int code = p.ExitCode;
+        DebugLog.ProcessExit(logId, code, sw.Elapsed);
+        if (stopped) DebugLog.Info($"#{logId} was stopped by the user");
+        var raw = File.Exists(outFile)
+            ? File.ReadAllLines(outFile).Where(l => l.Length > 0).Distinct().ToList()
+            : new List<string>();
+        var passwords = raw.Select(HashcatTool.DecodePlain).Distinct().ToList();
+
+        RunOutcome outcome = code switch
+        {
+            0 => RunOutcome.Cracked,
+            1 => RunOutcome.Exhausted,
+            2 or 3 or 4 or 5 => RunOutcome.Aborted,
+            _ => stopped ? RunOutcome.Aborted : RunOutcome.Error,
+        };
+        if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
+            passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.Settings.PotfilePath);
+        if (stopped && outcome != RunOutcome.Cracked) outcome = RunOutcome.Aborted;
+
+        string? error = outcome == RunOutcome.Error
+            ? string.Join(Environment.NewLine, tail.Where(l => !l.StartsWith('{')).TakeLast(12))
+            : null;
+        if (outcome == RunOutcome.Error && string.IsNullOrWhiteSpace(error)) error = $"hashcat exited with code {code}.";
+
+        return new RunResult { Outcome = outcome, ExitCode = code, Passwords = passwords, RawPasswords = raw, Error = error, LastStatus = last };
+    }
+
+    private static void Remember(Queue<string> q, string line)
+    {
+        lock (q)
+        {
+            q.Enqueue(line);
+            while (q.Count > 60) q.Dequeue();
+        }
+    }
+
+    private static string Quote(string a) => a.Contains(' ') ? $"\"{a}\"" : a;
+
+    private static void TrySetPriority(Process p, ProcessPriority pr)
+    {
+        try
+        {
+            p.PriorityClass = pr switch
+            {
+                ProcessPriority.Idle => ProcessPriorityClass.Idle,
+                ProcessPriority.BelowNormal => ProcessPriorityClass.BelowNormal,
+                ProcessPriority.High => ProcessPriorityClass.High,
+                _ => ProcessPriorityClass.Normal,
+            };
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
+    }
+
+    // ---------------------------------------------------------------- graceful stop
+
+    private static async Task StopAsync(Process p)
+    {
+        try
+        {
+            if (p.HasExited) return;
+            if (OperatingSystem.IsWindows()) SendCtrlC(p.Id);
+            else Process.Start("kill", ["-INT", p.Id.ToString()])?.WaitForExit(2000);
+            for (int i = 0; i < 100 && !p.HasExited; i++) await Task.Delay(100);
+            if (!p.HasExited) p.Kill(true);
+        }
+        catch (InvalidOperationException) { }
+        catch (System.ComponentModel.Win32Exception) { }
+    }
+
+    private static readonly object CtrlLock = new();
+
+    private static void SendCtrlC(int pid)
+    {
+        lock (CtrlLock)
+        {
+            // Attach to hashcat's (hidden) console and raise Ctrl+C there, ignoring it ourselves.
+            FreeConsole();
+            if (!AttachConsole((uint)pid)) return;
+            SetConsoleCtrlHandler(IntPtr.Zero, true);
+            GenerateConsoleCtrlEvent(0, 0);
+            Thread.Sleep(300);
+            FreeConsole();
+            SetConsoleCtrlHandler(IntPtr.Zero, false);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AttachConsole(uint dwProcessId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool FreeConsole();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GenerateConsoleCtrlEvent(uint ctrlEvent, uint processGroupId);
+}

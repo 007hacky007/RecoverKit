@@ -1,0 +1,23 @@
+RecoverKit third-party notices
+==============================
+
+RecoverKit's installer contains only RecoverKit itself (and, in the self-contained build, the
+.NET runtime, MIT License, https://github.com/dotnet/runtime). The components below are not
+bundled: RecoverKit downloads them from their official sources on first use, checks their
+SHA-256, and stores them in the user's profile. Each remains under its own license.
+
+hashcat 7.1.2
+  https://hashcat.net - MIT License.
+
+7-Zip reduced console extractor (7zr.exe), Windows only, when no 7-Zip is installed
+  https://www.7-zip.org - GNU LGPL.
+
+Intel CPU Runtime for OpenCL Applications (intel-opencl-rt) and oneAPI Threading
+Building Blocks (tbb), Windows only, optional, after the user accepts Intel's license
+  https://pypi.org/project/intel-opencl-rt/ - Intel End User License Agreement.
+  https://pypi.org/project/tbb/ - Apache License 2.0.
+
+Built-in word lists
+  src/RecoverKit.Core/Attacks/Resources/SmallEnglish.txt and MediumEnglish.txt are a selection
+  from the macOS /usr/share/dict/words list (Webster's Second International Dictionary, 1934,
+  public domain), preceded by a short list of common passwords.

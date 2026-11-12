@@ -1,0 +1,75 @@
+; RecoverKit default attack scenarios. Format is documented in Scenarios.cs and README.md.
+; *default refers to the default dictionary set in Preferences > Files and Paths.
+; Steps that cannot run (for example no dictionary configured) are skipped.
+
+Standard
+NONE
+/a:d /d:*default
+/a:b /c:sd /min:1 /max:6
+/a:r /r:*1s /d:*default
+/a:b /c:a /min:1 /max:4
+/a:r /r:*2s /d:*default
+
+Slow formats: Office 2007+, encrypted volumes, PDF R6, iOS backups
+OF07 OF10 OF13 TRUE VERA PDF6 APL7 APL0
+/a:d /d:*default
+/a:b /c:d /min:1 /max:6
+/a:b /c:s /min:1 /max:4
+/a:r /r:*1s /d:*default
+/a:b /c:a /min:1 /max:3
+/a:b /c:sd /min:5 /max:5
+/a:r /r:*2s /d:*default
+
+Office 97-2003 (RC4)
+972K XP03
+/a:b /c:a /min:1 /max:5
+/a:d /d:*default
+/a:b /c:d /min:6 /max:10
+/a:r /r:*1a /d:*default
+/a:b /c:sd /min:6 /max:6
+/a:r /r:*2s /d:*default
+
+WinZip AES and OpenDocument
+WZAE OODF ODF2
+/a:d /d:*default
+/a:b /c:d /min:1 /max:6
+/a:b /c:s /min:1 /max:4
+/a:r /r:*1s /d:*default
+/a:b /c:a /min:1 /max:3
+/a:r /r:*2s /d:*default
+
+Fast formats: ZipCrypto, PDF R2-R5
+ZIPC PDF2 PDF3 PDF5
+/a:b /c:a /min:1 /max:5
+/a:d /d:*default
+/a:b /c:d /min:6 /max:10
+/a:b /c:sd /min:6 /max:6
+/a:r /r:*1a /d:*default
+/a:b /c:s /min:7 /max:7
+/a:m /1:?l?u /m:?1?l?l?l?l?d?d
+/a:r /r:*2s /d:*default
+
+Quick brute force, 1-5 characters
+NONE
+/a:b /c:a /min:1 /max:3
+/a:b /c:s /min:4 /max:4
+/a:b /c:c /min:4 /max:4
+/a:b /c:d /min:4 /max:5
+/a:b /c:sd /min:5 /max:5
+
+RAR 3 and RAR 5
+RAR3 RAR5
+/a:d /d:*default
+/a:b /c:d /min:1 /max:6
+/a:b /c:s /min:1 /max:4
+/a:r /r:*1s /d:*default
+/a:b /c:a /min:1 /max:3
+/a:b /c:sd /min:5 /max:5
+/a:r /r:*2s /d:*default
+
+WPA/WPA2 handshakes
+WPAH
+/a:d /d:*default
+/a:b /c:d /min:8 /max:10
+/a:r /r:*1s /d:*default
+/a:b /c:s /min:8 /max:8

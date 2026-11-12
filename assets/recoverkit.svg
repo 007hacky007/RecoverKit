@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E86E6"/>
+      <stop offset="1" stop-color="#0F3C8C"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#DCE8FA"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="44" ry="44" fill="url(#badge)"/>
+  <rect x="12" y="12" width="232" height="232" rx="44" ry="44" fill="none" stroke="#0A2A66" stroke-width="4" opacity="0.55"/>
+  <!-- shackle -->
+  <path d="M 84 128 L 84 96 A 44 44 0 0 1 172 96 L 172 128"
+        fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+  <!-- body -->
+  <rect x="68" y="120" width="120" height="96" rx="18" ry="18" fill="url(#body)" stroke="#9FBDE8" stroke-width="2"/>
+  <!-- keyhole -->
+  <circle cx="128" cy="156" r="15" fill="#123E86"/>
+  <path d="M 121 162 L 135 162 L 139 196 L 117 196 Z" fill="#123E86"/>
+</svg>

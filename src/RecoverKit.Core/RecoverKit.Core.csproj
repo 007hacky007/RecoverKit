@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>RecoverKit.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RecoverKit.Tests" />
+    <InternalsVisibleTo Include="recoverkit-cli" />
+  </ItemGroup>
+
+  <!-- Native kernels (native/build.sh). Copied next to every app that references Core; missing files
+       just mean the managed kernels run instead. -->
+  <ItemGroup>
+    <None Include="..\..\native\bin\win-x64\rknative.dll" Condition="Exists('..\..\native\bin\win-x64\rknative.dll')" Link="rknative.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\native\bin\osx-arm64\librknative.dylib" Condition="Exists('..\..\native\bin\osx-arm64\librknative.dylib')" Link="librknative.dylib" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Attacks\DefaultScenarios.txt" LogicalName="RecoverKit.DefaultScenarios.txt" />
+    <EmbeddedResource Include="Attacks\Resources\SmallEnglish.txt" LogicalName="RecoverKit.SmallEnglish.txt" />
+    <EmbeddedResource Include="Attacks\Resources\MediumEnglish.txt" LogicalName="RecoverKit.MediumEnglish.txt" />
+  </ItemGroup>
+
+</Project>

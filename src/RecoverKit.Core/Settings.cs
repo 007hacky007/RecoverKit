@@ -1,0 +1,100 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace RecoverKit.Core;
+
+/// <summary>
+/// The four CPU/GPU strategies, in dropdown order. Stored by name, so the order can
+/// match the UI without breaking older settings files.
+/// </summary>
+public enum DeviceStrategy
+{
+    GpuOnly,      // "Keep one CPU thread free for each GPU": GPUs; the CPU when no GPU exists
+    FastGpu,      // "Avoid the CPU whenever a GPU can run": same device choice, CPU only as a fallback
+    GpuAndCpu,    // "Use maximum number of CPU threads": -D 1,2
+    CpuOnly,      // "Don't use GPU threads": -D 1
+}
+
+public enum ProcessPriority { Idle, BelowNormal, Normal, High }
+
+/// <summary>User preferences, stored as JSON in the per-user application data folder.</summary>
+public sealed class Settings
+{
+    public string? HashcatPath { get; set; }
+    public int Workload { get; set; } = 3;                    // hashcat -w 1..4 ("lag free display" .. "performance")
+    public List<int> DisabledDevices { get; set; } = new();   // hashcat backend device ids the user unchecked
+    public DeviceStrategy Strategy { get; set; } = DeviceStrategy.GpuOnly;
+    public ProcessPriority Priority { get; set; } = ProcessPriority.Idle;   // the recommended default
+    public int MaxCpuThreads { get; set; }                    // OpenCL CPU worker threads; 0 = one per logical processor
+    public bool PreventScreensaver { get; set; } = true;
+    public bool OptimizedKernels { get; set; } = true;
+    public bool UseNativeCpuEngine { get; set; } = true;      // built-in CPU kernels when no GPU is used
+    public string ExtraArguments { get; set; } = "";
+
+    public bool UseExternalScenarioFile { get; set; }
+    public string? ExternalScenarioFile { get; set; }
+    public string? DataPath { get; set; }
+    public string? DefaultDictionary { get; set; }
+    public string? ExecuteOnSuccess { get; set; }
+    public string? ExecuteOnFail { get; set; }
+
+    public bool DontUsePasswordCache { get; set; }
+    public bool DontUseKeyCache { get; set; }
+    public bool ReduceOutput { get; set; }
+    public bool DebugLogIncludeHashes { get; set; }          // off: extracted hashes are masked in the debug log
+
+    // Key search and rainbow tables
+    public string? RainbowTablesPath { get; set; }
+    public bool AutoDecrypt { get; set; }
+    public string DecryptSuffix { get; set; } = "_decrypted";
+
+    public Dictionary<int, double> SpeedByMode { get; set; } = new();
+    public string? LastOpenedDirectory { get; set; }
+    public string? LastDictionaryDirectory { get; set; }
+    public int[]? WindowBounds { get; set; }
+
+    [JsonIgnore] public static string AppDataDir { get; } = InitAppData();
+
+    [JsonIgnore] public string PotfilePath => Path.Combine(AppDataDir, "recovered.potfile");
+    [JsonIgnore] public string KeyCachePath => Path.Combine(AppDataDir, "keys.cache");
+    [JsonIgnore] public string SessionsDir => Directory.CreateDirectory(Path.Combine(AppDataDir, "sessions")).FullName;
+
+    private static string FilePath => Path.Combine(AppDataDir, "settings.json");
+
+    /// <summary>
+    /// Settings, potfile and sessions live in %APPDATA%\RecoverKit, unless RECOVERKIT_HOME is set
+    /// or a file named "portable" exists next to the executable (then .\userdata is used).
+    /// </summary>
+    private static string InitAppData()
+    {
+        var env = Environment.GetEnvironmentVariable("RECOVERKIT_HOME");
+        var portable = File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+        var dir = !string.IsNullOrWhiteSpace(env) ? env
+            : portable ? Path.Combine(AppContext.BaseDirectory, "userdata")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RecoverKit");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
+
+    public static Settings Load()
+    {
+        try
+        {
+            if (File.Exists(FilePath))
+                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
+        }
+        catch (JsonException) { /* fall back to defaults */ }
+        return new Settings();
+    }
+
+    public void Save()
+    {
+        var tmp = FilePath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(this, Json));
+        File.Move(tmp, FilePath, overwrite: true);
+    }
+
+    public double SpeedFor(int mode, double fallback = 10000) => SpeedByMode.TryGetValue(mode, out var s) && s > 0 ? s : fallback;
+}
