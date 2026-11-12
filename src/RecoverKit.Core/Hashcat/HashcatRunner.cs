@@ -292,6 +292,10 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     private static void TrySetPriority(Process p, ProcessPriority pr)
     {
+        // As for the built-in engine (see NativeRunner.LowersProcessPriority): on macOS a niced hashcat
+        // loses its GPU-feeding thread to the built-in engine in hybrid attacks (measured on an M1 Pro:
+        // PDF R6 on the GPU fell from 9,600 to 2,500/s), and the GPU itself does not care about nice.
+        if (!Native.NativeRunner.LowersProcessPriority) return;
         try
         {
             p.PriorityClass = pr switch

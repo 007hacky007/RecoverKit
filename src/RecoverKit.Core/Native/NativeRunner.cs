@@ -76,7 +76,8 @@ public sealed class NativeRunner
         // other programs win but the UI thread still outranks the workers.
         var proc = Process.GetCurrentProcess();
         ProcessPriorityClass? previous = null;
-        try { previous = proc.PriorityClass; proc.PriorityClass = ProcessClassFor(s.Priority); }
+        if (LowersProcessPriority)
+            try { previous = proc.PriorityClass; proc.PriorityClass = ProcessClassFor(s.Priority); }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
 
         var sw = Stopwatch.StartNew();
@@ -121,9 +122,19 @@ public sealed class NativeRunner
 
     private static void TryDelete(string f) { try { File.Delete(f); } catch (IOException) { } }
 
+    /// <summary>
+    /// Whether the engine lowers the whole process while it runs. Not on macOS: a niced process (and
+    /// "Idle" is nice 19) runs its threads on the efficiency cores, measured at a quarter of the speed
+    /// on an M1 Pro (PDF R6: about 14,000 instead of 55,000/s), and an unprivileged process cannot raise
+    /// its priority again afterwards. The lower thread priority alone keeps other programs first.
+    /// </summary>
+    internal static bool LowersProcessPriority => !OperatingSystem.IsMacOS();
+
     internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => p switch
     {
-        ProcessPriority.Idle => ThreadPriority.Lowest,
+        // macOS moves the lowest thread priority to the efficiency cores as soon as anything else runs
+        // (hashcat feeding the GPU in a hybrid attack): about 40% slower on an M1 Pro.
+        ProcessPriority.Idle => OperatingSystem.IsMacOS() ? ThreadPriority.BelowNormal : ThreadPriority.Lowest,
         ProcessPriority.BelowNormal => ThreadPriority.BelowNormal,
         ProcessPriority.High => ThreadPriority.AboveNormal,
         _ => ThreadPriority.Normal,
