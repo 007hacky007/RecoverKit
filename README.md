@@ -48,6 +48,7 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
+| Spreadsheet editing restrictions | Instant removal for unencrypted Excel .xlsx/.xlsm/.xltx, BIFF8 .xls and OpenDocument .ods |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
@@ -212,6 +213,13 @@ quickest guesses.
   Legacy base64 has no unique signature; confirm the backup's origin before recovery.
 - Exodus `seed.seco` files are recognized but not extracted: the SECO binary layout has not
   been verified against mode 28200. Use an independently verified extractor and Open As for hashes.
+- Spreadsheet instant unlocks save a separate copy for each selected sheet, workbook structure restriction,
+  or OOXML read-only recommendation. Legacy Excel 16-bit verifiers also yield an equivalent password
+  for use in Excel; SHA-512 restrictions are removed without recovering a password. Open the saved copy
+  again to remove another restriction. Files encrypted to open must first be decrypted. BIFF8 inspection
+  is limited to 64 MiB workbook streams; XML parts to 32 MiB each. XLSB, older BIFF versions, VBA project
+  passwords, embedded BIFF chart protection and individual protected-range passwords are outside this
+  editing-unlock path. Changes invalidate document signatures.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

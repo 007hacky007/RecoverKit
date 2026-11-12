@@ -278,6 +278,21 @@ notes are taken from it, and the release job fails if the section is missing.
 
 ## Technical notes
 
+- `SpreadsheetProtection` handles editing restrictions through `Detection.Unlocks` before the
+  existing encrypted Office/ZIP extractors. It creates no hashcat target, mode or attack scenario:
+  removing restrictions needs no attack, including SHA-512 sheet/workbook verifiers. Each finding
+  saves only its selected restriction; reopen the saved copy to remove another. ZIP update mode
+  preserves untouched compressed payloads; only changed XML entries are serialized. BIFF8 uses
+  `CompoundFile.WriteStreamSameLength` to patch the existing regular or mini-sector allocation.
+  Copies are edited in a temporary file beside the output and renamed only after success.
+  XML parts are capped at 32 MiB and BIFF streams at 64 MiB. Oversized BIFF streams still go
+  through the existing Office encryption detector. A FILEPASS prefix keeps encrypted BIFF files
+  on the existing Office prefix-only read path. FILEPASS and encrypted ODS manifests prevent
+  inspection of editing restrictions until a decrypted copy is opened. Legacy 16-bit passwords
+  use a bounded printable collision search, checked independently against openpyxl verifiers.
+  Spreadsheet fixtures include Apache POI SHA-512 samples and an openpyxl workbook exported
+  to BIFF8 by LibreOffice; origins and the Apache license are recorded in NOTICE.
+
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with

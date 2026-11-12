@@ -162,6 +162,227 @@ public class SpreadsheetProtectionTests : IDisposable
         Assert.DoesNotContain(Directory.GetFiles(_dir), p => p.EndsWith(".tmp"));
     }
 
+    [Fact]
+    public void IgnoresInactiveOoxmlProtectionElements()
+    {
+        var path = Ooxml(".xlsx");
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            foreach (var part in new[] { "xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/chartsheets/sheet1.xml" })
+            {
+                var xml = Read(zip, part);
+                var doc = XDocument.Parse(xml);
+                foreach (var e in doc.Descendants().Where(e => e.Name.LocalName is "workbookProtection" or "sheetProtection" or "fileSharing"))
+                {
+                    e.RemoveAttributes();
+                    if (e.Name.LocalName == "fileSharing") e.SetAttributeValue("readOnlyRecommended", "false");
+                }
+                zip.GetEntry(part)!.Delete();
+                Write(zip, part, doc.ToString());
+            }
+        }
+        Assert.Empty(FormatDetector.Detect(path).Unlocks);
+    }
+
+    [Fact]
+    public void DuplicateSpreadsheetPartsAreRejected()
+    {
+        var path = Ooxml(".xlsx");
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Update))
+            Write(zip, "xl/worksheets/sheet1.xml", $"<worksheet xmlns='{Ns}'><sheetProtection sheet='1'/></worksheet>");
+        var d = FormatDetector.Detect(path);
+        Assert.Empty(d.Unlocks);
+        Assert.Contains("damaged", d.Message!);
+    }
+
+    [Theory]
+    [InlineData(0x8000)]
+    [InlineData(0xffff)]
+    [InlineData(0xce4b)]
+    [InlineData(0xdaa7)]
+    [InlineData(0x1234)]
+    public void EquivalentPasswordMatchesIndependentVerifier(ushort hash)
+    {
+        var password = SpreadsheetProtection.EquivalentPassword(hash);
+        if (hash < 0x8000) Assert.Null(password);
+        else Assert.Equal(hash, LegacyHash(Assert.IsType<string>(password)));
+    }
+
+    [Fact]
+    public async Task UntouchedZipPayloadsRemainByteIdentical()
+    {
+        var path = Ooxml(".xlsm");
+        var output = Path.Combine(_dir, "copy.xlsm");
+        await FormatDetector.Detect(path).Unlocks[0].SaveAsync(path, output);
+        using var before = File.OpenRead(path);
+        using var after = File.OpenRead(output);
+        var entries = ZipExtractor.ReadCentralDirectory(before, out long deltaBefore, out _, out _);
+        var saved = ZipExtractor.ReadCentralDirectory(after, out long deltaAfter, out _, out _);
+        foreach (var e in entries.Where(e => e.Name != "xl/worksheets/sheet1.xml"))
+        {
+            var copy = Assert.Single(saved, c => c.Name == e.Name);
+            Assert.Equal(e.Crc, copy.Crc);
+            Assert.Equal(e.Method, copy.Method);
+            Assert.Equal(e.CompSize, copy.CompSize);
+            Assert.Equal(Raw(before, e.LocalOffset + deltaBefore, e.CompSize),
+                Raw(after, copy.LocalOffset + deltaAfter, copy.CompSize));
+        }
+        static byte[] Raw(Stream stream, long offset, long count)
+        {
+            var header = Bin.ReadAt(stream, offset, 30);
+            long start = offset + 30 + Bin.U16(header, 26) + Bin.U16(header, 28);
+            return Bin.ReadAt(stream, start, (int)count);
+        }
+    }
+
+    [Fact]
+    public async Task FailedSavePreservesExistingOutputAndCleansTemporaryCopy()
+    {
+        var path = Ooxml(".xlsx");
+        var unlock = FormatDetector.Detect(path).Unlocks[0];
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Update)) zip.GetEntry("xl/worksheets/sheet1.xml")!.Delete();
+        var output = Path.Combine(_dir, "existing.xlsx");
+        File.WriteAllText(output, "keep");
+        await Assert.ThrowsAsync<FormatException>(() => unlock.SaveAsync(path, output));
+        Assert.Equal("keep", File.ReadAllText(output));
+        Assert.DoesNotContain(Directory.GetFiles(_dir), p => p.EndsWith(".tmp"));
+    }
+
+    [Theory]
+    [InlineData("workbookProtection-sheet_password-2013.xlsx", "Sheet protection can be removed")]
+    [InlineData("workbookProtection-workbook_password-2013.xlsx", "Workbook structure protection can be removed")]
+    [InlineData("openpyxl-protected.xls", "Sheet protection can be removed")]
+    public async Task RealProgramFixturesCanBeUnlocked(string name, string title)
+    {
+        var assembly = typeof(SpreadsheetProtectionTests).Assembly;
+        using var resource = assembly.GetManifestResourceStream("RecoverKit.Tests.Fixtures.Spreadsheets." + name)!;
+        var path = Path.Combine(_dir, name);
+        using (var file = File.Create(path)) resource.CopyTo(file);
+        var original = File.ReadAllBytes(path);
+        var d = FormatDetector.Detect(path);
+        var unlock = Assert.Single(d.Unlocks);
+        Assert.Equal(title, unlock.Title);
+        if (name.EndsWith(".xls")) Assert.Equal(0xdaa7, LegacyHash(unlock.Password!));
+        else { Assert.Null(unlock.Password); Assert.Contains("SHA-512", unlock.Description); }
+        var output = Path.Combine(_dir, "unlocked-" + name);
+        await unlock.SaveAsync(path, output);
+        Assert.Empty(FormatDetector.Detect(output).Unlocks);
+        Assert.Equal(original, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EncryptedBiffStillUsesOfficeExtraction(bool oversized)
+    {
+        byte[] workbook = [.. Record(0x0809, [0, 6, 5, 0]),
+            .. Record(0x002f, [1, 0, 1, 0, 1, 0, .. new byte[48]]), .. Record(0x000a, [])];
+        var container = Compound(workbook, false);
+        if (oversized) BinaryPrimitives.WriteUInt32LittleEndian(container.AsSpan(1152 + 120), 64 * 1024 * 1024 + 1);
+        var path = Path.Combine(_dir, "encrypted.xls");
+        File.WriteAllBytes(path, container);
+        var d = FormatDetector.Detect(path);
+        Assert.Empty(d.Unlocks);
+        Assert.Equal(new[] { 9700 }, d.Target!.Modes);
+        Assert.Contains(d.Info, p => p.Key == "Notes");
+    }
+
+    [Fact]
+    public async Task OoxmlSaveRemovesTheDirectProtectionElement()
+    {
+        var path = Ooxml(".xlsx", $"<worksheet xmlns='{Ns}'><extLst><ext uri='custom'><sheetProtection sheet='1'/></ext></extLst><sheetProtection sheet='1'/></worksheet>");
+        var unlock = FormatDetector.Detect(path).Unlocks[0];
+        var output = Path.Combine(_dir, "copy.xlsx");
+        await unlock.SaveAsync(path, output);
+        using var zip = ZipFile.OpenRead(output);
+        var root = XDocument.Parse(Read(zip, "xl/worksheets/sheet1.xml")).Root!;
+        Assert.Null(root.Element(XName.Get("sheetProtection", Ns)));
+        Assert.Single(root.Descendants(XName.Get("sheetProtection", Ns)));
+    }
+
+    [Fact]
+    public async Task DirectoryAliasesAndDirectDelegatesCannotReplaceTheOriginal()
+    {
+        if (OperatingSystem.IsWindows()) return; // Symbolic-link creation requires extra privileges on Windows.
+        var path = Ooxml(".xlsx");
+        var original = File.ReadAllBytes(path);
+        string alias = _dir + "-alias";
+        Directory.CreateSymbolicLink(alias, _dir);
+        try
+        {
+            var unlock = FormatDetector.Detect(path).Unlocks[0];
+            await Assert.ThrowsAsync<IOException>(() => unlock.SaveAsync(path, Path.Combine(alias, Path.GetFileName(path))));
+            await Assert.ThrowsAsync<IOException>(() => unlock.SaveCopyAsync!(path, path, default));
+            Assert.Equal(original, File.ReadAllBytes(path));
+        }
+        finally { Directory.Delete(alias); }
+    }
+
+    [Fact]
+    public async Task NestedBiffChartDoesNotChangeWorksheetPasswordOrSavedWords()
+    {
+        byte[] chart = [.. Record(0x0809, [0, 6, 0x20, 0]), .. Record(0x12, [1, 0]),
+            .. Record(0x13, [0xff, 0xff]), .. Record(0x0a, [])];
+        var wb = Biff();
+        byte[] data = [.. wb[..^4], .. chart, .. wb[^4..]];
+        var path = Path.Combine(_dir, "chart.xls");
+        File.WriteAllBytes(path, Compound(data, true));
+        var sheet = Assert.Single(FormatDetector.Detect(path).Unlocks, u => u.Title.StartsWith("Sheet"));
+        Assert.Equal(0xdaa7, LegacyHash(sheet.Password!));
+        var output = Path.Combine(_dir, "copy.xls");
+        await sheet.SaveAsync(path, output);
+        using var file = File.OpenRead(output);
+        var saved = new CompoundFile(file).ReadStream("Workbook")!;
+        Assert.Equal(chart, saved.AsSpan(wb.Length - 4, chart.Length).ToArray());
+    }
+
+    [Fact]
+    public void RejectsTruncatedZipAsAFormatError()
+    {
+        using var stream = new MemoryStream([0x50, 0x4b, 3, 4, 0, 0]);
+        Assert.Throws<FormatException>(() => SpreadsheetProtection.TryExtractZip(stream, new Detection { FilePath = "bad.xlsx" }));
+    }
+
+    [Fact]
+    public void RejectsInvalidBiffProtectionWordLength()
+    {
+        var data = Biff();
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(10), 1); // WINDOWPROTECT must contain two bytes.
+        var path = Path.Combine(_dir, "bad.xls");
+        File.WriteAllBytes(path, Compound(data, true));
+        var d = FormatDetector.Detect(path);
+        Assert.Empty(d.Unlocks);
+        Assert.Contains("damaged", d.Message!);
+    }
+
+    [Fact]
+    public void RejectsExcessiveBiffNesting()
+    {
+        byte[] data = [.. Enumerable.Range(0, 65).SelectMany(_ => Record(0x0809, [0, 6, 5, 0])),
+            .. Enumerable.Range(0, 65).SelectMany(_ => Record(0x0a, []))];
+        var path = Path.Combine(_dir, "nested.xls");
+        File.WriteAllBytes(path, Compound(data, false));
+        var d = FormatDetector.Detect(path);
+        Assert.Empty(d.Unlocks);
+        Assert.Contains("damaged", d.Message!);
+    }
+
+    [Fact]
+    public void EncryptedBiffDoesNotReadPastTheExistingOfficePrefix()
+    {
+        byte[] workbook = [.. Record(0x0809, [0, 6, 5, 0]),
+            .. Record(0x002f, [1, 0, 1, 0, 1, 0, .. new byte[48]]), .. Record(0x000a, [])];
+        var container = Compound(workbook, false);
+        BinaryPrimitives.WriteUInt32LittleEndian(container.AsSpan(1152 + 120), 1024 * 1024);
+        BinaryPrimitives.WriteUInt32LittleEndian(container.AsSpan(512 + 9 * 4), 2);
+        var path = Path.Combine(_dir, "encrypted.xls");
+        File.WriteAllBytes(path, container);
+        // Existing encrypted extraction reads only the first 64 KiB; the damaged tail is irrelevant.
+        var d = FormatDetector.Detect(path);
+        Assert.Empty(d.Unlocks);
+        Assert.Equal(new[] { 9700 }, d.Target!.Modes);
+    }
+
     private string Ooxml(string extension, string? sheetXml = null)
     {
         var path = Path.Combine(_dir, "book" + extension);

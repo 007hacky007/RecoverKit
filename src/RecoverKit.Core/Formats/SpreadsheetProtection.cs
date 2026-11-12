@@ -23,6 +23,7 @@ public static class SpreadsheetProtection
             var findings = new List<InstantUnlock>();
             if (zip.GetEntry("xl/workbook.xml") is { } wb && zip.GetEntry("[Content_Types].xml") is not null)
             {
+                EnsureUniqueParts(zip);
                 var workbook = ReadXml(wb);
                 var ns = workbook.Root?.Name.Namespace ?? XNamespace.None;
                 if (!IsSpreadsheetNamespace(ns) || workbook.Root?.Name.LocalName != "workbook")
@@ -37,7 +38,7 @@ public static class SpreadsheetProtection
                     if (doc.Root is not { } root || !IsSpreadsheetNamespace(root.Name.Namespace) ||
                         root.Name.LocalName is not ("worksheet" or "chartsheet")) continue;
                     var protection = root.Element(root.Name.Namespace + "sheetProtection");
-                    if (protection is null) continue;
+                    if (protection is null || !HasProtection(protection)) continue;
                     string name = names.GetValueOrDefault(entry.FullName, entry.FullName);
                     findings.Add(XmlUnlock(entry.FullName, protection.Name, 0, false,
                         "Sheet protection can be removed", $"Sheet: {name}. Saving removes this sheet's editing restrictions.",
@@ -46,7 +47,7 @@ public static class SpreadsheetProtection
                 foreach (var name in new[] { "workbookProtection", "fileSharing" })
                 {
                     var element = workbook.Root!.Element(ns + name);
-                    if (element is null) continue;
+                    if (element is null || !HasProtection(element)) continue;
                     bool sharing = name == "fileSharing";
                     findings.Add(XmlUnlock(wb.FullName, element.Name, 0, false,
                         sharing ? "Read-only recommendation can be removed" : "Workbook structure protection can be removed",
@@ -61,6 +62,7 @@ public static class SpreadsheetProtection
                      ReadText(mime) == "application/vnd.oasis.opendocument.spreadsheet" &&
                      zip.GetEntry("META-INF/manifest.xml") is { } manifest)
             {
+                EnsureUniqueParts(zip);
                 XNamespace m = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
                 if (ReadXml(manifest).Descendants(m + "encryption-data").Any())
                 {
@@ -143,9 +145,10 @@ public static class SpreadsheetProtection
             {
                 using var file = new FileStream(temp, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
                 using var zip = new ZipArchive(file, ZipArchiveMode.Update);
+                EnsureUniqueParts(zip);
                 var entry = zip.GetEntry(part) ?? throw new FormatException("Spreadsheet part is missing.");
                 var doc = ReadXml(entry);
-                var element = doc.Descendants(elementName).ElementAtOrDefault(index)
+                var element = (ods ? doc.Descendants(elementName).ElementAtOrDefault(index) : doc.Root?.Element(elementName))
                     ?? throw new FormatException("Selected spreadsheet protection is missing.");
                 if (ods)
                 {
@@ -163,6 +166,26 @@ public static class SpreadsheetProtection
     }
 
     private static bool IsTrue(XAttribute? attribute) => attribute?.Value is "true" or "1";
+
+    private static bool HasProtection(XElement element)
+    {
+        if (element.Attributes().Any(a => a.Name.LocalName is "password" or "workbookPassword" or
+            "revisionsPassword" or "reservationPassword" or "hashValue" or "workbookHashValue" or "revisionsHashValue")) return true;
+        string[] flags = element.Name.LocalName switch
+        {
+            "sheetProtection" => ["sheet", "objects", "scenarios", "content"],
+            "workbookProtection" => ["lockStructure", "lockWindows", "lockRevision"],
+            _ => ["readOnlyRecommended"],
+        };
+        return flags.Any(f => IsTrue(element.Attribute(f)));
+    }
+
+    private static void EnsureUniqueParts(ZipArchive zip)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in zip.Entries)
+            if (!names.Add(entry.FullName)) throw new FormatException("Duplicate spreadsheet package part.");
+    }
 
     private static XDocument ReadXml(ZipArchiveEntry entry)
     {
@@ -220,9 +243,23 @@ public static class SpreadsheetProtection
         if (cf.HasStream("EncryptedPackage")) { d.Add("Notes", EncryptionNote); return false; }
         string name = cf.HasStream("Workbook") ? "Workbook" : "Book";
         if (!cf.HasStream(name)) return false;
-        var workbook = ReadWorkbook(cf, name);
-        if (workbook.Length < 8 || Bin.U16(workbook, 0) != 0x0809 || Bin.U16(workbook, 4) != 0x0600)
+        if (cf.Find(name)!.Size > MaxWorkbookBytes)
+        {
+            d.Add("Notes", "Sheet and workbook editing protection inspection is limited to 64 MiB BIFF streams. " + EncryptionNote);
             return false;
+        }
+        var prefix = cf.ReadStream(name, 1 << 16)!;
+        if (prefix.Length < 8 || Bin.U16(prefix, 0) != 0x0809 || Bin.U16(prefix, 4) != 0x0600)
+            return false;
+        // Keep encrypted detection on OfficeExtractor's existing prefix-only read path.
+        for (int pos = 0; pos + 4 <= prefix.Length;)
+        {
+            int type = Bin.U16(prefix, pos);
+            if (type == 0x002f) { d.Add("Notes", EncryptionNote); return false; }
+            if (type == 0x000a) break;
+            pos += 4 + Bin.U16(prefix, pos + 2);
+        }
+        var workbook = ReadWorkbook(cf, name);
         var protections = ReadBiff(workbook);
         if (protections is null) { d.Add("Notes", EncryptionNote); return false; }
         var findings = new List<InstantUnlock>();
@@ -278,9 +315,11 @@ public static class SpreadsheetProtection
             if (type == 0x002f) return null; // FILEPASS: the remaining stream may be encrypted.
             if (type == 0x0809)
             {
+                if (stack.Count >= 64 || result.Count >= 65536) throw new FormatException("Too many BIFF substreams or nesting levels.");
                 if (len < 4 || Bin.U16(data, body) != 0x0600) throw new FormatException("Invalid BIFF8 BOF record.");
                 int kind = Bin.U16(data, body + 2);
-                var group = stack.Count > 0 ? stack.Peek() : kind is 5 or 0x10 or 0x20 or 0x40 ? new BiffProtection(pos, kind == 5) : null;
+                // Embedded charts have their own password scope; leave them unchanged in a sheet unlock.
+                var group = stack.Count == 0 && kind is 5 or 0x10 or 0x20 or 0x40 ? new BiffProtection(pos, kind == 5) : null;
                 if (stack.Count == 0 && group is not null) result.Add(group);
                 stack.Push(group);
             }
@@ -320,6 +359,9 @@ public static class SpreadsheetProtection
 
     private static async Task SaveAtomic(string source, string output, CancellationToken ct, Action<string> edit)
     {
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(ResolveLinks(source), ResolveLinks(output), comparison))
+            throw new IOException("Choose a different file name: the original file is never overwritten.");
         string temp = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, $".recoverkit-{Guid.NewGuid():N}.tmp");
         try
         {
@@ -332,5 +374,20 @@ public static class SpreadsheetProtection
             File.Move(temp, output, overwrite: true);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+
+    private static string ResolveLinks(string path, int depth = 0)
+    {
+        if (depth > 40) throw new IOException("Too many symbolic links in spreadsheet path.");
+        string full = Path.GetFullPath(path), root = Path.GetPathRoot(full)!;
+        string resolved = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string candidate = Path.Combine(resolved, part);
+            FileSystemInfo info = Directory.Exists(candidate) ? new DirectoryInfo(candidate) : new FileInfo(candidate);
+            var target = info.LinkTarget is null ? null : info.ResolveLinkTarget(returnFinalTarget: true);
+            resolved = target is null ? candidate : ResolveLinks(target.FullName, depth + 1);
+        }
+        return resolved;
     }
 }
