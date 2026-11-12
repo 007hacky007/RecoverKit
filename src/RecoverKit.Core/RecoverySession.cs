@@ -73,6 +73,10 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
 {
     public event Action<LogKind, string>? Log;
     public event Action<HashcatStatus>? Status;
+    /// <summary>GPU temperature guard paused or resumed the attack.</summary>
+#pragma warning disable CS0067 // raised once the temperature guard is implemented
+    public event Action<Hashcat.ThermalEvent>? Thermal;
+#pragma warning restore CS0067
     /// <summary>(step index, step count, description, estimated candidates).</summary>
     public event Action<int, int, string, BigInteger>? StepStarted;
 
