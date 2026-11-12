@@ -19,6 +19,8 @@ public sealed record RunRequest
     public bool UseOptimizedKernel { get; init; }
     public VolumeCredentials? VolumeCredentials { get; init; }
     public string? PasswordCachePath { get; init; }
+    /// <summary>GPU temperature guard / load limit for this run; null when off or no GPU is used.</summary>
+    public ThermalGuard? Guard { get; init; }
 }
 
 public sealed class RunResult
@@ -41,6 +43,18 @@ public sealed class HashcatRunner(HashcatTool tool)
 {
     public event Action<HashcatStatus>? StatusReceived;
     public event Action<string>? OutputLine;
+    /// <summary>The temperature guard paused or resumed hashcat.</summary>
+    public event Action<ThermalEvent>? Thermal;
+    /// <summary>Guard messages for the session log (pauses and resumes).</summary>
+    public event Action<string>? GuardMessage;
+    /// <summary>Where the guard reads temperatures while hashcat is suspended; defaults to <see cref="GpuTemperature.External"/>.</summary>
+    public ITemperatureSource? TemperatureSource
+    {
+        get => _sourceSet ? _source : GpuTemperature.External;
+        set { _source = value; _sourceSet = true; }
+    }
+    private ITemperatureSource? _source;
+    private bool _sourceSet;
 
     public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".restore");
     public static string OutFile(string dir, string session) => Path.Combine(dir, session + ".out");
@@ -66,7 +80,28 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
             a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        a.AddRange(HwmonArguments(s, r.Guard));
         return a;
+    }
+
+    /// <summary>
+    /// With the temperature guard on, hashcat's own emergency stop is set a bit above the guard
+    /// limit (limit + 10, at most 100 °C) so a stuck guard cannot overheat the GPU. Left alone when
+    /// the user passes their own --hwmon-* option (for example --hwmon-disable) as an extra argument.
+    /// </summary>
+    public static List<string> HwmonArguments(Settings s, ThermalGuard? guard)
+    {
+        if (guard is not { TemperatureGuard: true }) return [];
+        if (s.ExtraArguments.Contains("--hwmon", StringComparison.OrdinalIgnoreCase)) return [];
+        return ["--hwmon-temp-abort", ThermalGuard.AbortTemperature(guard.Limit).ToString()];
+    }
+
+    /// <summary>The guard for a hashcat run with these settings, or null when it is off or hashcat uses no GPU.</summary>
+    public static ThermalGuard? GuardFor(Settings s, IReadOnlyList<BackendDevice>? known)
+    {
+        if (s.Strategy == DeviceStrategy.CpuOnly) return null;
+        if (known is { Count: > 0 } && !known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))) return null;
+        return ThermalGuard.FromSettings(s);
     }
 
     /// <summary>-d / -D arguments derived from the GPU configuration and CPU/GPU strategy.</summary>
@@ -121,13 +156,20 @@ public sealed class HashcatRunner(HashcatTool tool)
         using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
         HashcatStatus? last = null;
         var tail = new Queue<string>();
+        ThermalController? guard = null;
 
         p.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
             DebugLog.ProcessOutput(logId, "stdout", e.Data);
             var st = HashcatStatus.TryParse(e.Data);
-            if (st is not null) { last = st; StatusReceived?.Invoke(st); return; }
+            if (st is not null)
+            {
+                last = st;
+                GpuTemperature.Record(st);
+                StatusReceived?.Invoke(guard?.Adjust(st) ?? st);
+                return;
+            }
             Remember(tail, e.Data);
             if (e.Data.Length > 0) OutputLine?.Invoke(e.Data);
         };
@@ -141,6 +183,13 @@ public sealed class HashcatRunner(HashcatTool tool)
 
         p.Start();
         TrySetPriority(p, r.Settings.Priority);
+        if (r.Guard is { Active: true } g)
+        {
+            var source = TemperatureSource;
+            guard = new ThermalController(g, p, source, m => GuardMessage?.Invoke(m), e => Thermal?.Invoke(e), s => StatusReceived?.Invoke(s));
+            if (g.TemperatureGuard && source is null)
+                DebugLog.Info("Temperature guard: no external temperature source, relying on hashcat's status");
+        }
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
 
@@ -162,10 +211,11 @@ public sealed class HashcatRunner(HashcatTool tool)
         }
 
         bool stopped = false;
-        using (ct.Register(() => { stopped = true; pumpCts.Cancel(); _ = StopAsync(p); }))
+        using (ct.Register(() => { stopped = true; guard?.BeforeStop(); pumpCts.Cancel(); _ = StopAsync(p); }))
         {
             await p.WaitForExitAsync(CancellationToken.None);
         }
+        guard?.Dispose();
         pumpCts.Cancel();
         try { await pump.WaitAsync(TimeSpan.FromSeconds(5)); } catch (TimeoutException) { }
         p.WaitForExit(); // flush async output handlers

@@ -31,6 +31,12 @@ public sealed class Settings
     public bool UseNativeCpuEngine { get; set; } = true;      // built-in CPU kernels when no GPU is used
     public string ExtraArguments { get; set; } = "";
 
+    // GPU temperature guard and load limit (all off by default)
+    public bool GpuTempGuard { get; set; }                    // pause hashcat when the hottest GPU reaches the limit
+    public int GpuTempLimit { get; set; } = 85;               // °C, 60..100
+    public int GpuTempHysteresis { get; set; } = 10;          // °C, 3..30: resume at or below limit - hysteresis
+    public int GpuDutyPercent { get; set; } = 100;            // share of time the GPU works (100 = always); rests in between
+
     public bool UseExternalScenarioFile { get; set; }
     public string? ExternalScenarioFile { get; set; }
     public string? DataPath { get; set; }

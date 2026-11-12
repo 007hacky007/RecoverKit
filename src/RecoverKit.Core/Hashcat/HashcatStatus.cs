@@ -10,6 +10,11 @@ public sealed class DeviceSpeed
     public double Speed { get; init; }
     public int Temperature { get; init; } = -1;
     public int Utilization { get; init; } = -1;
+
+    public DeviceSpeed With(double? speed = null, int? temperature = null) => new()
+    {
+        Id = Id, Name = Name, Type = Type, Speed = speed ?? Speed, Temperature = temperature ?? Temperature, Utilization = Utilization,
+    };
 }
 
 /// <summary>One line of hashcat --status-json output.</summary>
@@ -54,6 +59,15 @@ public sealed class HashcatStatus
         14 => "Aborted (finish)",
         15 => "Autodetect",
         _ => $"Status {Status}",
+    };
+
+    /// <summary>A copy with other devices, status or start time (used by the GPU temperature guard).</summary>
+    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null) => new()
+    {
+        Status = status ?? Status, GuessBase = GuessBase, GuessMod = GuessMod, GuessBasePercent = GuessBasePercent,
+        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = ProgressTotal, RestorePoint = RestorePoint,
+        ResumedFrom = ResumedFrom, Rejected = Rejected, RecoveredHashes = RecoveredHashes, TotalHashes = TotalHashes,
+        TimeStart = timeStart ?? TimeStart, EstimatedStop = EstimatedStop, Devices = devices ?? Devices,
     };
 
     public static HashcatStatus? TryParse(string line)
