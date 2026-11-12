@@ -22,6 +22,9 @@ public static class StayAttack
     private const int MinFiles = 5;
     private const int HeaderLength = 12;
 
+    /// <summary>The design's stage-0 gate: proceed only when few RNG chains explain the headers.</summary>
+    private const int MaxRngCandidates = 8;
+
     /// <summary>Whether the payload has enough entries for the attack to apply at all.</summary>
     public static bool Supports(ZipStayTarget target) => target.Entries.Count >= MinFiles;
 
@@ -50,9 +53,8 @@ public static class StayAttack
 
         foreach (var variant in Enum.GetValues<ZipRngVariant>())
         {
-            var probe = Probe(target, variant);
-            if (probe is null) continue;
-            var (solution, r) = probe.Value;
+            foreach (var (solution, r) in Probe(target, variant))
+            {
             var indices = Enumerable.Range(0, solution.MatchedFiles).ToArray();
             var files = indices.Select(i => new StayFileData { R = r[i], Stored = target.Entries[i].StoredHeader }).ToList();
 
@@ -81,6 +83,7 @@ public static class StayAttack
                 if (VerifyKeys(target, keys, r, indices, archivePath))
                     return new StayResult(keys, variant, solution.MatchedFiles);
             }
+            }
         }
 
         Report(1.0, 0);
@@ -88,16 +91,17 @@ public static class StayAttack
     }
 
     /// <summary>
-    /// Stage 0: finds an RNG chain of this variant that explains the stored headers' first bytes.
-    /// Returns the solution and the full list of implied random headers in archive order.
+    /// Stage 0: every RNG chain of this variant that explains the stored headers' first bytes,
+    /// each with the full list of implied random headers in archive order. Empty when no chain
+    /// matches; more than <see cref="MaxRngCandidates"/> co-equal chains is treated as no match
+    /// (the design's gate against wasting the search on a well-distributed RNG).
     /// </summary>
-    public static (ZipRngSolution Solution, byte[][] Headers)? Probe(ZipStayTarget target, ZipRngVariant variant)
+    public static IReadOnlyList<(ZipRngSolution Solution, byte[][] Headers)> Probe(ZipStayTarget target, ZipRngVariant variant)
     {
         var firstBytes = target.Entries.Select(e => e.StoredHeader[0]).ToList();
         var solutions = ZipRng.RecoverStates(firstBytes, variant, MinFiles);
-        return solutions.Count == 0
-            ? null
-            : (solutions[0], ZipRng.RandomHeaders(solutions[0].State, variant, target.Entries.Count));
+        if (solutions.Count == 0 || solutions.Count > MaxRngCandidates) return [];
+        return solutions.Select(s => (s, ZipRng.RandomHeaders(s.State, variant, target.Entries.Count))).ToList();
     }
 
     /// <summary>
@@ -148,14 +152,18 @@ public static class StayAttack
         {
             if (p[10] != (byte)(e.Crc >> 16) || p[11] != (byte)(e.Crc >> 24)) return false;
         }
+        // exotic compression methods cannot be CRC-verified here; the header match (and check
+        // bytes, when present) is the verification, per the design
+        if (e.Method is not (0 or 8)) return true;
         if (e.CompSize < HeaderLength || archivePath is null) return true;
+        if (e.CompSize - HeaderLength > int.MaxValue) return true;   // zip64-sized body: header match suffices
 
         // the pass-2 cipher state continues straight into the entry data
         using var fs = File.OpenRead(archivePath);
         fs.Seek(e.DataOffset + HeaderLength, SeekOrigin.Begin);
         var len = (int)(e.CompSize - HeaderLength);
         var enc = new byte[len];
-        if (fs.Read(enc, 0, len) != len) return false;
+        fs.ReadExactly(enc);
         var plain = new byte[len];
         for (int i = 0; i < len; i++)
         {

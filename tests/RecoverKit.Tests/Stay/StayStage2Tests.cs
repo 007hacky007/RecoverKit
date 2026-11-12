@@ -85,3 +85,22 @@ public class StayStage2Tests
         Assert.True(constraintCount >= 4 * files.Count, $"only {constraintCount} constraints recorded");
     }
 }
+
+
+public class StayYConstraintTests
+{
+    [Fact]
+    public void Degenerate_blo_zero_constraint_excludes_nothing()
+    {
+        // blo == 0: carry can never be 1, so a carry==0 constraint must keep every Y
+        var stay = typeof(StayStage3);
+        var bm = stay.GetMethod("BuildConstraintMask", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var mask = new ulong[1 << 18];
+        bm.Invoke(null, [new StayYConstraint(StayTables.M2, 1u << 24, AtLeast: false), mask]);
+        Assert.Equal((ulong)mask.Length * 64UL, (ulong)mask.Sum(w => System.Numerics.BitOperations.PopCount(w)));
+
+        Array.Clear(mask);
+        bm.Invoke(null, [new StayYConstraint(StayTables.M2, 1u << 24, AtLeast: true), mask]);
+        Assert.Equal(0UL, (ulong)mask.Sum(w => System.Numerics.BitOperations.PopCount(w)));
+    }
+}

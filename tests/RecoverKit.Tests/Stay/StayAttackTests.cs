@@ -1,3 +1,4 @@
+using System.Text;
 using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Formats;
 using Xunit;
@@ -81,6 +82,29 @@ public class StayAttackTests
             Assert.NotNull(result);
             Assert.Equal(5, result!.ExplainedFiles);
             Assert.Equal(new ZipStayKeys(zip.X, zip.Y, zip.Z), result.Keys);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task Run_recovers_keys_with_exotic_method_entries()
+    {
+        // method 12 among the explained files: no CRC verification possible, header-only match
+        var specs = Enumerable.Range(0, 5).Select(i => new GeneratedEntry
+        {
+            Name = $"file{i:D2}.bin",
+            Content = Encoding.ASCII.GetBytes($"exotic e2e {i}"),
+            Method = i == 2 ? 12 : i % 2 == 0 ? 0 : 8,
+            ExoticCompData = i == 2 ? "BZIP-ISH-COMPRESSED-BYTES"u8.ToArray() : null,
+        }).ToList();
+        var zip = ZipStayArchive.Generate(specs, StayTestZip.Password, ZipRngVariant.Msvc, 0x91c3d5e7);
+        var (path, target) = StayTestZip.ExtractToTemp(zip);
+        try
+        {
+            var result = await StayAttack.RunAsync(target.StayZip!, CancellationToken.None, archivePath: path);
+            Assert.NotNull(result);
+            Assert.Equal(new ZipStayKeys(zip.X, zip.Y, zip.Z), result!.Keys);
+            Assert.Equal(5, result.ExplainedFiles);
         }
         finally { File.Delete(path); }
     }

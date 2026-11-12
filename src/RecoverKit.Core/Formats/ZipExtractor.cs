@@ -69,11 +69,12 @@ public static class ZipExtractor
     {
         var usable = enc.Where(e => e.AesStrength == 0 && e.CompSize >= 12).ToList();
         if (usable.Count < 2) return null;
-        try
+        var entries = new List<ZipStayEntry>();
+        foreach (var e in usable)
         {
-            return new ZipStayTarget
+            try
             {
-                Entries = usable.Select(e => new ZipStayEntry
+                entries.Add(new ZipStayEntry
                 {
                     Name = e.Name,
                     StoredHeader = ReadEntryData(s, e, delta)[..12],
@@ -84,13 +85,15 @@ public static class ZipExtractor
                     UncompSize = e.UncompSize,
                     LocalOffset = e.LocalOffset,
                     DataOffset = EntryDataOffset(s, e, delta),
-                }).ToList(),
-            };
+                });
+            }
+            catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException or OverflowException or ArgumentOutOfRangeException)
+            {
+                // a truncated/corrupt entry is skipped; it must not break the normal extraction path
+            }
         }
-        catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException)
-        {
-            return null;   // a truncated/corrupt entry must not break the normal extraction path
-        }
+        if (entries.Count < 2) return null;
+        return new ZipStayTarget { Entries = entries };
     }
 
     private static HashTarget WinZipAes(Stream s, ZipEntry e, long delta, Detection d)

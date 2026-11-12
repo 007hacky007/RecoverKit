@@ -128,7 +128,8 @@ public static class ZipStayDecryptor
     /// <summary>Decrypts one classic ZipCrypto entry if the keys verifiably explain it; null to pass it through.</summary>
     private static byte[]? TryDecrypt(Stream src, ZipExtractor.ZipEntry e, long delta, ZipStayKeys keys)
     {
-        if (!e.Encrypted || e.AesStrength != 0 || (e.Flags & 0x40) != 0 || e.CompSize < HeaderLength) return null;
+        if (!e.Encrypted || e.AesStrength != 0 || (e.Flags & 0x40) != 0 || e.CompSize < HeaderLength
+            || e.CompSize > int.MaxValue) return null;
         try
         {
             var (dataStart, _, _) = LocalHead(src, e, delta);
@@ -142,6 +143,10 @@ public static class ZipStayDecryptor
                 plain[i] = (byte)(enc[i] ^ Keystream(k2));
                 Update(ref k0, ref k1, ref k2, plain[i]);
             }
+
+            // data-descriptor + exotic method: the check bytes are time-based and the CRC cannot be
+            // checked, so nothing about this entry is verifiable — leave it encrypted
+            if ((e.Flags & 8) != 0 && e.Method is not (0 or 8)) return null;
 
             // check bytes: the high CRC word, except for data-descriptor entries (time-based there)
             if ((e.Flags & 8) == 0)

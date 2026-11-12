@@ -362,7 +362,7 @@ internal static class StayStage2
             var s = stage1[si];
 
             // per (Ch, Cl): per file, per option: doubled m2 -> position-2 keystream tables
-            var tables = new List<(byte[] E1, byte[] E2, byte M1E1, byte M1E2)>[files.Count][];
+            var tables = new List<(byte[] E1, byte[] E2, byte M1E1, byte M1E2)>[4][];   // indexed by Cl (2 bits)
             for (int cl = 0; cl < 4; cl++)
             {
                 uint c24 = ComposeC24(s.Cv, (byte)ch, (byte)cl);
@@ -497,7 +497,12 @@ internal static class StayStage2
         return new StayYConstraint(StayTables.M2, Threshold(blo), carry);
     }
 
-    private static uint Threshold(uint blo) => (1u << 24) - blo & 0xffffff;
+    /// <summary>
+    /// Carry-bit threshold: carry = 1 iff lo(Y-part) + blo >= 2^24, i.e. lo(Y-part) >= 2^24 - blo.
+    /// blo == 0 (degenerate) maps to 2^24 so that "below" is all of Z_2^24 (carry is never 1)
+    /// and "at least" is empty.
+    /// </summary>
+    private static uint Threshold(uint blo) => blo == 0 ? 1u << 24 : (1u << 24) - blo;
 }
 
 // ---------------------------------------------------------------- stage 3

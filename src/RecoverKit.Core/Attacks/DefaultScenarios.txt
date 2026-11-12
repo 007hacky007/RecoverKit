@@ -50,6 +50,17 @@ ZIPC
 /a:m /1:?l?u /m:?1?l?l?l?l?d?d
 /a:r /r:*2s /d:*default
 
+Fast formats: PDF R2-R5
+PDF2 PDF3 PDF5
+/a:b /c:a /min:1 /max:5
+/a:d /d:*default
+/a:b /c:d /min:6 /max:10
+/a:b /c:sd /min:6 /max:6
+/a:r /r:*1a /d:*default
+/a:b /c:s /min:7 /max:7
+/a:m /1:?l?u /m:?1?l?l?l?l?d?d
+/a:r /r:*2s /d:*default
+
 Quick brute force, 1-5 characters
 NONE
 /a:b /c:a /min:1 /max:3

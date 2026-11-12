@@ -206,6 +206,30 @@ public class ZipStayDecryptorTests
     }
 
     [Fact]
+    public void Decryptor_passes_unverifiable_descriptor_exotic_entries_through()
+    {
+        // data-descriptor + exotic method: nothing can be verified, so it stays encrypted
+        var specs = new List<GeneratedEntry>
+        {
+            new() { Name = "file00.txt", Content = "plain stored"u8.ToArray(), Method = 0 },
+            new() { Name = "file01.txt", Content = "plain deflated"u8.ToArray(), Method = 8 },
+            new() { Name = "dd12.bin", Content = "payload"u8.ToArray(), Method = 12, DataDescriptor = true,
+                    ExoticCompData = "EXOTICCOMP"u8.ToArray() },
+        };
+        var (path, zip) = WriteArchive(specs);
+        try
+        {
+            var copy = WriteCopy(zip, path);
+            var raw = File.ReadAllBytes(copy);
+            var dd = RawEntry(raw, "dd12.bin");
+            Assert.Equal((ushort)9, (ushort)(dd.Flags & 0x9));   // still encrypted, descriptor intact
+            var orig = RawEntry(zip.Archive, "dd12.bin");
+            Assert.Equal(orig.Data, dd.Data);
+        }
+        finally { File.Delete(path); File.Delete(Path.ChangeExtension(path, ".dec.zip")); }
+    }
+
+    [Fact]
     public void DecryptEntry_drops_header_and_decrypts_body()
     {
         var (path, zip) = WriteArchive(MixedSpecs(2));

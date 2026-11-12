@@ -141,3 +141,51 @@ public class ZipStayTargetTests
             Assert.Equal(zip.StoredHeaders[i], payload.Entries[i].StoredHeader);
     }
 }
+
+
+public class ZipStayCorruptEntryTests
+{
+    [Fact]
+    public void Payload_skips_truncated_entries_and_keeps_the_rest()
+    {
+        // file 2's central directory lies about a much larger compressed size than the data present
+        var specs = Enumerable.Range(0, 6).Select(i => new GeneratedEntry
+        {
+            Name = $"file{i:D2}.txt",
+            Content = System.Text.Encoding.ASCII.GetBytes($"corrupt-entry test {i} {new string('q', 50 + i * 5)}"),
+            Method = 8,
+            ForceCompSize = i == 2 ? 7000 : null,   // inflated: 50 real bytes claimed as 7000
+        }).ToList();
+        var zip = ZipStayArchive.Generate(specs, StayTestZip.Password, ZipRngVariant.Msvc, 0x33aa11cc);
+        var (path, target) = StayTestZip.ExtractToTemp(zip);
+        try
+        {
+            var payload = target.StayZip!;
+            Assert.Equal(5, payload.Entries.Count);
+            Assert.DoesNotContain(payload.Entries, e => e.Name == "file02.txt");
+            Assert.Equal("file00.txt", payload.Entries[0].Name);   // archive order preserved
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Payload_skips_zip64_sized_entries()
+    {
+        var specs = Enumerable.Range(0, 6).Select(i => new GeneratedEntry
+        {
+            Name = $"file{i:D2}.txt",
+            Content = System.Text.Encoding.ASCII.GetBytes($"huge-entry test {i}"),
+            Method = 0,
+            ForceCompSize = i == 4 ? 3_000_000_000L : null,   // claimed size overflows int
+        }).ToList();
+        var zip = ZipStayArchive.Generate(specs, StayTestZip.Password, ZipRngVariant.Msvc, 0x44bb22dd);
+        var (path, target) = StayTestZip.ExtractToTemp(zip);
+        try
+        {
+            var payload = target.StayZip!;
+            Assert.Equal(5, payload.Entries.Count);
+            Assert.DoesNotContain(payload.Entries, e => e.Name == "file04.txt");
+        }
+        finally { File.Delete(path); }
+    }
+}

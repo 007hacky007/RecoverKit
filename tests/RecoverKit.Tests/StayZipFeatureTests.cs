@@ -71,6 +71,12 @@ public class StayZipFeatureTests
         Assert.Contains(zip.Steps, s => s.Kind == AttackKind.BruteForce);   // password attacks still follow
         // no other scenario claims ZIPC
         Assert.Single(list, s => s.DefaultFor.Contains("ZIPC"));
+
+        // the old fast-formats defaults survive for PDF R2-R5
+        var pdf = list.Single(s => s.DefaultFor.Contains("PDF2"));
+        Assert.Contains("PDF3", pdf.DefaultFor);
+        Assert.Contains("PDF5", pdf.DefaultFor);
+        Assert.Equal(AttackKind.BruteForce, pdf.Steps[0].Kind);
     }
 
     [Fact]
