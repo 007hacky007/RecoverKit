@@ -141,6 +141,7 @@ try
             if (d.Target is null) return 2;
 
             var steps = BuildSteps(argv, d.Target);
+            if (argv.Contains("--no-stay")) steps = steps.Where(s => s.Kind != AttackKind.StayZip).ToList();
             // Same device detection as the GUI, so the CPU/GPU strategy and built-in engine decisions match.
             var devices = await tool.DevicesAsync();
             foreach (var dev in devices)
@@ -166,6 +167,7 @@ try
             Console.WriteLine($"RESULT: {res.Outcome}");
             foreach (var p in res.Passwords) Console.WriteLine($"PASSWORD: {p}");
             if (res.Key is not null) Console.WriteLine($"KEY: {res.Key}");
+            if (res.DecryptedCopy is not null) Console.WriteLine($"DECRYPTED: {res.DecryptedCopy}");
             if (res.Error is not null) Console.WriteLine($"ERROR: {res.Error}");
             return res.Outcome is SessionOutcome.Found or SessionOutcome.FoundInCache ? 0 : 1;
         }
