@@ -278,6 +278,23 @@ notes are taken from it, and the release job fails if the section is missing.
 
 ## Technical notes
 
+- Access database recovery uses `InstantUnlock` with a password and no save action or hashcat
+  target. Jet 3/4 header bytes at 0x18 use fixed-key RC4 (key c7da396b); the password is at
+  0x42 (20 code-page bytes for Jet 3, 40 UTF-16LE bytes for Jet 4). Jet 4 additionally XORs
+  the password with the repeating little-endian int32 obtained by truncating the decoded
+  creation-date double at 0x72. Layout references: [mdbtools HACKING.md](https://github.com/mdbtools/mdbtools/blob/dev/HACKING.md)
+  and Jackcess `JetFormat` / `DatabaseImpl.getDatabasePassword`. Tests use Apache-licensed
+  header excerpts plus independent synthetic vectors. Full Jackcess Encrypt `pwd-set.mdb`
+  was checked with the CLI, Jackcess 4.0.7 and an independent Python reader: all recovered
+  `testpassword`. No hashcat mode or attack scenario applies. Password clearing is omitted:
+  Jet 4 also requires re-masking stored security identifiers, so changing the header alone
+  does not produce a valid Access file. Workgroup (.mdw) user-level security is unsupported.
+  ACE (.accdb) encryption is recognized via the header encoding key and remains unsupported.
+  Its encryption descriptor starts after a two-byte length at 0x299 and can use Office
+  RC4, CryptoAPI, standard AES or agile encryption. Supporting it needs a bounded descriptor
+  parser and verified password-verifier extraction; the existing Office entry point expects
+  compound-file streams and cannot be used directly. ACE page decryption also differs from
+  OOXML package decryption. Never send ACE password fields through the reversible Jet path.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
