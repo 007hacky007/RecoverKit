@@ -1040,6 +1040,7 @@ public sealed partial class MainWindow : Window
         if (_settings.PreventScreensaver) Platform.KeepAwake(true);
 
         var session = new RecoverySession(_hashcat!, _settings) { Devices = _devices };
+        session.ConfirmElevation = r => Dispatcher.UIThread.InvokeAsync(() => PowerLimitWindow.AskAsync(this, r));
         session.Log += (k, m) => Log(k, m);
         session.StepStarted += (i, n, desc, ks) => Dispatcher.UIThread.Post(() =>
         {
