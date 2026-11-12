@@ -13,8 +13,9 @@ permissions:
 env:
   AVALONIA_TELEMETRY_OPTOUT: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-  # Release version: the tag without its "v"; other builds use the run number.
-  VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v0.0.{0}', github.run_number) }}
+  # Release version: the tag without its "v"; other builds use the run number. Not named VERSION:
+  # MSBuild reads environment variables as properties, and Version=v1.2.0 breaks NuGet restore.
+  RK_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v0.0.{0}', github.run_number) }}
 
 jobs:
   windows:
@@ -34,7 +35,7 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          "version=$($env:VERSION.Substring(1))" >> $env:GITHUB_OUTPUT
+          "version=$($env:RK_VERSION.Substring(1))" >> $env:GITHUB_OUTPUT
 
       - name: Build native kernels
         shell: bash
@@ -79,7 +80,7 @@ jobs:
 
       - name: Version
         id: ver
-        run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RK_VERSION#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build native kernels
         run: sh native/build.sh
