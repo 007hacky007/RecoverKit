@@ -148,7 +148,8 @@ recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an 
 
 `--new` ignores a saved session and starts over; `--no-potfile` disables the cache.
 `--temp-limit 85 [--temp-hysteresis 10]` turns on the GPU temperature guard and `--gpu-duty 50`
-the GPU load limit for one run (see GPU temperature guard below).
+the GPU load limit for one run, `--power-limit <watts>` the NVIDIA power limit (see GPU temperature
+guard below; the CLI prints the explanation and asks y/n/c before the system prompt).
 
 Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
 containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
@@ -210,6 +211,31 @@ to the running hashcat process.
   (that needs administrator rights and vendor tools); the workload slider (`-w`) is separate.
 - Status passed to the UI: thermal pause time is added to `TimeStart` so the average speed ignores
   it; after a resume the pre-pause speed is shown until hashcat's own averaged figure recovers.
+
+## NVIDIA power limit
+
+Optional (`Settings.GpuPowerLimit`, `GpuPowerWatts` by nvidia-smi GPU index), Windows and Linux
+only, and shown only when nvidia-smi reports an adjustable limit
+(`--query-gpu=index,name,power.min_limit,power.max_limit,power.default_limit,power.limit`, no admin
+rights needed). Setting it (`nvidia-smi -i <gpu> -pl <watts>`) requires an administrator, and
+RecoverKit must not run elevated (elevation breaks the Intel CPU OpenCL runtime), so:
+
+- `RecoverySession.ConfirmElevation` is asked first with `PowerLimitRequest.Explanation`; the GUI
+  shows `PowerLimitWindow`, the CLI asks on the console. Continue / run without / cancel.
+- `PowerLimiter` starts the same executable as `power-helper --pid <RecoverKit pid> --gpu <i>
+  --watts <w> ...` elevated: `runas` (UAC) on Windows, `/usr/bin/pkexec` on Linux. Declining
+  falls back to running without the limit, with a log line.
+- The helper (`PowerHelper.Run`) accepts only those integer options, uses only nvidia-smi from the
+  driver's fixed locations (`System32`, `Program Files\NVIDIA Corporation\NVSMI`, `/usr/bin`,
+  `/usr/local/bin`), checks every value against the range nvidia-smi reports, remembers the
+  current limits, sets the new ones and waits for RecoverKit to exit or to ask it to stop
+  (Windows: named events `Local\RecoverKit.PowerLimit.<pid>.*` created by RecoverKit; Linux:
+  stdin closing). Then it restores the remembered limits. A limit set by nvidia-smi does not
+  survive a reboot or driver reload either.
+- Debug builds: `RECOVERKIT_POWER_SIMULATE=1` pretends there is a GPU and the helper (`--simulate`,
+  refused by release builds) only logs the nvidia-smi calls to `%TEMP%\recoverkit-power-simulation.log`.
+  The Windows flow (UAC launch, apply, restore at the end and after killing RecoverKit) was
+  verified this way; pkexec on Linux and a real NVIDIA GPU were not available for testing.
 
 ## Continuous integration
 

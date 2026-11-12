@@ -160,6 +160,12 @@ quickest guesses.
 - Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
   cooled by the amount you choose) and can let the GPU work only part of the time to cut heat and
   noise. Both are off by default. Paused attacks continue exactly where they stopped.
+- With an NVIDIA GPU on Windows or Linux you can also set a real power limit in watts. Only an
+  administrator may change it, so at the start of each attack RecoverKit explains this and then the
+  system asks for permission. A small helper changes only the power limit and puts the previous
+  value back when the attack ends (also if RecoverKit crashes); RecoverKit itself never runs as
+  administrator. If you decline, the attack runs without the limit. Not available on Macs and for
+  AMD or Intel GPUs.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
