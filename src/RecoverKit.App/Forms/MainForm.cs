@@ -70,7 +70,8 @@ public sealed class MainForm : Form
         {
             if (e.LinkText is not { } l) return;
             if (l.Contains(ClearCacheLink, StringComparison.Ordinal)) ClearPasswordCacheForCurrent();
-            else Shell(l);
+            // The pane also shows text taken from the opened file, so only open web links to known sites.
+            else if (IsTrustedLink(l)) Shell(l);
         };
         DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
         DragDrop += (_, e) =>
@@ -628,7 +629,12 @@ public sealed class MainForm : Form
                     using var dlg = new PasswordFoundForm(result.Passwords);
                     dlg.ShowDialog(this);
                 }
-                if (result.Key is { } k1) Line($"Encryption key: {k1} (found by key search; the password above derives the same key, so it opens the document).", Color.DimGray);
+                if (result.Key is { } k1)
+                {
+                    Write("Encryption key: ", Color.DimGray);
+                    Write(k1, Color.DimGray, log: false);
+                    Line(" (found by key search; the password above derives the same key, so it opens the document).", Color.DimGray);
+                }
                 if (result.Outcome == SessionOutcome.FoundInCache) WriteLink("Clear password cache", ClearCacheLink);
                 if (_settings.AutoDecrypt && result.Outcome == SessionOutcome.Found && result.Passwords.Count > 0)
                     AutoDecrypt(det, result.Passwords[0]);
@@ -636,7 +642,8 @@ public sealed class MainForm : Form
                 break;
             case SessionOutcome.KeyRecovered:
                 Line();
-                Log(LogKind.Success, $"Encryption key recovered: {result.Key}");
+                Write("Encryption key recovered: ", Color.FromArgb(0, 130, 0), true);
+                Write((result.Key ?? "") + Environment.NewLine, Color.FromArgb(0, 130, 0), true, log: false);
                 Line("No password of up to 8 printable characters derives this key. The key is kept in the key cache; " +
                      "a longer equivalent password can be searched by running the key search again with a GPU.", Color.DimGray);
                 Execute(_settings.ExecuteOnSuccess);
@@ -739,6 +746,12 @@ public sealed class MainForm : Form
     }
 
     private const string ClearCacheLink = "recoverkit:clear-password-cache";
+
+    private static readonly string[] TrustedHosts = ["github.com", "hashcat.net", "www.intel.com", "intel.com", "files.pythonhosted.org", "www.7-zip.org"];
+
+    internal static bool IsTrustedLink(string link) =>
+        Uri.TryCreate(link.Trim(), UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps
+        && TrustedHosts.Contains(u.Host, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Appends a clickable link with friendly text (RTF hyperlink field).</summary>
     private void WriteLink(string text, string target)

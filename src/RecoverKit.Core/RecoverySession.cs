@@ -245,7 +245,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         }
 
         if (rc4 is not null)
-            Log?.Invoke(LogKind.Info, $"Encryption key for this document was recovered earlier ({rc4}); searching for a password that produces it.");
+            Log?.Invoke(LogKind.Info, "Encryption key for this document was recovered earlier; searching for a password that produces it.");
         else
         {
             var r1 = await Run(modes.KeyMode, hashFile, attack, 0, true);
@@ -262,7 +262,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             rc4 = r1.RawPasswords.Select(KeySearch.KeyHex).FirstOrDefault(k => k is { Length: 10 });
             if (rc4 is null) return new SessionResult { Outcome = SessionOutcome.Error, Error = "hashcat reported an unexpected key format." };
             if (!settings.DontUseKeyCache) KeyCache.Store(settings.KeyCachePath, hashLine, rc4);
-            Log?.Invoke(LogKind.Success, $"Encryption key recovered: {rc4}");
+            Log?.Invoke(LogKind.Success, "Encryption key recovered.");    // the key itself is in the result, never in the log
         }
 
         // Collider #2: a password that derives this key opens the document in its usual application.

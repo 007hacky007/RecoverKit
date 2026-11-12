@@ -152,6 +152,7 @@ try
             persisted.Save();
             Console.WriteLine($"RESULT: {res.Outcome}");
             foreach (var p in res.Passwords) Console.WriteLine($"PASSWORD: {p}");
+            if (res.Key is not null) Console.WriteLine($"KEY: {res.Key}");
             if (res.Error is not null) Console.WriteLine($"ERROR: {res.Error}");
             return res.Outcome is SessionOutcome.Found or SessionOutcome.FoundInCache ? 0 : 1;
         }
