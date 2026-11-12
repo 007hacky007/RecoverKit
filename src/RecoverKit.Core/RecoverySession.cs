@@ -173,7 +173,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 state.Restorable = attack.CanRestore;
                 state.Save(settings);
 
-                bool optimized = settings.OptimizedKernels && spec.Kind != AttackKind.Dictionary && MaxLen(spec) <= 27
+                bool optimized = settings.OptimizedKernels && CanUseOptimizedKernel(mode, spec)
                                  && (await tool.ModeInfoAsync(mode))?.HasOptimizedKernel == true;
 
                 var request = new RunRequest
@@ -302,6 +302,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 return new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = rc4, Error = r2.Error };
         }
     }
+
+    internal static bool CanUseOptimizedKernel(int mode, AttackSpec spec)
+        => spec.Kind != AttackKind.Dictionary && MaxLen(spec) <= (mode is 23700 or 23800 ? 20 : 27);
 
     private static int MaxLen(AttackSpec s) => s.Kind switch
     {

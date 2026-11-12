@@ -291,7 +291,7 @@ public sealed class WizardWindow : Window
     /// <summary>Optional per-format options shown on the file-info page (RAR3, ...).</summary>
     private Control? FormatSpecificGroup()
     {
-        if (_target.FormatId != "RAR3") return null;
+        if (_target.FormatId != "RAR3" || !_target.Modes.Contains(12500)) return null;
         var rbInvalid = new RadioButton { GroupName = "rar3", Content = "Treat PPM blocks as invalid", IsChecked = !Rar3ValidateAllBlocks };
         var rbAll = new RadioButton { GroupName = "rar3", Content = "Validate all blocks (use this if unsure)", IsChecked = Rar3ValidateAllBlocks };
         rbAll.IsCheckedChanged += (_, _) => Rar3ValidateAllBlocks = rbAll.IsChecked == true;

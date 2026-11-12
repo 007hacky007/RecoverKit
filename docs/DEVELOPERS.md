@@ -189,8 +189,15 @@ that version.
 
 ## Technical notes
 
-- RAR 3.x recovery covers archives with encrypted file names (`-hp`, hashcat 12500). Archives
-  with encrypted data only need an external `$RAR3$*1*` extraction.
+- RAR 3.x recovery covers encrypted file names (`-hp`, hashcat 12500) and visible file names
+  (`-p`, hashcat 23700 for stored files or 23800 for compressed files). Data-only extraction
+  prefers entries with at least eight unpacked bytes, then stored entries, then smaller entries.
+  Shorter entries can produce false password matches and are flagged for verification. Split files
+  and entries depending on earlier solid files are skipped. The first file in a solid archive
+  can be used. The pinned hashcat version
+  accepts at most 327,520 encrypted bytes and 655,360 unpacked bytes per selected file.
+  Data-only recovery uses hashcat on both CPU and GPU; the built-in RAR kernel handles `-hp` only.
+  Only the selected file's password is recovered; other entries can have different passwords.
 - The per-user CPU runtime is not used when RecoverKit runs as administrator: the OpenCL loader
   ignores per-process driver lists in elevated processes on purpose, and RecoverKit does not register
   a user-writable DLL system-wide.
