@@ -191,8 +191,9 @@ public sealed class HybridRunner
                 cpuSpeed = job.CpuSpeed;
                 gpuSpeed = job.GpuSpeed;
                 if (job.GpuFailed) gpuAlive = false;
-                if (job.GpuSpeedMeasured) s.GpuSpeedByMode[r.Mode] = gpuSpeed;
-                if (job.CpuSpeedMeasured) s.CpuSpeedByMode[r.Mode] = cpuSpeed;
+                // Remembered for the next attack's first split, once measured for a while (not a warm-up).
+                if (job.GpuSpeedMeasured && job.GpuSamples >= 5) s.GpuSpeedByMode[r.Mode] = gpuSpeed;
+                if (job.CpuSpeedMeasured && job.CpuSamples >= 10) s.CpuSpeedByMode[r.Mode] = cpuSpeed;
                 if (job.StartupMeasured) s.GpuStartupByMode[r.Mode] = _startup;
                 switch (outcome)
                 {
@@ -262,6 +263,8 @@ public sealed class HybridRunner
         public double GpuSpeed { get; private set; }
         public bool GpuSpeedMeasured { get; private set; }
         public bool CpuSpeedMeasured { get; private set; }
+        public int CpuSamples { get; private set; }
+        public int GpuSamples { get { lock (_lock) return _gpuStatuses; } }
         public bool StartupMeasured { get; private set; }
         private Stopwatch? _hcStarted;
         public bool GpuFailed { get { lock (_lock) return _gpuDead; } }
@@ -380,6 +383,7 @@ public sealed class HybridRunner
                         double sample = (cpuDone - lastCpuDone) / dt;
                         CpuSpeed = CpuSpeedMeasured ? 0.7 * CpuSpeed + 0.3 * sample : sample;
                         CpuSpeedMeasured = true;
+                        CpuSamples++;
                     }
                     lastCpuDone = cpuDone;
                     lastTick.Restart();
