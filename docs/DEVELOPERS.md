@@ -158,6 +158,9 @@ recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an 
 ```
 
 `--new` ignores a saved session and starts over; `--no-potfile` disables the cache.
+`--temp-limit 85 [--temp-hysteresis 10]` turns on the GPU temperature guard and `--gpu-duty 50`
+the GPU load limit for one run, `--power-limit <watts>` the NVIDIA power limit (see GPU temperature
+guard below; the CLI prints the explanation and asks y/n/c before the system prompt).
 
 Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
 containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
@@ -188,6 +191,62 @@ charset, `/u:` user charset, `/l:` national alphabet, `/m:` mask, `/ms:` mask sy
 `/min:` `/max:` lengths, `/1:`..`/8:` custom mask charsets, `/r:` rules (`*1s *1a *1c *2s
 *2a *3s` or a file), `/d:` dictionary (up to four; `*default` = configured default dictionary).
 
+
+## GPU temperature guard and load limit
+
+Optional, off by default (`Settings.GpuTempGuard`, `GpuTempLimit`, `GpuTempHysteresis`,
+`GpuDutyPercent`), and only for hashcat runs that use a GPU; the built-in CPU engine is never
+paused. The decisions live in `ThermalGuard` (pure, unit tested); `ThermalController` applies them
+to the running hashcat process.
+
+- Temperature: the hottest GPU from hashcat's `--status-json` (`temp`, NVML/ADL/sysfs). hashcat
+  reports -1 on Apple Silicon, so on those Macs the die and GPU sensors are read through the IOKit
+  HID event system (`AppleSiliconSensors`, no admin rights). With NVIDIA, `nvidia-smi` is used while
+  hashcat is suspended. Without any reading while paused the guard resumes after 90 s and lets the
+  next hashcat reading decide. Pause at `limit`, resume at `limit - hysteresis`. With the guard on,
+  `--hwmon-temp-abort` is set to limit + 10 (max 100) as a safety net, unless the extra arguments
+  already contain a `--hwmon` option.
+- Pausing suspends the hashcat process (SIGSTOP/SIGCONT, `NtSuspendProcess` on Windows). Measured
+  on an M1 Pro with a slow hash: GPU utilization (ioreg) fell from 99 % to about 10 % within 6 s,
+  the die cooled 3.6 °C in 28 s, and after SIGCONT the attack went on with no loss. Alternatives
+  that were tested and rejected: hashcat's `p` key works through a redirected stdin on macOS, but
+  hashcat checks for a pause only between batches, so with PBKDF2 the GPU stayed at 100 % for the
+  whole 90 s "pause"; on Windows `tty_getchar` uses `WaitForSingleObject`/`ReadConsoleInput`,
+  which do not work on a pipe, and stdin-fed attacks have no key thread at all. A checkpoint stop
+  plus `--restore` redoes the unfinished batch (minutes for slow hashes) and the kernel start-up.
+  The GPU finishes work already queued, a few seconds, so this does not trip driver watchdogs
+  (those limit a single kernel's run time). A user stop resumes the process first, then sends the
+  usual Ctrl+C/SIGINT, so the restore file is written as before.
+- Load limit: the GPU works `GpuDutyPercent` of every 60 s cycle and is suspended for the rest.
+  Speeds are reported scaled by that share so the ETA stays right. It does not cap peak power
+  (that needs administrator rights and vendor tools); the workload slider (`-w`) is separate.
+- Status passed to the UI: thermal pause time is added to `TimeStart` so the average speed ignores
+  it; after a resume the pre-pause speed is shown until hashcat's own averaged figure recovers.
+
+## NVIDIA power limit
+
+Optional (`Settings.GpuPowerLimit`, `GpuPowerWatts` by nvidia-smi GPU index), Windows and Linux
+only, and shown only when nvidia-smi reports an adjustable limit
+(`--query-gpu=index,name,power.min_limit,power.max_limit,power.default_limit,power.limit`, no admin
+rights needed). Setting it (`nvidia-smi -i <gpu> -pl <watts>`) requires an administrator, and
+RecoverKit must not run elevated (elevation breaks the Intel CPU OpenCL runtime), so:
+
+- `RecoverySession.ConfirmElevation` is asked first with `PowerLimitRequest.Explanation`; the GUI
+  shows `PowerLimitWindow`, the CLI asks on the console. Continue / run without / cancel.
+- `PowerLimiter` starts the same executable as `power-helper --pid <RecoverKit pid> --gpu <i>
+  --watts <w> ...` elevated: `runas` (UAC) on Windows, `/usr/bin/pkexec` on Linux. Declining
+  falls back to running without the limit, with a log line.
+- The helper (`PowerHelper.Run`) accepts only those integer options, uses only nvidia-smi from the
+  driver's fixed locations (`System32`, `Program Files\NVIDIA Corporation\NVSMI`, `/usr/bin`,
+  `/usr/local/bin`), checks every value against the range nvidia-smi reports, remembers the
+  current limits, sets the new ones and waits for RecoverKit to exit or to ask it to stop
+  (Windows: named events `Local\RecoverKit.PowerLimit.<pid>.*` created by RecoverKit; Linux:
+  stdin closing). Then it restores the remembered limits. A limit set by nvidia-smi does not
+  survive a reboot or driver reload either.
+- Debug builds: `RECOVERKIT_POWER_SIMULATE=1` pretends there is a GPU and the helper (`--simulate`,
+  refused by release builds) only logs the nvidia-smi calls to `%TEMP%\recoverkit-power-simulation.log`.
+  The Windows flow (UAC launch, apply, restore at the end and after killing RecoverKit) was
+  verified this way; pkexec on Linux and a real NVIDIA GPU were not available for testing.
 
 ## Continuous integration
 

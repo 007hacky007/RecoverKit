@@ -9,6 +9,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // The elevated NVIDIA power limit helper: no window, no log (see PowerLimiter).
+        if (args.Length > 0 && args[0] == Core.Hashcat.PowerHelper.Command) return Core.Hashcat.PowerHelper.Run(args);
         DebugLog.Start(MainWindow.AppName, MainWindow.AppVersion, args);
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {

@@ -74,13 +74,17 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     public event Action<LogKind, string>? Log;
     public event Action<HashcatStatus>? Status;
     /// <summary>GPU temperature guard paused or resumed the attack.</summary>
-#pragma warning disable CS0067 // raised once the temperature guard is implemented
     public event Action<Hashcat.ThermalEvent>? Thermal;
-#pragma warning restore CS0067
     /// <summary>(step index, step count, description, estimated candidates).</summary>
     public event Action<int, int, string, BigInteger>? StepStarted;
 
     public IReadOnlyList<BackendDevice>? Devices { get; set; }
+
+    /// <summary>
+    /// Asked before RecoverKit requests administrator rights for the NVIDIA power limit, with the
+    /// explanation to show. Without it (or on "without power limit") the attack runs unlimited.
+    /// </summary>
+    public Func<PowerLimitRequest, Task<ElevationChoice>>? ConfirmElevation { get; set; }
 
     public PlannerContext PlannerContext => new()
     {
@@ -107,10 +111,55 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             }
         }
 
+        var power = await StartPowerLimitAsync(ct);
+        if (power.Cancelled) return new SessionResult { Outcome = SessionOutcome.Stopped };
+        try { return await RunStepsAsync(target, filePath, resume, key, potfile, hashFile, steps, ct); }
+        finally
+        {
+            if (power.Session is not null)
+            {
+                power.Session.Dispose();
+                Log?.Invoke(LogKind.Info, "GPU power limit restored.");
+            }
+        }
+    }
+
+    /// <summary>Applies the optional NVIDIA power limit for the whole attack, after the user saw why admin rights are needed.</summary>
+    private async Task<(PowerLimitSession? Session, bool Cancelled)> StartPowerLimitAsync(CancellationToken ct)
+    {
+        if (!settings.GpuPowerLimit || !HashcatRunner.UsesGpu(settings, Devices))
+            return (null, false);
+        var request = NvidiaPower.BuildRequest(settings, await PowerLimiter.QueryAsync());
+        if (request is null) return (null, false);
+        var choice = ConfirmElevation is null ? ElevationChoice.WithoutPowerLimit : await ConfirmElevation(request);
+        if (choice == ElevationChoice.Cancel) return (null, true);
+        if (choice == ElevationChoice.WithoutPowerLimit)
+        {
+            Log?.Invoke(LogKind.Warning, "Running without the GPU power limit.");
+            return (null, false);
+        }
+        var (session, error) = await PowerLimiter.StartAsync(request, ct);
+        if (session is null)
+        {
+            Log?.Invoke(LogKind.Warning, $"GPU power limit not applied ({error}); running without it.");
+            return (null, false);
+        }
+        Log?.Invoke(LogKind.Info, "GPU power limit set: " +
+            string.Join(", ", request.Targets.Select(t => $"{PowerLimitRequest.Watts(t.Watts)} for {t.Name}")) + ".");
+        return (session, false);
+    }
+
+    private async Task<SessionResult> RunStepsAsync(HashTarget target, string filePath, SessionState? resume, string key,
+        string potfile, string hashFile, IReadOnlyList<AttackSpec> steps, CancellationToken ct)
+    {
         var state = resume ?? new SessionState { FilePath = filePath, Key = key, Modes = target.Modes.ToList(), Steps = steps.ToList() };
         var runner = new HashcatRunner(tool) { KnownDevices = Devices };
         runner.StatusReceived += s => Status?.Invoke(s);
         runner.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
+        runner.GuardMessage += m => Log?.Invoke(LogKind.Warning, m);
+        runner.Thermal += e => Thermal?.Invoke(e);
+        var guard = HashcatRunner.GuardFor(settings, Devices);
+        if (guard is not null) LogGuard(guard);
         var native = new Native.NativeRunner();
         native.StatusReceived += s => Status?.Invoke(s);
         native.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
@@ -192,6 +241,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     UseOptimizedKernel = optimized && !restore,
                     VolumeCredentials = target.VolumeCredentials,
                     PasswordCachePath = potfile,
+                    Guard = HashcatRunner.GuardFor(settings, Devices),
                 };
                 var result = nativePlan is { } np
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
@@ -263,6 +313,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             {
                 Mode = mode, HashFile = file, Attack = a, SessionName = session, SessionDir = settings.SessionsDir,
                 Restore = restore, Settings = settings, UseOptimizedKernel = optimized && !restore,
+                Guard = HashcatRunner.GuardFor(settings, Devices),
             }, ct);
             if (r.Outcome is RunOutcome.Cracked or RunOutcome.Exhausted) Cleanup(session);
             return r;
@@ -305,6 +356,19 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 SessionState.Delete(settings, key);
                 return new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = rc4, Error = r2.Error };
         }
+    }
+
+    private void LogGuard(ThermalGuard g)
+    {
+        var parts = new List<string>();
+        if (g.TemperatureGuard)
+        {
+            var source = GpuTemperature.External;
+            parts.Add($"pauses the GPU at {g.Limit} °C and resumes at {g.ResumeBelow} °C" +
+                      (source is not null ? $" (temperature from {source.Name})" : ""));
+        }
+        if (g.DutyPercent < 100) parts.Add($"lets the GPU work {g.DutyPercent}% of the time");
+        Log?.Invoke(LogKind.Info, "GPU guard: " + string.Join("; ", parts) + ".");
     }
 
     internal static bool CanUseOptimizedKernel(int mode, AttackSpec spec)
