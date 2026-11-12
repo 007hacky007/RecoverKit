@@ -22,7 +22,8 @@ public sealed class Scenario
 /// /a:r /r:*1s /d:*default
 /// (blank line)
 /// </code>
-/// Switches: /a: b|m|d|r (brute-force, mask, dictionary as-is, dictionary + rules);
+/// Switches: /a: b|m|d|r|s|k (brute-force, mask, dictionary as-is, dictionary + rules,
+/// Stay fast key search for ZipCrypto, 40-bit RC4 key search);
 /// /c: c|s|d|e|a (capitals, smalls, digits, specials, all); /u: user charset;
 /// /l: national alphabet; /m: mask; /ms: mask symbol; /min: /max: lengths;
 /// /1: .. /8: hashcat custom charsets (for /a:m); /r: rules (*1s *1a *1c *2s *2a *3s or a file);
@@ -80,6 +81,7 @@ public static class ScenarioParser
                         "m" => AttackKind.Mask,
                         "d" or "r" => AttackKind.Dictionary,
                         "k" => AttackKind.KeySearch,
+                        "s" => AttackKind.StayZip,
                         _ => throw new FormatException($"Unknown attack type '{value}'."),
                     };
                     break;

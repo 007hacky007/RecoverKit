@@ -38,8 +38,9 @@ WZAE OODF ODF2
 /a:b /c:a /min:1 /max:3
 /a:r /r:*2s /d:*default
 
-Fast formats: ZipCrypto, PDF R2-R5
-ZIPC PDF2 PDF3 PDF5
+ZIP archives (ZipCrypto)
+ZIPC
+/a:s
 /a:b /c:a /min:1 /max:5
 /a:d /d:*default
 /a:b /c:d /min:6 /max:10

@@ -53,7 +53,7 @@ public static class ZipStayDecryptor
                 throw new FormatException("ZIP entries overlap or repeat local header offsets.");
 
         // plan: which entries decrypt (with their clear data), and each entry's raw extent
-        var decrypted = new byte[entries.Count][];
+        byte[]?[] decrypted = new byte[entries.Count][];
         var extents = new (long Start, long End)[entries.Count];
         for (int i = 0; i < order.Count; i++)
         {
@@ -107,8 +107,9 @@ public static class ZipStayDecryptor
             var e = entries[i];
             int recLen = 46 + Bin.U16(cd, p + 28) + Bin.U16(cd, p + 30) + Bin.U16(cd, p + 32);
             var rec = cd[p .. (p + recLen)];
-            WriteU16(rec, 8, (ushort)(decrypted[i] is null ? e.Flags : e.Flags & ~(0x0001 | 0x0008)));
-            if (decrypted[i] is not null) WriteU32(rec, 20, (uint)decrypted[i].Length);
+            var plain = decrypted[i];
+            WriteU16(rec, 8, (ushort)(plain is null ? e.Flags : e.Flags & ~(0x0001 | 0x0008)));
+            if (plain is not null) WriteU32(rec, 20, (uint)plain.Length);
             WriteU32(rec, 42, (uint)newOffsets[i]);
             dst.Write(rec);
             p += recLen;

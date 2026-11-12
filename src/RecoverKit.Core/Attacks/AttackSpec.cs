@@ -2,7 +2,7 @@ using System.Text;
 
 namespace RecoverKit.Core.Attacks;
 
-public enum AttackKind { BruteForce, Mask, Dictionary, KeySearch }
+public enum AttackKind { BruteForce, Mask, Dictionary, KeySearch, StayZip }
 
 public enum RulesPreset
 {
@@ -75,6 +75,8 @@ public sealed class AttackSpec
             }
             case AttackKind.KeySearch:
                 return "Key search: all 1,099,511,627,776 40-bit RC4 keys";
+            case AttackKind.StayZip:
+                return "Fast key search: Stay attack on ZipCrypto headers (WinZip-style archives, 5+ files)";
             case AttackKind.Mask:
             {
                 var sets = CustomCharsets.Select((c, i) => (c, i)).Where(x => !string.IsNullOrEmpty(x.c)).Select(x => $"?{x.i + 1}=[{x.c}]");

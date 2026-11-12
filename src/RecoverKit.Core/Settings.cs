@@ -46,6 +46,9 @@ public sealed class Settings
     // Key search and rainbow tables
     public string? RainbowTablesPath { get; set; }
     public bool AutoDecrypt { get; set; }
+
+    /// <summary>Try Stay's fast key search on compatible ZipCrypto archives before password attacks.</summary>
+    public bool TryStayZipAttack { get; set; } = true;
     public string DecryptSuffix { get; set; } = "_decrypted";
 
     public Dictionary<int, double> SpeedByMode { get; set; } = new();

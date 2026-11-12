@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
+using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Formats;
 
 namespace RecoverKit.Core.Attacks;
@@ -37,6 +38,7 @@ public static class AttackPlanner
             AttackKind.BruteForce => BruteForce(a, target, maxLen),
             AttackKind.Mask => Mask(a),
             AttackKind.KeySearch => KeySearch.Prepare(a, target),
+            AttackKind.StayZip => StayZipPlanner.Prepare(a, target),
             _ => Dictionary(a, ctx, lineCounter),
         };
     }
