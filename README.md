@@ -49,7 +49,7 @@ number at the end"), and it tests those combinations until it finds the right on
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
-| Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5 |
+| Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
@@ -167,6 +167,12 @@ quickest guesses.
   file (it picks the most reliable one). Other files in the same archive may use a different
   password. Split (multi-volume) archives and files that need earlier files of a solid archive
   cannot be used.
+- 7-Zip recovery supports visible and encrypted file names, solid and non-solid archives, and
+  self-extracting executables. Hashcat verifies Copy, LZMA1, LZMA2 and Deflate streams without
+  filters or AES salts. PPMd and BZip2 data can be recovered when the archive has compatible
+  encrypted headers. Selected encrypted streams must fit within 8 MiB, with at most 9,999,999
+  bytes for a decompressed CRC check. Split volumes must be joined first. The default SHA-256
+  key derivation uses 524,288 iterations, so recovery is very slow.
 - Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
   cooled by the amount you choose) and can let the GPU work only part of the time to cut heat and
   noise. Both are off by default. Paused attacks continue exactly where they stopped.

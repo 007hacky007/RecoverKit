@@ -23,6 +23,10 @@ hashcat 7.1.2
 7-Zip reduced console extractor (7zr.exe), Windows only, when no 7-Zip is installed
   https://www.7-zip.org - GNU LGPL.
 
+LZMA metadata decoder (built in)
+  src/RecoverKit.Core/Formats/SevenZipLzma.cs adapts the LZMA1 decoder from Igor Pavlov's
+  LZMA SDK 23.01 (https://www.7-zip.org/sdk.html), placed in the public domain.
+
 Intel CPU Runtime for OpenCL Applications (intel-opencl-rt) and oneAPI Threading
 Building Blocks (tbb), Windows only, optional, after the user accepts Intel's license
   https://pypi.org/project/intel-opencl-rt/ - Intel End User License Agreement.

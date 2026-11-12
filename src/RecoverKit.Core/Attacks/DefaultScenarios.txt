@@ -11,7 +11,7 @@ NONE
 /a:r /r:*2s /d:*default
 
 Slow formats: Office 2007+, encrypted volumes, PDF R6, iOS backups
-OF07 OF10 OF13 TRUE VERA PDF6 APL7 APL0
+OF07 OF10 OF13 TRUE VERA PDF6 APL7 APL0 7ZIP
 /a:d /d:*default
 /a:b /c:d /min:1 /max:6
 /a:b /c:s /min:1 /max:4
