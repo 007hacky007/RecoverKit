@@ -48,15 +48,21 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
+| Word editing restrictions | Instant unrestricted copies of unencrypted .docx/.docm/.dotx and Word 97-2003 .doc; includes password to modify |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
+| OpenDocument text restrictions | Instant removal of protected sections and the read-only flag in unencrypted .odt files |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
 | Android backups | Encrypted adb / Helium `.ab` backups, versions 1-5 |
 | Wi-Fi | WPA/WPA2 handshakes from your own network |
 | Password managers | KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx) databases, with an optional keyfile |
 | Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
+
+Restriction removal saves a separate copy and requires a file that opens without decryption.
+Word's 32-bit editing-password verifiers and modern password hashes are not recovered.
+ODT removal covers sections and the read-only flag; protected tables and change-recording locks are not included.
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
 with five or more encrypted files are opened in minutes without any password guessing: RecoverKit

@@ -540,6 +540,7 @@ public sealed partial class MainWindow : Window
         "  • Unicode, UTF-8 and ANSI dictionaries",
         "  • Interrupted attacks can be continued later; recovered passwords are cached",
         "  • After a successful attack the document can be decrypted (MS Office)",
+        "  • Remove Word editing / write restrictions and OpenDocument text section protection instantly",
     });
 
     // ------------------------------------------------------------------ hashcat

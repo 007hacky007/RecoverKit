@@ -5,8 +5,8 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab",
-        "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
+        "All supported files|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab",
+        "MS Office documents|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
         "RAR archives|*.rar",
