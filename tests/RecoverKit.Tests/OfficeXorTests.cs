@@ -9,6 +9,7 @@ public class OfficeXorTests
     [Theory]
     [InlineData("poi-xor-abc.xls", "abc", "MS Excel 97-2003 workbook")]
     [InlineData("excel95-kit95.xls", "kit95", "MS Excel 5/95 workbook")]
+    [InlineData("excel95-long-user.xls", "beccffbe", "MS Excel 5/95 workbook")]
     [InlineData("word6-kit6.doc", "kit6", "MS Word 6/95 document")]
     [InlineData("word95-word95.doc.gz", "word95", "MS Word 6/95 document")]
     [InlineData("word97-long.doc", "OfficeXor2026!a", "MS Word 97-2003 document")]
@@ -95,31 +96,36 @@ public class OfficeXorTests
     }
 
     [Theory]
-    [InlineData("a")]
-    [InlineData("ab")]
-    [InlineData("0123456789abcde")]
-    [InlineData("Spaces & !")]
-    [InlineData("qzh1llaw")]
-    [InlineData("kspv94yc")]
-    public void RecoversOneThroughFifteenCharacterPasswordsFromWriteAccess(string password)
+    [InlineData("a", 0x500)]
+    [InlineData("ab", 0x500)]
+    [InlineData("0123456789abcde", 0x500)]
+    [InlineData("Spaces & !", 0x500)]
+    [InlineData("qzh1llaw", 0x500)]
+    [InlineData("kspv94yc", 0x500)]
+    [InlineData("a", 0x600)]
+    [InlineData("0123456789abcde", 0x600)]
+    public void RecoversOneThroughFifteenCharacterPasswordsFromWriteAccess(string password, ushort version)
     {
-        // A BIFF5 WRITEACCESS record at stream offset 20 ends at 56. Its last
-        // sixteen spaces expose all sixteen XOR array bytes (independent fixture encoder).
+        // The last sixteen padding spaces expose all sixteen XOR array bytes
+        // (independent fixture encoder, with a valid empty user name).
         var bytes = System.Text.Encoding.ASCII.GetBytes(password);
         ushort key = ReferenceKey(bytes), verifier = ReferenceVerifier(bytes);
-        var access = new byte[32];
+        bool old = version == 0x500;
+        var access = new byte[old ? 32 : 112];
+        int end = 12 + (old ? 8 : 10) + 4 + access.Length;
         byte[] pad = Convert.FromHexString("bbffffbaffffb98000be0f00bf0f0000");
         for (int i = 0; i < access.Length; i++)
         {
-            int index = (56 + i) & 15;
+            int index = (end + i) & 15;
             int value = index < bytes.Length ? bytes[index] : pad[index - bytes.Length];
             value ^= (key >> ((index & 1) * 8)) & 255;
             int xor = ((value << 2) | (value >> 6)) & 255;
-            value = 0x20 ^ xor;
+            value = (i < (old ? 1 : 3) ? 0 : 0x20) ^ xor;
             access[i] = (byte)((value >> 3) | (value << 5));
         }
         byte[] pass = new byte[4]; Set16(pass, 0, key); Set16(pass, 2, verifier);
-        var d = Extract("Book", [.. Bof(0x500), .. Record(0x2f, pass), .. Record(0x5c, access), .. Record(0xa, [])]);
+        var d = Extract("Book", [.. Bof(version), .. Record(0x2f, old ? pass : [0, 0, .. pass]),
+            .. Record(0x5c, access), .. Record(0xa, [])]);
         Assert.Equal(password, Assert.Single(d.Unlocks).Password);
     }
 

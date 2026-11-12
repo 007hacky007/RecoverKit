@@ -12,6 +12,11 @@ Inserted the BIFF5 FILEPASS record, adjusted BOUNDSHEET offsets and obfuscated
 record data independently using the documented XOR procedure. Only the Book
 stream is retained in the fixture's compound file.
 
+excel95-long-user.xls: the same source, re-obfuscated with password beccffbe
+and a full-length 31-character WRITEACCESS user name. Its tail mimics space
+padding under the colliding password faffabcd. The decrypted name length must
+reject that false evidence; recovery then uses other workbook records.
+
 word6-kit6.doc: document/Word6.doc, modified with password kit6.
 word95-word95.doc.gz: document/Word95.doc, modified with password word95.
 Set fEncrypted and the FIB key/verifier, then transformed WordDocument bytes

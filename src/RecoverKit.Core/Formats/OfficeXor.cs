@@ -71,7 +71,7 @@ internal static class OfficeXor
                 int offset = pos + (old ? 4 : 6);
                 ushort key = Bin.U16(workbook, offset), verifier = Bin.U16(workbook, offset + 2);
                 bool capped = (cf.Find("Workbook") ?? cf.Find("Book"))!.Size > ReadLimit;
-                Report(d, RecoverExcel(workbook, pos + 4 + length, key, verifier, capped));
+                Report(d, RecoverExcel(workbook, pos + 4 + length, key, verifier, old, capped));
                 return true;
             }
             if (type == 0x0a) break;
@@ -102,7 +102,7 @@ internal static class OfficeXor
         });
     }
 
-    private static string? RecoverExcel(byte[] data, int start, ushort key, ushort verifier, bool capped)
+    private static string? RecoverExcel(byte[] data, int start, ushort key, ushort verifier, bool old, bool capped)
     {
         var counts = new int[16, 256];
         for (int pos = start; pos + 4 <= data.Length;)
@@ -117,13 +117,30 @@ internal static class OfficeXor
             int payload = pos + 4, end = payload + length;
             if (type is not (0x809 or 0x2f or 0xe1 or 0x194 or 0x195 or 0x196 or 0x138))
             {
-                if (type == 0x5c && length >= 32) // WRITEACCESS has space-padded user information.
+                if (type == 0x5c && length == (old ? 32 : 112))
                 {
                     var array = new int[16];
                     for (int i = length - 16; i < length; i++)
                         array[(end + i) & 15] = Rotate(data[payload + i], 3) ^ 0x20;
-                    var found = FromArray(array, key, verifier, 2);
-                    if (found is not null) return found;
+                    // A full-length user name has no guaranteed trailing spaces. Check
+                    // its decrypted length before trusting those bytes as known padding.
+                    int Decode(int i) => Rotate(data[payload + i], 3) ^ array[(end + i) & 15];
+                    int nameLength = Decode(0), used = 1 + nameLength;
+                    bool valid = true;
+                    if (!old)
+                    {
+                        nameLength |= Decode(1) << 8;
+                        int flags = Decode(2);
+                        valid = flags is 0 or 1;
+                        used = 3 + nameLength * (flags == 1 ? 2 : 1);
+                    }
+                    valid &= used <= length - 16;
+                    for (int i = used; valid && i < length; i++) valid &= Decode(i) == 0x20;
+                    if (valid)
+                    {
+                        var found = FromArray(array, key, verifier, 2);
+                        if (found is not null) return found;
+                    }
                 }
                 // Zero is the commonest byte in BIFF structures. Keep record headers and the
                 // unencrypted BOUNDSHEET stream offset out of the frequency counts.
