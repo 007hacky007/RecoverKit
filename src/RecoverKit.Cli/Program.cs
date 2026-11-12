@@ -246,8 +246,14 @@ static Detection Open(string path, List<string> argv)
             o.Ciphers |= c switch { "1" => VolumeCipher.Single, "2" => VolumeCipher.Double, "3" => VolumeCipher.Triple, _ => throw new ArgumentException("bad cascade " + c) };
         return CryptVolume.Open(path, o);
     }
-    if (keyfiles.Count > 0 || argv.Contains("--pim"))
-        throw new ArgumentException("--keyfile and --pim require --volume tc or vc.");
+    if (argv.Contains("--pim"))
+        throw new ArgumentException("--pim requires --volume tc or vc.");
+    if (keyfiles.Count > 1) throw new ArgumentException("KeePass accepts one --keyfile. Multiple keyfiles require --volume tc or vc.");
+    if (keyfiles.Count == 1)
+    {
+        if (argv.Contains("--hash-mode")) throw new ArgumentException("KeePass --keyfile requires a database file, not --hash-mode.");
+        return FormatDetector.Detect(path, keyfiles[0]);
+    }
     if (Opt(argv, "--hash-mode") is { } hm) return FormatDetector.FromManualHash(path, int.Parse(hm), File.ReadAllText(path));
     return FormatDetector.Detect(path);
 }
@@ -335,6 +341,7 @@ static int Usage()
 {
     Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
+    Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
     return 64;
 }

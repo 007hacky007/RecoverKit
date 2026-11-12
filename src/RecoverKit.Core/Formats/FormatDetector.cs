@@ -5,12 +5,13 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
         "RAR archives|*.rar",
         "7-Zip archives|*.7z;*.7z.001",
+        "KeePass databases|*.kdbx;*.kdb",
         "PDF files|*.pdf",
         "WPA handshakes|*.22000;*.hccapx;*.hccap",
         "Apple iOS backup manifest|*.plist",
@@ -18,7 +19,7 @@ public static class FormatDetector
         "All files|*.*",
     ];
 
-    public static Detection Detect(string path)
+    public static Detection Detect(string path, string? keePassKeyfile = null)
     {
         var d = new Detection { FilePath = path };
         try
@@ -27,6 +28,8 @@ public static class FormatDetector
             d.Add("File size", $"{s.Length:N0} bytes");
             if (s.Length == 0) { d.Message = "File is empty."; return d; }
             var head = Bin.ReadAt(s, 0, 4096);
+            if (keePassKeyfile is not null && !KeePassExtractor.IsKeePass(head))
+                throw new UnsupportedFormatException("A KeePass keyfile can only be used with a KeePass database.");
 
             if (CompoundFile.IsCompoundFile(head))
             {
@@ -47,6 +50,10 @@ public static class FormatDetector
             else if (SevenZipExtractor.IsSevenZip(head))
             {
                 SevenZipExtractor.Extract(s, d);
+            }
+            else if (KeePassExtractor.IsKeePass(head))
+            {
+                KeePassExtractor.Extract(s, d, keePassKeyfile);
             }
             else if (WpaExtractor.IsHashLines(head) || WpaExtractor.IsHccapx(head) || path.EndsWith(".hccap", StringComparison.OrdinalIgnoreCase))
             {

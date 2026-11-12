@@ -150,6 +150,7 @@ Programs entry. The default build is self-contained (no runtime prerequisite); p
 ```
 recoverkit-cli install-hashcat                        # download + unpack the GPU engine
 recoverkit-cli extract <file>                         # identify + print the extracted hash
+recoverkit-cli extract database.kdbx --keyfile database.key # KeePass password + optional keyfile
 recoverkit-cli crack <file> --brute sd --min 1 --max 6 # brute force (s=smalls c=caps d=digits e=specials)
 recoverkit-cli crack <file> --dict words.txt --rules advanced
 recoverkit-cli crack <file> --hcmask '?u?l?l?l?d?d'
@@ -166,7 +167,7 @@ recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an 
 the GPU load limit for one run, `--power-limit <watts>` the NVIDIA power limit (see GPU temperature
 guard below; the CLI prints the explanation and asks y/n/c before the system prompt).
 
-Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
+For TrueCrypt/VeraCrypt, repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
 containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
 1 MiB of each keyfile is used, matching TrueCrypt/VeraCrypt. Keyfiles are unavailable with `--boot`.
 `--pim N` sets a known VeraCrypt PIM: 0 (or omitted) uses the default, positive values test that exact
@@ -179,7 +180,7 @@ and PIM. Reopen a volume after changing its keyfiles. Recovery with keyfiles use
 on the CPU; the built-in TrueCrypt Whirlpool kernel handles password-only recovery. For a volume
 protected by keyfiles with an empty password, use a dictionary containing an empty line.
 
-Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
+For TrueCrypt/VeraCrypt, repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
 containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
 1 MiB of each keyfile is used, matching TrueCrypt/VeraCrypt. Keyfiles are unavailable with `--boot`.
 `--pim N` sets a known VeraCrypt PIM: 0 (or omitted) uses the default, positive values test that exact
@@ -293,6 +294,21 @@ notes are taken from it, and the release job fails if the section is missing.
   SFX signature searches cover the first 4 MiB. Real fixtures were created with 7zz 26.03 and
   p7zip 17.05 using password `kit7`; extraction was compared with 7z2john and verified with
   bundled hashcat 7.1.2. The default tests perform no KDF or cracking work.
+- KeePass extraction implements hashcat 7.1.2 modes 13400 (KDB, KDBX 2/3) and 34300
+  (KDBX 4 Argon2d/Argon2id). Mode 34300 hard-codes a 253-byte header in both its tokenizer
+  and HMAC kernel; headers of other lengths and AES-KDF are rejected. Header SHA-256 is
+  checked before extracting the stored HMAC. Argon2 secret/associated data, rounds over
+  99999, lanes over 32, and memory of 4 GiB or more are unsupported by this module.
+  Keyfiles are normalized into the hash's `*1*64*<key>` suffix, so existing session keys
+  distinguish credentials without new hashcat arguments. The GUI prompts after content
+  detection; the CLI reuses `--keyfile` without `--volume`. XML v2 checksums are validated;
+  KDB uses the legacy raw/hex/SHA-256 rules. KDB ciphertext is limited to 8 MiB and a
+  32-byte password-only ciphertext is rejected because hashcat mistakes it for a keyfile.
+  Small fixtures in `tests/RecoverKit.Tests/Fixtures/KeePass` use the synthetic password
+  `rk-test-42` and, where required, key bytes 00 through 1f. KDBX fixtures were generated
+  and reopened with pykeepass 4.2.0; KDB fixtures use a minimal group serialized in Python.
+  Reference hash strings follow keepass2john's field order and hashcat's module limits.
+  All supported fixture variants were checked with a three-word hashcat dictionary.
 - RAR 3.x recovery covers encrypted file names (`-hp`, hashcat 12500) and visible file names
   (`-p`, hashcat 23700 for stored files or 23800 for compressed files). Data-only extraction
   prefers entries with at least eight unpacked bytes, then stored entries, then smaller entries.

@@ -30,6 +30,8 @@ public sealed class BenchmarkWindow : Window
         new(12500, "RAR 3.x", "RAR 3.x, SHA1, 128-bit AES"),
         new(13000, "RAR 5.x", "RAR 5.x, PBKDF2/SHA256"),
         new(11600, "7-Zip", "7-Zip, SHA256, 256-bit AES"),
+        new(13400, "KeePass KDB/KDBX 2/3", "KeePass, AES-KDF"),
+        new(34300, "KeePass KDBX 4", "KeePass, Argon2"),
         new(17210, "ZIP/Classic", "ZipCrypto (PKWARE), 96-bit key"),
         new(13600, "WinZip/AES", "WinZip/AES, PBKDF2/SHA1, 256-bit AES"),
         new(29321, "TrueCrypt volume", "Volume header, PBKDF2-SHA-512, AES-XTS"),
