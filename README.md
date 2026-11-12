@@ -69,7 +69,8 @@ Just open the file (or drag it onto the window). RecoverKit recognizes the forma
     <td width="50%" valign="top">
       <img src="docs/images/wizard-attack-type.png" alt="Choosing a recovery method"><br>
       <b>Step-by-step wizard.</b> Pick a ready-made plan, or choose how to search yourself:
-      every combination of characters, a pattern you remember, or a list of words.
+      every combination of characters, a pattern you remember, or a list of words. Each choice
+      shows how long it can take on your computer.
     </td>
     <td width="50%" valign="top">
       <img src="docs/images/wizard-brute-force.png" alt="Brute-force settings"><br>
