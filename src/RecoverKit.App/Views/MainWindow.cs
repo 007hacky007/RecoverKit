@@ -1172,9 +1172,14 @@ public sealed partial class MainWindow : Window
         _progress.Value = Math.Clamp(s.Fraction, 0, 1);
         if (_current is not null) Title = $"{(int)(s.Fraction * 100)}% - {AppName} - {Path.GetFileName(_current.FilePath)}";
         _statusRight.Text = s.StatusText;
-        if (_thermal?.State == ThermalState.Paused) { _estTime.Text = "Paused"; _statusRight.Text = "Paused (GPU cooling)"; }
         _gpuTemp = HottestGpu(s);
-        SetPill(_pillState);
+        if (_thermal is { State: ThermalState.Paused } th)
+        {
+            _estTime.Text = "Paused";
+            _statusRight.Text = "Paused (GPU cooling)";
+            if (_gpuTemp >= 0) ShowCooling(_gpuTemp, th.ResumeBelow);
+        }
+        else SetPill(_pillState);
     }
 
     /// <summary>The hottest GPU in degrees Celsius, or -1 when hashcat reports no temperature.</summary>

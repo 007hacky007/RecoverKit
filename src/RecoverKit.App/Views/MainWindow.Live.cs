@@ -310,15 +310,11 @@ public sealed partial class MainWindow
         if (paused)
         {
             _pillBeforeHot ??= (_pillState, _pillBase);
-            SetPill(PillState.Hot, e.Temperature >= 0 ? $"Cooling: GPU {e.Temperature} °C" : "Cooling down the GPU");
             _ring.Fill = Palette.WarnBrush;
             _ringPct.Text = "Cooling";
             _ringPct.FontSize = 19;
             _ringPct.Foreground = Palette.WarningBrush;
-            _ringSub.Text = e.Temperature >= 0 ? $"GPU {e.Temperature} °C" : "GPU too hot";
-            _thermalText.Text = e.Temperature >= 0
-                ? $"Paused: GPU at {e.Temperature} °C, resumes below {e.ResumeBelow} °C"
-                : $"Paused: the GPU is too hot, resumes below {e.ResumeBelow} °C";
+            ShowCooling(e.Temperature, e.ResumeBelow);
             _thermalBanner.IsVisible = _liveActive;
             _progress.Fill = Palette.WarnBrush;
             _progress.Sheen = false;
@@ -338,6 +334,16 @@ public sealed partial class MainWindow
             _band.Background = Palette.StatusBandBrush;
             if (_applied is { } s) { UpdateStatus(s); UpdateLive(s); }
         }
+    }
+
+    /// <summary>The temperature while paused, kept current from hashcat's status.</summary>
+    private void ShowCooling(int temperature, int resumeBelow)
+    {
+        SetPill(PillState.Hot, temperature >= 0 ? $"Cooling: GPU {temperature} °C" : "Cooling down the GPU");
+        _ringSub.Text = temperature >= 0 ? $"GPU {temperature} °C" : "GPU too hot";
+        _thermalText.Text = temperature >= 0
+            ? $"Paused: GPU at {temperature} °C, resumes below {resumeBelow} °C"
+            : $"Paused: the GPU is too hot, resumes below {resumeBelow} °C";
     }
 
     // ------------------------------------------------------------------ end of an attack
