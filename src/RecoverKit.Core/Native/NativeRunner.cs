@@ -28,7 +28,7 @@ public sealed class NativeRunner
     {
         // Extra hashcat options can change candidate interpretation (for example TrueCrypt keyfiles).
         if (credentials is not null || !settings.UseNativeCpuEngine || attack.Stdin is not null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
-        bool gpu = devices?.Any(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)) == true;
+        bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly) return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length != 1) return null;
@@ -93,13 +93,9 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = result.Password!;
-                string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : "$HEX[" + Convert.ToHexString(pw).ToLowerInvariant() + "]";
-                if (!s.DontUsePasswordCache)
-                    try { await File.AppendAllTextAsync(s.PotfilePath, hashLine.Trim() + ":" + plain + "\n", new UTF8Encoding(false), CancellationToken.None); }
-                    catch (IOException ex) { DebugLog.Warn("Could not write potfile: " + ex.Message); }
+                var pw = await RecordFoundAsync(s, hashLine, result.Password!);
                 TryDelete(restoreFile);
-                return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [HashcatTool.DecodePlain(plain)], LastStatus = last };
+                return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
             case NativeOutcome.Stopped:
                 if (result.ResumeAt is { } at)
@@ -111,11 +107,21 @@ public sealed class NativeRunner
         }
     }
 
+    /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
+    internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw)
+    {
+        string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : "$HEX[" + Convert.ToHexString(pw).ToLowerInvariant() + "]";
+        if (!s.DontUsePasswordCache)
+            try { await File.AppendAllTextAsync(s.PotfilePath, hashLine.Trim() + ":" + plain + "\n", new UTF8Encoding(false), CancellationToken.None); }
+            catch (IOException ex) { DebugLog.Warn("Could not write potfile: " + ex.Message); }
+        return HashcatTool.DecodePlain(plain);
+    }
+
     private static bool Printable(byte[] pw) => pw.All(b => b is >= 0x20 and < 0x7f);
 
     private static void TryDelete(string f) { try { File.Delete(f); } catch (IOException) { } }
 
-    private static ThreadPriority ThreadPriorityFor(ProcessPriority p) => p switch
+    internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => p switch
     {
         ProcessPriority.Idle => ThreadPriority.Lowest,
         ProcessPriority.BelowNormal => ThreadPriority.BelowNormal,
@@ -123,7 +129,7 @@ public sealed class NativeRunner
         _ => ThreadPriority.Normal,
     };
 
-    private static ProcessPriorityClass ProcessClassFor(ProcessPriority p) => p switch
+    internal static ProcessPriorityClass ProcessClassFor(ProcessPriority p) => p switch
     {
         ProcessPriority.Idle => ProcessPriorityClass.Idle,
         ProcessPriority.BelowNormal => ProcessPriorityClass.BelowNormal,

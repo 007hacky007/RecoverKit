@@ -33,7 +33,7 @@ public sealed class PreferencesWindow : Window
     private readonly CheckBox _native = Check("Use the built-in CPU engine when no GPU is used (ZIP, Office 97-2003, PDF R2-R4 and R6, RAR 3.x)");
     private readonly TextBox _extra = new();
     private readonly StackPanel _gpuList = new() { Spacing = 2 };
-    private readonly List<(CheckBox Box, int Id)> _gpuChecks = new();
+    private readonly List<(CheckBox Box, BackendDevice Device)> _gpuChecks = new();
     private readonly Slider _workload = new() { Minimum = 1, Maximum = 4, TickFrequency = 1, IsSnapToTickEnabled = true, TickPlacement = Avalonia.Controls.TickPlacement.BottomRight };
     private readonly TextBlock _backendLabel = L.Text("", dim: true);
     private static readonly (string Text, int Percent)[] Duties =
@@ -442,14 +442,14 @@ public sealed class PreferencesWindow : Window
         foreach (var d in gpus)
         {
             var row = L.Grid("2*,*,*,*", columnSpacing: 8);
-            var cb = new CheckBox { Content = new TextBlock { Text = d.Name, TextTrimming = TextTrimming.CharacterEllipsis }, IsChecked = !_s.DisabledDevices.Contains(d.Id) };
+            var cb = new CheckBox { Content = new TextBlock { Text = d.Name + (d.IsIntegratedGpu ? " (integrated)" : ""), TextTrimming = TextTrimming.CharacterEllipsis }, IsChecked = !HashcatRunner.IsDisabled(_s, d) };
             cb.IsCheckedChanged += (_, _) => _gpuChanged?.Invoke();
             row.Put(cb, 0, 0);
             row.Put(L.Text(d.Processors > 0 ? d.Processors.ToString() : "n/a"), 0, 1);
             row.Put(L.Text(d.ClockMhz > 0 ? $"{d.ClockMhz} MHz" : "n/a"), 0, 2);
             row.Put(L.Text(d.MemoryMb > 0 ? $"{d.MemoryMb} MB" : "n/a"), 0, 3);
             _gpuList.Children.Add(row);
-            _gpuChecks.Add((cb, d.Id));
+            _gpuChecks.Add((cb, d));
         }
         if (gpus.Count == 0) _gpuList.Children.Add(L.Text("No compatible GPU devices detected.", dim: true));
         _workload.IsEnabled = _duty.IsEnabled = gpus.Count > 0;
@@ -476,7 +476,9 @@ public sealed class PreferencesWindow : Window
         _s.GpuTempLimit = _tempLimit.IntValue();
         _s.GpuTempHysteresis = _tempHysteresis.IntValue();
         _s.PreventScreensaver = _screensaver.IsChecked == true;
-        _s.DisabledDevices = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Id).ToList();
+        var off = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Device).ToList();
+        _s.DisabledDevices = off.Select(d => d.Id).ToList();
+        _s.DisabledDeviceKeys = off.Select(d => d.Key).ToList();
         _s.UseExternalScenarioFile = _useScenario.IsChecked == true;
         _s.ExternalScenarioFile = Null(_scenarioFile.Text);
         var hp = Null(_hashcatPath.Text);

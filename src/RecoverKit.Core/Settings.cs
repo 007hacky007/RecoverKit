@@ -22,13 +22,29 @@ public sealed class Settings
 {
     public string? HashcatPath { get; set; }
     public int Workload { get; set; } = 3;                    // hashcat -w 1..4 ("lag free display" .. "performance")
-    public List<int> DisabledDevices { get; set; } = new();   // hashcat backend device ids the user unchecked
+    public List<int> DisabledDevices { get; set; } = new();   // hashcat backend device ids the user unchecked (older settings)
+    /// <summary>
+    /// <see cref="Hashcat.BackendDevice.Key"/> of the devices the user unchecked. Preferred over
+    /// <see cref="DisabledDevices"/>: ids shift when a driver adds or removes a backend, which could
+    /// leave the wrong GPU out.
+    /// </summary>
+    public List<string> DisabledDeviceKeys { get; set; } = new();
     public DeviceStrategy Strategy { get; set; } = DeviceStrategy.GpuOnly;
     public ProcessPriority Priority { get; set; } = ProcessPriority.Idle;   // the recommended default
     public int MaxCpuThreads { get; set; }                    // OpenCL CPU worker threads; 0 = one per logical processor
     public bool PreventScreensaver { get; set; } = true;
     public bool OptimizedKernels { get; set; } = true;
     public bool UseNativeCpuEngine { get; set; } = true;      // built-in CPU kernels when no GPU is used
+    /// <summary>
+    /// With a GPU, run the built-in CPU engine at the same time as hashcat on another part of the
+    /// keyspace (brute-force and mask attacks on formats with a built-in kernel).
+    /// </summary>
+    public bool HybridCpuGpu { get; set; } = true;
+    /// <summary>
+    /// For formats without a built-in kernel, also give hashcat the processor as an OpenCL device next
+    /// to the GPUs (needs a CPU OpenCL runtime; usually adds little).
+    /// </summary>
+    public bool HashcatCpuWithGpu { get; set; }
     public string ExtraArguments { get; set; } = "";
 
     // GPU temperature guard and load limit (all off by default)
@@ -60,6 +76,8 @@ public sealed class Settings
     public string DecryptSuffix { get; set; } = "_decrypted";
 
     public Dictionary<int, double> SpeedByMode { get; set; } = new();
+    /// <summary>hashcat's own speed (GPUs only) in hybrid attacks, to split the next one.</summary>
+    public Dictionary<int, double> GpuSpeedByMode { get; set; } = new();
     public string? LastOpenedDirectory { get; set; }
     public string? LastDictionaryDirectory { get; set; }
     public int[]? WindowBounds { get; set; }
