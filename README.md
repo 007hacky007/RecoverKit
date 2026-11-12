@@ -17,6 +17,8 @@
   <a href="#how-fast-is-it">How fast is it?</a>
   &nbsp;·&nbsp;
   <a href="#getting-started">Getting started</a>
+  &nbsp;·&nbsp;
+  <a href="CHANGELOG.md">What's new</a>
 </p>
 
 <p align="center">
@@ -48,6 +50,10 @@ number at the end"), and it tests those combinations until it finds the right on
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5 |
+| OpenDocument files | LibreOffice and OpenOffice documents |
+| Encrypted disks | TrueCrypt and VeraCrypt volumes |
+| Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
+| Wi-Fi | WPA/WPA2 handshakes from your own network |
 
 Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
 with five or more encrypted files are opened in minutes without any password guessing: RecoverKit
@@ -55,10 +61,6 @@ recovers the archive's internal cipher keys from the weak, rand()-seeded encrypt
 (Stay's attack, FSE 2001), writes a password-free decrypted copy, and then still tries the
 normal password attacks. The step runs automatically for compatible archives and can be turned
 off in Preferences > Key search.
-| OpenDocument files | LibreOffice and OpenOffice documents |
-| Encrypted disks | TrueCrypt and VeraCrypt volumes |
-| Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
-| Wi-Fi | WPA/WPA2 handshakes from your own network |
 
 Just open the file (or drag it onto the window). RecoverKit recognizes the format by itself.
 
