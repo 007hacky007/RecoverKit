@@ -81,7 +81,7 @@ public static class ZipStayArchive
         var stored = new byte[n][];
         var infos = new GeneratedEntryInfo[n];
         var bodies = new byte[n][];   // 12-byte header + encrypted compressed data
-        byte[][]? extras = new byte[n][];  // central/local extra fields (fake AES; null = none)
+        byte[]?[] extras = new byte[n][];  // central/local extra fields (fake AES; null = none)
         uint x = 0, y = 0, z = 0;
         InitKeys(password, ref x, ref y, ref z);
 
