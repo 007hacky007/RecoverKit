@@ -276,6 +276,19 @@ that version.
 
 ## Technical notes
 
+- 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
+  and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
+  Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
+  a 16 MiB output limit and a bounded decoder adapted from the public-domain LZMA SDK 23.01.
+  No installed 7-Zip or new package is needed. Folder bindings and substream CRCs select the
+  smallest compatible encrypted stream (or the first substream of a solid folder). Hashcat
+  accepts Copy, LZMA1, LZMA2 and Deflate without filters, with an empty AES salt. Encrypted data
+  is limited to 8 MiB and decompressed CRC input to 9,999,999 bytes; compressed hashes also need
+  space for their suffix within the module's input limit. NumCyclesPower above 24 is refused,
+  matching the reference extractor's practical limit. Split volumes must be joined manually;
+  SFX signature searches cover the first 4 MiB. Real fixtures were created with 7zz 26.03 and
+  p7zip 17.05 using password `kit7`; extraction was compared with 7z2john and verified with
+  bundled hashcat 7.1.2. The default tests perform no KDF or cracking work.
 - RAR 3.x recovery covers encrypted file names (`-hp`, hashcat 12500) and visible file names
   (`-p`, hashcat 23700 for stored files or 23800 for compressed files). Data-only extraction
   prefers entries with at least eight unpacked bytes, then stored entries, then smaller entries.

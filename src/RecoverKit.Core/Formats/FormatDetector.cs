@@ -5,11 +5,12 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
         "RAR archives|*.rar",
+        "7-Zip archives|*.7z;*.7z.001",
         "PDF files|*.pdf",
         "WPA handshakes|*.22000;*.hccapx;*.hccap",
         "Apple iOS backup manifest|*.plist",
@@ -43,6 +44,10 @@ public static class FormatDetector
             {
                 PdfExtractor.Extract(s, d);
             }
+            else if (SevenZipExtractor.IsSevenZip(head))
+            {
+                SevenZipExtractor.Extract(s, d);
+            }
             else if (WpaExtractor.IsHashLines(head) || WpaExtractor.IsHccapx(head) || path.EndsWith(".hccap", StringComparison.OrdinalIgnoreCase))
             {
                 WpaExtractor.Extract(s, path, head, d);
@@ -52,7 +57,8 @@ public static class FormatDetector
                 // Self-extracting archive: RAR SFX carries its own signature, ZIP SFX is found from the end.
                 if (RarExtractor.FindSignature(s).Offset > 0) RarExtractor.Extract(s, d);
                 else if (ZipExtractor.LooksLikeZip(s)) ZipExtractor.Extract(s, d);
-                else { d.TypeName = "Windows executable"; d.Message = "No embedded RAR or ZIP archive found."; }
+                else if (SevenZipExtractor.FindSignature(s) > 0) SevenZipExtractor.Extract(s, d);
+                else { d.TypeName = "Windows executable"; d.Message = "No embedded RAR, ZIP or 7z archive found."; }
             }
             else if (IsBlackBerry(head, path))
             {

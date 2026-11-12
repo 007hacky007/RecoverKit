@@ -414,7 +414,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     }
 
     internal static bool CanUseOptimizedKernel(int mode, AttackSpec spec)
-        => spec.Kind != AttackKind.Dictionary && MaxLen(spec) <= (mode is 23700 or 23800 ? 20 : 27);
+        => spec.Kind != AttackKind.Dictionary && MaxLen(spec) <= (mode is 11600 or 23700 or 23800 ? 20 : 27);
 
     private static int MaxLen(AttackSpec s) => s.Kind switch
     {
