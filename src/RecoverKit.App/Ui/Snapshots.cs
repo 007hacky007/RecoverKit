@@ -83,6 +83,7 @@ internal static class Snapshots
         if (tool is not null)
         {
             var measuring = owiz.DebugMeasureAsync();
+            await Task.Delay(2500);   // a few seconds into the measurement
             await Save(owiz, Path.Combine(dir, "wizard-measuring.png"));
             await Task.WhenAny(measuring, Task.Delay(TimeSpan.FromSeconds(120)));
             await Task.Delay(1500);   // estimates

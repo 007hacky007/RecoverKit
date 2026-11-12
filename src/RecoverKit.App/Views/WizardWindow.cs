@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
@@ -414,6 +415,40 @@ public sealed class WizardWindow : Window
     private List<AttackCard>? _noteCards;
     private CancellationTokenSource? _measureCts;
     private string _measureStatus = "";
+    // Progress of "Measure speed": which mode, when it started, and how long it should take.
+    private int _measureIndex, _measureCount;
+    private DateTime _measureModeStart;
+    private bool _measureNative;
+    private ProgressBar? _measureBar;
+    private TextBlock? _measureText;
+    private DispatcherTimer? _measureTimer;
+    private const double NativeSeconds = 5, HashcatSeconds = 10;
+
+    private double ExpectedSeconds(int mode) => _tool is not null && SpeedProbe.UseNative(_settings, _devices, mode) ? NativeSeconds : HashcatSeconds;
+
+    /// <summary>
+    /// Moves the bar by elapsed time: exact for the built-in engine (fixed duration); for hashcat an
+    /// expected 10 s per mode, after which a first run is usually compiling GPU kernels, so the bar
+    /// creeps on slowly instead of stopping at the end.
+    /// </summary>
+    private void UpdateMeasureProgress()
+    {
+        if (_measureBar is null || _measureText is null || _measureCount == 0) return;
+        double expected = _measureNative ? NativeSeconds : HashcatSeconds;
+        double elapsed = (DateTime.UtcNow - _measureModeStart).TotalSeconds;
+        double frac;
+        bool preparing = false;
+        if (elapsed <= expected) frac = elapsed / expected * (_measureNative ? 1 : 0.9);
+        else if (_measureNative) frac = 1;
+        else { frac = 0.9 + 0.09 * (1 - Math.Exp(-(elapsed - expected) / 30)); preparing = true; }
+        _measureBar.Value = (_measureIndex + frac) / _measureCount * 100;
+        var modes = TargetModes.ToList();
+        double left = Math.Max(0, expected - elapsed) + modes.Skip(_measureIndex + 1).Sum(ExpectedSeconds);
+        string step = _measureCount > 1 ? $" (hash mode {_measureIndex + 1} of {_measureCount})" : "";
+        _measureText.Text = preparing
+            ? "Preparing GPU kernels, first time only, this can take a minute..." + step
+            : $"Measuring speed... {(_measureNative ? "" : "about ")}{Math.Ceiling(left):0} s left" + step;
+    }
     private string? _measureError;
 #if DEBUG
     internal bool DebugNoSave { get; set; }
@@ -459,7 +494,7 @@ public sealed class WizardWindow : Window
         int modes = TargetModes.Count();
         if (_measureCts is not null)
         {
-            var bar = new ProgressBar { IsIndeterminate = true, Height = 4, MinHeight = 4, Width = 120, VerticalAlignment = VerticalAlignment.Center };
+            var bar = _measureBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 4, MinHeight = 4, Width = 120, VerticalAlignment = VerticalAlignment.Center };
             var row = new DockPanel();
             var cancel = LinkButton("Cancel", () => _measureCts?.Cancel());
             DockPanel.SetDock(bar, Dock.Left);
@@ -467,7 +502,8 @@ public sealed class WizardWindow : Window
             bar.Margin = new Thickness(0, 0, 10, 0);
             row.Children.Add(bar);
             row.Children.Add(cancel);
-            row.Children.Add(Small(_measureStatus));
+            row.Children.Add(_measureText = Small(_measureStatus));
+            UpdateMeasureProgress();
             _speedNote.Child = NoteBox(row);
             return;
         }
@@ -491,7 +527,8 @@ public sealed class WizardWindow : Window
         if (_measureError is not null) lines.Children.Add(Small(_measureError, Palette.WarningBrush));
         if (_tool is not null)
         {
-            var measure = L.Button(_measureError is null ? "Measure speed (about 10 s)" : "Try again", () => _ = MeasureSpeedAsync(), 0);
+            double total = TargetModes.Sum(ExpectedSeconds);
+            var measure = L.Button(_measureError is null ? $"Measure speed (about {total:0} s)" : "Try again", () => _ = MeasureSpeedAsync(), 0);
             measure.HorizontalAlignment = HorizontalAlignment.Left;
             ToolTip.SetTip(measure, "Runs a short benchmark for this file type only, on the same devices an attack would use");
             lines.Children.Add(measure);
@@ -518,12 +555,19 @@ public sealed class WizardWindow : Window
         {
             for (int i = 0; i < modes.Count; i++)
             {
-                _measureStatus = modes.Count > 1 ? $"Measuring hash mode {modes[i]} ({i + 1} of {modes.Count})..." : "Measuring...";
-                RenderSpeedNote();
+                _measureStatus = "Measuring speed...";
+                _measureIndex = i;
+                _measureCount = modes.Count;
+                _measureNative = SpeedProbe.UseNative(_settings, _devices, modes[i]);
+                _measureModeStart = DateTime.UtcNow;
+                if (i == 0) RenderSpeedNote();
+                _measureTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => UpdateMeasureProgress());
+                _measureTimer.Start();
+                UpdateMeasureProgress();
                 using var limit = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
                 limit.CancelAfter(TimeSpan.FromSeconds(90));
                 double speed;
-                try { (speed, _) = await SpeedProbe.MeasureAsync(_tool, _settings, _devices, modes[i], TimeSpan.FromSeconds(5), limit.Token); }
+                try { (speed, _) = await SpeedProbe.MeasureAsync(_tool, _settings, _devices, modes[i], TimeSpan.FromSeconds(NativeSeconds), limit.Token); }
                 catch (OperationCanceledException) when (!cts.IsCancellationRequested) { throw new TimeoutException(); }
                 DebugLog.Info($"Wizard speed measurement, mode {modes[i]}: {speed:N0} p/s");
                 if (speed <= 0) throw new InvalidOperationException($"hash mode {modes[i]} cannot run on the selected devices.");
@@ -540,6 +584,9 @@ public sealed class WizardWindow : Window
         {
             if (ReferenceEquals(_measureCts, cts)) _measureCts = null;
             cts.Dispose();
+            _measureTimer?.Stop();
+            _measureBar = null;
+            _measureText = null;
         }
         if (measured.Count > 0)
         {
