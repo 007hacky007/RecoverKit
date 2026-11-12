@@ -1,5 +1,6 @@
 using System.Text;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Attacks.Stay;
 using Xunit;
 
 namespace RecoverKit.Tests.Stay;
@@ -24,7 +25,7 @@ public class ZipStayTargetTests
         return list;
     }
 
-    private static GeneratedZip Zip(int count, TestRngVariant variant = TestRngVariant.Msvc, uint seed = 0x12345678,
+    private static GeneratedZip Zip(int count, ZipRngVariant variant = ZipRngVariant.Msvc, uint seed = 0x12345678,
         int sessions = int.MaxValue)
         => ZipStayArchive.Generate(Entries(count), Password, variant, seed, filesInFirstSession: sessions);
 
@@ -74,7 +75,7 @@ public class ZipStayTargetTests
             Method = 12,
             ExoticCompData = [0x42, 0x31, 0x2e, 0x30, 0xff, 0xaa],
         };
-        var zip = ZipStayArchive.Generate(specs, Password, TestRngVariant.Msvc, 0x2468ace0);
+        var zip = ZipStayArchive.Generate(specs, Password, ZipRngVariant.Msvc, 0x2468ace0);
         var d = Extract(zip);
 
         Assert.Equal("ZIPC", d.Target!.FormatId);          // hash line still built from a 0/8 entry
@@ -93,7 +94,7 @@ public class ZipStayTargetTests
             Method = 0,
             ForceCompSize = 8,                               // central directory claims fewer than 12 bytes
         };
-        var zip = ZipStayArchive.Generate(specs, Password, TestRngVariant.Msvc, 0x77aa55aa);
+        var zip = ZipStayArchive.Generate(specs, Password, ZipRngVariant.Msvc, 0x77aa55aa);
         var d = Extract(zip);
 
         Assert.NotNull(d.Target);                            // still attackable through the other entries
@@ -111,7 +112,7 @@ public class ZipStayTargetTests
             new() { Name = "META-INF/manifest.xml", Content = "<manifest/>"u8.ToArray(), Method = 8, Classic = false },
             new() { Name = "content.xml", Content = Encoding.ASCII.GetBytes(new string('z', 200)), Method = 8 },
         };
-        var d = Extract(ZipStayArchive.Generate(odfSpecs, Password, TestRngVariant.Msvc, 1));
+        var d = Extract(ZipStayArchive.Generate(odfSpecs, Password, ZipRngVariant.Msvc, 1));
         Assert.True(d.Target is null || d.Target.FormatId != "ZIPC");   // ODF path taken, never ZIPC
         Assert.Null(d.Target?.StayZip);
 
@@ -123,7 +124,7 @@ public class ZipStayTargetTests
             Method = 8,
             FakeAes = true,
         });
-        d = Extract(ZipStayArchive.Generate(aesSpecs, Password, TestRngVariant.Msvc, 2));
+        d = Extract(ZipStayArchive.Generate(aesSpecs, Password, ZipRngVariant.Msvc, 2));
         Assert.Equal("WZAE", d.Target!.FormatId);
         Assert.Null(d.Target.StayZip);
     }

@@ -1,9 +1,9 @@
 using System.IO.Compression;
 using System.Text;
 
-namespace RecoverKit.Tests.Stay;
+using RecoverKit.Core.Attacks.Stay;
 
-public enum TestRngVariant { Msvc, WinZip }
+namespace RecoverKit.Tests.Stay;
 
 /// <summary>One entry to place in a generated archive.</summary>
 public sealed class GeneratedEntry
@@ -49,7 +49,7 @@ public sealed class GeneratedZip
     public required uint Y { get; init; }
     public required uint Z { get; init; }
     public required uint Seed { get; init; }
-    public required TestRngVariant Variant { get; init; }
+    public required ZipRngVariant Variant { get; init; }
     public required int SessionFileCount { get; init; }
 
     /// <summary>The full encrypted entry body (12-byte header + compressed data) as it sits in the archive.</summary>
@@ -72,7 +72,7 @@ public static class ZipStayArchive
 {
     private static readonly uint[] T = BuildCrcTable();
 
-    public static GeneratedZip Generate(IReadOnlyList<GeneratedEntry> specs, string password, TestRngVariant variant, uint seed,
+    public static GeneratedZip Generate(IReadOnlyList<GeneratedEntry> specs, string password, ZipRngVariant variant, uint seed,
         int filesInFirstSession = int.MaxValue)
     {
         var n = specs.Count;
@@ -113,7 +113,7 @@ public static class ZipStayArchive
                 ri = new byte[10];
                 for (int j = 0; j < 10; j++)
                 {
-                    chain = unchecked(chain * 214013u + (variant == TestRngVariant.Msvc ? 2531011u : 0u));
+                    chain = unchecked(chain * 214013u + (variant == ZipRngVariant.Msvc ? 2531011u : 0u));
                     ri[j] = (byte)((chain >> 23) & 0xff);
                 }
             }
