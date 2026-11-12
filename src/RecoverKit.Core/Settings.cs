@@ -36,6 +36,8 @@ public sealed class Settings
     public int GpuTempLimit { get; set; } = 85;               // °C, 60..100
     public int GpuTempHysteresis { get; set; } = 10;          // °C, 3..30: resume at or below limit - hysteresis
     public int GpuDutyPercent { get; set; } = 100;            // share of time the GPU works (100 = always); rests in between
+    public bool GpuPowerLimit { get; set; }                   // NVIDIA power limit during attacks (asks for admin rights per attack)
+    public Dictionary<int, int> GpuPowerWatts { get; set; } = new();   // nvidia-smi GPU index -> watts
 
     public bool UseExternalScenarioFile { get; set; }
     public string? ExternalScenarioFile { get; set; }

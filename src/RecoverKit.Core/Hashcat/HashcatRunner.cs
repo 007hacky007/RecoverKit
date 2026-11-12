@@ -98,11 +98,12 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     /// <summary>The guard for a hashcat run with these settings, or null when it is off or hashcat uses no GPU.</summary>
     public static ThermalGuard? GuardFor(Settings s, IReadOnlyList<BackendDevice>? known)
-    {
-        if (s.Strategy == DeviceStrategy.CpuOnly) return null;
-        if (known is { Count: > 0 } && !known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))) return null;
-        return ThermalGuard.FromSettings(s);
-    }
+        => UsesGpu(s, known) ? ThermalGuard.FromSettings(s) : null;
+
+    /// <summary>Whether hashcat runs with these settings can use a GPU (unknown devices count as yes).</summary>
+    public static bool UsesGpu(Settings s, IReadOnlyList<BackendDevice>? known)
+        => s.Strategy != DeviceStrategy.CpuOnly &&
+           (known is not { Count: > 0 } || known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>-d / -D arguments derived from the GPU configuration and CPU/GPU strategy.</summary>
     public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known)

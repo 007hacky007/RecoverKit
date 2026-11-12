@@ -80,6 +80,12 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
 
     public IReadOnlyList<BackendDevice>? Devices { get; set; }
 
+    /// <summary>
+    /// Asked before RecoverKit requests administrator rights for the NVIDIA power limit, with the
+    /// explanation to show. Without it (or on "without power limit") the attack runs unlimited.
+    /// </summary>
+    public Func<PowerLimitRequest, Task<ElevationChoice>>? ConfirmElevation { get; set; }
+
     public PlannerContext PlannerContext => new()
     {
         DataPath = settings.DataPath,
@@ -105,6 +111,47 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             }
         }
 
+        var power = await StartPowerLimitAsync(ct);
+        if (power.Cancelled) return new SessionResult { Outcome = SessionOutcome.Stopped };
+        try { return await RunStepsAsync(target, filePath, resume, key, potfile, hashFile, steps, ct); }
+        finally
+        {
+            if (power.Session is not null)
+            {
+                power.Session.Dispose();
+                Log?.Invoke(LogKind.Info, "GPU power limit restored.");
+            }
+        }
+    }
+
+    /// <summary>Applies the optional NVIDIA power limit for the whole attack, after the user saw why admin rights are needed.</summary>
+    private async Task<(PowerLimitSession? Session, bool Cancelled)> StartPowerLimitAsync(CancellationToken ct)
+    {
+        if (!settings.GpuPowerLimit || !HashcatRunner.UsesGpu(settings, Devices))
+            return (null, false);
+        var request = NvidiaPower.BuildRequest(settings, await PowerLimiter.QueryAsync());
+        if (request is null) return (null, false);
+        var choice = ConfirmElevation is null ? ElevationChoice.WithoutPowerLimit : await ConfirmElevation(request);
+        if (choice == ElevationChoice.Cancel) return (null, true);
+        if (choice == ElevationChoice.WithoutPowerLimit)
+        {
+            Log?.Invoke(LogKind.Warning, "Running without the GPU power limit.");
+            return (null, false);
+        }
+        var (session, error) = await PowerLimiter.StartAsync(request, ct);
+        if (session is null)
+        {
+            Log?.Invoke(LogKind.Warning, $"GPU power limit not applied ({error}); running without it.");
+            return (null, false);
+        }
+        Log?.Invoke(LogKind.Info, "GPU power limit set: " +
+            string.Join(", ", request.Targets.Select(t => $"{PowerLimitRequest.Watts(t.Watts)} for {t.Name}")) + ".");
+        return (session, false);
+    }
+
+    private async Task<SessionResult> RunStepsAsync(HashTarget target, string filePath, SessionState? resume, string key,
+        string potfile, string hashFile, IReadOnlyList<AttackSpec> steps, CancellationToken ct)
+    {
         var state = resume ?? new SessionState { FilePath = filePath, Key = key, Modes = target.Modes.ToList(), Steps = steps.ToList() };
         var runner = new HashcatRunner(tool) { KnownDevices = Devices };
         runner.StatusReceived += s => Status?.Invoke(s);
