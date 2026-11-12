@@ -58,6 +58,7 @@ off in Preferences > Key search.
 | OpenDocument files | LibreOffice and OpenOffice documents |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
 | Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
+| Android backups | Encrypted adb / Helium `.ab` backups, versions 1-5 (hashcat 18900) |
 | Wi-Fi | WPA/WPA2 handshakes from your own network |
 
 Just open the file (or drag it onto the window). RecoverKit recognizes the format by itself.

@@ -276,6 +276,13 @@ that version.
 
 ## Technical notes
 
+- Android backup extraction reads only the bounded ASCII header of standard adb / Helium `.ab`
+  files, versions 1-5 (hashcat 18900). It preserves the version and checksum salt. Hashcat 7.1.2
+  verifies the encrypted master key blob's padding rather than recomputing its checksum. The
+  embedded v1/v5 fixtures were generated with Python cryptography, including the signed Java
+  byte-to-char checksum conversion followed by UTF-8 encoding for v2+. Both were cracked through
+  the CLI; a physical Android device and Helium were not available. Legacy v1 non-ASCII passwords
+  can require an 8-bit encoded dictionary. Only password recovery is implemented, not unpacking.
 - RAR 3.x recovery covers encrypted file names (`-hp`, hashcat 12500) and visible file names
   (`-p`, hashcat 23700 for stored files or 23800 for compressed files). Data-only extraction
   prefers entries with at least eight unpacked bytes, then stored entries, then smaller entries.

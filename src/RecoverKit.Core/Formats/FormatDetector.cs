@@ -5,7 +5,7 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.ab",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
@@ -13,6 +13,7 @@ public static class FormatDetector
         "PDF files|*.pdf",
         "WPA handshakes|*.22000;*.hccapx;*.hccap",
         "Apple iOS backup manifest|*.plist",
+        "Android backups|*.ab",
         "Self-extracting archives|*.exe",
         "All files|*.*",
     ];
@@ -42,6 +43,10 @@ public static class FormatDetector
             else if (PdfExtractor.IsPdf(head))
             {
                 PdfExtractor.Extract(s, d);
+            }
+            else if (AndroidBackupExtractor.IsBackup(head))
+            {
+                AndroidBackupExtractor.Extract(s, d);
             }
             else if (WpaExtractor.IsHashLines(head) || WpaExtractor.IsHccapx(head) || path.EndsWith(".hccap", StringComparison.OrdinalIgnoreCase))
             {
