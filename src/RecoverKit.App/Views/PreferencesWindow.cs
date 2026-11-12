@@ -1,0 +1,363 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Layout;
+using Avalonia.LogicalTree;
+using Avalonia.Media;
+using RecoverKit.App.Ui;
+using RecoverKit.Core;
+using RecoverKit.Core.Hashcat;
+
+namespace RecoverKit.App.Views;
+
+/// <summary>Preferences: Performance, GPU Configuration, Files and Paths, Key search, Other. Closes with true on OK.</summary>
+public sealed class PreferencesWindow : Window
+{
+    private readonly Settings _s;
+    private readonly HashcatTool? _hashcat;
+    private List<BackendDevice> _devices;
+    public bool HashcatChanged { get; private set; }
+
+    private static readonly string[] Strategies =
+    [
+        "Keep one CPU thread free for each GPU (recommended)",
+        "Avoid the CPU whenever a GPU can run (fast GPUs)",
+        "Use all CPU threads next to the GPUs (slow GPUs)",
+        "CPU only, no GPUs (for testing)",
+    ];
+    private static readonly string[] Priorities = ["Idle (recommended)", "Below normal", "Normal", "High (not recommended)"];
+
+    private readonly ComboBox _strategy = new() { ItemsSource = Strategies, HorizontalAlignment = HorizontalAlignment.Stretch };
+    private readonly ComboBox _priority = new() { ItemsSource = Priorities, MinWidth = 240 };
+    private readonly NumericUpDown _maxThreads = L.Number(1, Math.Max(1, Environment.ProcessorCount), Environment.ProcessorCount);
+    private readonly CheckBox _optimized = Check("Use optimized kernels for brute-force (faster, limits password length to 27)");
+    private readonly CheckBox _native = Check("Use the built-in CPU engine when no GPU is used (ZIP, Office 97-2003, PDF R2-R4 and R6, RAR 3.x)");
+    private readonly TextBox _extra = new();
+    private readonly StackPanel _gpuList = new() { Spacing = 2 };
+    private readonly List<(CheckBox Box, int Id)> _gpuChecks = new();
+    private readonly Slider _workload = new() { Minimum = 1, Maximum = 4, TickFrequency = 1, IsSnapToTickEnabled = true, TickPlacement = Avalonia.Controls.TickPlacement.BottomRight };
+    private readonly TextBlock _backendLabel = L.Text("", dim: true);
+    private readonly CheckBox _screensaver = Check("Keep the display and system awake while an attack runs");
+    private readonly CheckBox _useScenario = Check("Use external scenario file");
+    private readonly TextBox _scenarioFile = new();
+    private readonly TextBox _hashcatPath = new();
+    private readonly TextBox _dataPath = new();
+    private readonly TextBox _defaultDict = new();
+    private readonly TextBox _onSuccess = new();
+    private readonly TextBox _onFail = new();
+    private readonly TextBox _rainbowPath = new();
+    private readonly CheckBox _autoDecrypt = Check("Decrypt the document after a successful attack and save it with the suffix");
+    private readonly TextBox _decryptSuffix = new() { Margin = new Thickness(28, 0, 0, 0), MaxWidth = 240, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly CheckBox _noCache = Check("Don't use password cache");
+    private readonly CheckBox _noKeyCache = Check("Don't use key cache");
+    private readonly CheckBox _reduce = Check("Reduce informational output (hide hashcat messages)");
+    private readonly CheckBox _logHashes = Check("Include extracted hashes (only needed to debug file parsing)");
+    private readonly Button _apply;
+
+    private static CheckBox Check(string text) => new() { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap } };
+
+    public PreferencesWindow(Settings s, HashcatTool? hashcat, List<BackendDevice> devices, int tab)
+    {
+        _s = s;
+        _hashcat = hashcat;
+        _devices = devices;
+        Title = Platform.IsMac ? "Settings" : "Preferences";
+        Icon = Icons.AppIcon();
+        Width = 680;
+        Height = 560;
+        MinWidth = 560;
+        MinHeight = 440;
+        CanMinimize = false;
+        ShowInTaskbar = false;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+
+        var tabs = new TabControl { Margin = new Thickness(12, 8, 12, 0) };
+        tabs.Items.Add(Tab("Performance", PerformanceTab()));
+        tabs.Items.Add(Tab("GPU", GpuTab()));
+        tabs.Items.Add(Tab("Files and Paths", PathsTab()));
+        tabs.Items.Add(Tab("Key search", KeySearchTab()));
+        tabs.Items.Add(Tab("Other", OtherTab()));
+        tabs.SelectedIndex = Math.Clamp(tab, 0, tabs.ItemCount - 1);
+
+        var ok = L.Button("OK", () => { Apply(); Close(true); }, 90, isDefault: true);
+        var cancel = L.Button("Cancel", () => Close(false), 90, isCancel: true);
+        _apply = L.Button("Apply", () => { Apply(); s.Save(); _apply!.IsEnabled = false; }, 90);
+        _apply.IsEnabled = false;
+        var footer = L.Footer(Platform.IsMac ? [_apply, cancel, ok] : [ok, cancel, _apply]);
+        var root = new DockPanel();
+        DockPanel.SetDock(footer, Dock.Bottom);
+        root.Children.Add(footer);
+        root.Children.Add(tabs);
+        Content = root;
+        LoadValues();
+        // Apply stays disabled until something changes.
+        TrackChanges(tabs, () => _apply.IsEnabled = true);
+    }
+
+    private static TabItem Tab(string name, Control content) => new()
+    {
+        Header = name, FontSize = 14,
+        Content = new ScrollViewer { Content = new Border { Padding = new Thickness(4, 12, 8, 12), Child = content }, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled },
+    };
+
+    private void TrackChanges(Control root, Action changed)
+    {
+        foreach (var c in root.GetSelfAndLogicalDescendants())
+        {
+            switch (c)
+            {
+                case CheckBox cb: cb.IsCheckedChanged += (_, _) => changed(); break;
+                case ComboBox co: co.SelectionChanged += (_, _) => changed(); break;
+                case NumericUpDown nu: nu.ValueChanged += (_, _) => changed(); break;
+                case Slider sl: sl.ValueChanged += (_, _) => changed(); break;
+                case TextBox tx: tx.TextChanged += (_, _) => changed(); break;
+            }
+        }
+        _gpuChanged = changed;
+    }
+
+    private Action? _gpuChanged;
+
+    private Control PathRow(TextBox box, Func<Task<string?>> pick)
+    {
+        var g = L.Grid("*,Auto");
+        g.Put(box, 0, 0);
+        g.Put(L.Button("...", async () => { if (await pick() is { } p) box.Text = p; }, 40), 0, 1);
+        return g;
+    }
+
+    private Task<string?> PickFile(string filter) => Pick.Open(this, filter);
+    private Task<string?> PickFolder() => Pick.FolderPath(this);
+
+    // ------------------------------------------------------------------ tabs
+
+    private Control PerformanceTab()
+    {
+        var grid = L.Grid("Auto,*,Auto", rowSpacing: 10, columnSpacing: 12);
+        grid.Put(L.Text("Application priority"), 0, 0);
+        grid.Put(_priority, 0, 1, 2);
+        grid.Put(L.Text("Maximum number of CPU threads"), 1, 0);
+        grid.Put(_maxThreads, 1, 1);
+        grid.Put(L.Button("Detect", () => _maxThreads.Value = _maxThreads.Maximum, 84), 1, 2);
+
+        var hc = L.Grid("Auto,*", rowSpacing: 10, columnSpacing: 12);
+        hc.Put(_optimized, 0, 0, 2);
+        hc.Put(_native, 1, 0, 2);
+        hc.Put(L.Text("Extra hashcat arguments"), 2, 0);
+        hc.Put(_extra, 2, 1);
+
+        return L.Column(16,
+            L.Group("CPU/GPU performance strategy", StrategyBox()),
+            L.Group("", grid),
+            L.Group("Recovery engines", hc));
+    }
+
+    /// <summary>The strategy list, with a note where hashcat has no CPU device (Apple silicon).</summary>
+    private Control StrategyBox()
+    {
+        var note = L.Text("On this computer hashcat sees no processor device: \"CPU only\" runs the built-in CPU engine, which covers ZIP, Office 97-2003, PDF and RAR 3.x.", dim: true, wrap: true);
+        note.FontSize = 12;
+        void Sync() => note.IsVisible = _strategy.SelectedIndex == (int)DeviceStrategy.CpuOnly
+            && HashcatRunner.NoCpuDevice(new Settings { Strategy = DeviceStrategy.CpuOnly }, _devices);
+        _strategy.SelectionChanged += (_, _) => Sync();
+        Opened += (_, _) => Sync();
+        return L.Column(6, _strategy, note);
+    }
+
+    private Control GpuTab()
+    {
+        var header = L.Grid("2*,*,*,*", columnSpacing: 8);
+        string[] cols = ["GPU name", "Compute units", "Frequency", "Memory"];
+        for (int i = 0; i < cols.Length; i++) header.Put(L.Text(cols[i], dim: true, bold: true), 0, i);
+        var list = L.Column(6, header, new Border { Height = 1, Background = Palette.LineBrush }, _gpuList);
+
+        var labels = L.Grid("*,*");
+        labels.Put(L.Text("Lag free display", dim: true), 0, 0);
+        var perf = labels.Put(L.Text("Performance", dim: true), 0, 1);
+        perf.HorizontalAlignment = HorizontalAlignment.Right;
+
+        var detectRow = L.Grid("*,Auto");
+        detectRow.Put(_backendLabel, 0, 0);
+        detectRow.Put(L.Button("Detect", async () =>
+        {
+            if (_hashcat is null) return;
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Wait);
+            try { _devices = await _hashcat.DevicesAsync(); FillDevices(); }
+            finally { Cursor = Avalonia.Input.Cursor.Default; }
+        }, 84), 0, 1);
+
+        return L.Column(16,
+            L.Group("Devices", list),
+            L.Group("Workload", L.Column(2, labels, _workload)),
+            detectRow,
+            _screensaver);
+    }
+
+    private Control HashcatRow()
+    {
+        var g = L.Grid("*,Auto,Auto");
+        g.Put(_hashcatPath, 0, 0);
+        g.Put(L.Button("...", async () =>
+        {
+            if (await PickFile(OperatingSystem.IsWindows() ? "hashcat|hashcat.exe|All files|*.*" : "All files|*.*") is { } p) _hashcatPath.Text = p;
+        }, 40), 0, 1);
+        g.Put(L.Button(Platform.IsMac ? "Install" : "Download", async () =>
+        {
+            if (await HashcatDownloadWindow.RunAsync(this) is { } exe)
+            {
+                _hashcatPath.Text = exe;
+                HashcatChanged = true;
+            }
+        }, 94), 0, 2);
+        return g;
+    }
+
+    private Control PathsTab()
+    {
+        var exec = L.Grid("Auto,*", rowSpacing: 8, columnSpacing: 10);
+        exec.Put(L.Text("On success"), 0, 0);
+        exec.Put(PathRow(_onSuccess, () => PickFile("All files|*.*")), 0, 1);
+        exec.Put(L.Text("On fail"), 1, 0);
+        exec.Put(PathRow(_onFail, () => PickFile("All files|*.*")), 1, 1);
+        return L.Column(14,
+            L.Group(OperatingSystem.IsWindows() ? "hashcat executable (hashcat.exe)" : "hashcat executable", HashcatRow()),
+            L.Group("Default dictionary (used by scenarios as *default)", PathRow(_defaultDict, () => PickFile("Dictionary files (*.dic; *.txt)|*.dic;*.txt|All files|*.*"))),
+            L.Group("Folder for dictionaries and rule files", PathRow(_dataPath, PickFolder)),
+            L.Group("Run these programs when recovery ends", exec),
+            L.Group("", L.Column(8, _useScenario, PathRow(_scenarioFile, () => PickFile("Scenario files (*.txt)|*.txt|All files|*.*")))));
+    }
+
+    private Control KeySearchTab() => L.Column(14,
+        L.Group("", L.Column(8, _autoDecrypt, _decryptSuffix)),
+        L.Group("Default path for rainbow tables", PathRow(_rainbowPath, PickFolder)),
+        L.Text("Key search is available in the wizard for 40-bit RC4 documents. Rainbow tables are not supported by the hashcat engine; the path is kept for compatibility.", dim: true, wrap: true));
+
+    private Control OtherTab()
+    {
+        var clearPw = L.Button("Clear", async () =>
+        {
+            if (!await Msg.Ask(this, "Delete all cached recovered passwords?", Title)) return;
+            try { File.Delete(_s.PotfilePath); await Msg.Info(this, "Done!", Title); }
+            catch (IOException ex) { await Msg.Warn(this, ex.Message, Title); }
+        });
+        Button clearKey = null!;
+        clearKey = L.Button("Clear", async () =>
+        {
+            try { File.Delete(_s.KeyCachePath); clearKey.IsEnabled = false; await Msg.Info(this, "Done!", Title); }
+            catch (IOException ex) { await Msg.Warn(this, ex.Message, Title); }
+        });
+        clearKey.IsEnabled = File.Exists(_s.KeyCachePath);
+        var clearSessions = L.Button("Clear saved sessions", async () =>
+        {
+            foreach (var f in Directory.EnumerateFiles(_s.SessionsDir)) try { File.Delete(f); } catch (IOException) { }
+            await Msg.Info(this, "Done!", Title);
+        }, 160);
+        clearSessions.HorizontalAlignment = HorizontalAlignment.Left;
+        var openLog = L.Button(Platform.IsMac ? "Show in Finder" : "Open folder", () =>
+        {
+            Directory.CreateDirectory(DebugLog.Directory);
+            Platform.Shell(DebugLog.Directory);
+        }, 120);
+
+        Control Line(Control left, Control right)
+        {
+            var g = L.Grid("*,Auto", columnSpacing: 12);
+            g.Put(left, 0, 0);
+            g.Put(right, 0, 1);
+            return g;
+        }
+        return L.Column(14,
+            L.Group("Password cache", Line(_noCache, clearPw)),
+            L.Group("Key cache", L.Column(4, Line(_noKeyCache, clearKey),
+                L.Text("Keys recovered by key search (40-bit RC4: MS Office 97-2003, PDF 1.1-1.3).", dim: true, wrap: true))),
+            L.Group("", _reduce),
+            L.Group("Interrupted attacks", clearSessions),
+            L.Group("Debug log", Line(_logHashes, openLog)));
+    }
+
+    // ------------------------------------------------------------------ load / apply
+
+    private void LoadValues()
+    {
+        _strategy.SelectedIndex = (int)_s.Strategy;
+        _priority.SelectedIndex = (int)_s.Priority;
+        // 0 means "one per logical processor"; show the number it resolves to.
+        _maxThreads.Value = _s.MaxCpuThreads <= 0 ? _maxThreads.Maximum : Math.Clamp(_s.MaxCpuThreads, 1, (int)_maxThreads.Maximum);
+        _optimized.IsChecked = _s.OptimizedKernels;
+        _native.IsChecked = _s.UseNativeCpuEngine;
+        _extra.Text = _s.ExtraArguments;
+        _workload.Value = Math.Clamp(_s.Workload, 1, 4);
+        _screensaver.IsChecked = _s.PreventScreensaver;
+        _useScenario.IsChecked = _s.UseExternalScenarioFile;
+        _scenarioFile.Text = _s.ExternalScenarioFile ?? "";
+        _hashcatPath.Text = _s.HashcatPath ?? _hashcat?.Exe ?? "";
+        _dataPath.Text = _s.DataPath ?? "";
+        _defaultDict.Text = _s.DefaultDictionary ?? "";
+        _onSuccess.Text = _s.ExecuteOnSuccess ?? "";
+        _onFail.Text = _s.ExecuteOnFail ?? "";
+        _rainbowPath.Text = _s.RainbowTablesPath ?? "";
+        _autoDecrypt.IsChecked = _s.AutoDecrypt;
+        _decryptSuffix.Text = string.IsNullOrEmpty(_s.DecryptSuffix) ? "_decrypted" : _s.DecryptSuffix;
+        _noCache.IsChecked = _s.DontUsePasswordCache;
+        _noKeyCache.IsChecked = _s.DontUseKeyCache;
+        _reduce.IsChecked = _s.ReduceOutput;
+        _logHashes.IsChecked = _s.DebugLogIncludeHashes;
+        FillDevices();
+    }
+
+    private void FillDevices()
+    {
+        // GPUs only: the processor is configured on the Performance tab
+        // (strategy, thread count), and the workload slider only governs GPU kernels.
+        _gpuList.Children.Clear();
+        _gpuChecks.Clear();
+        var gpus = _devices.Where(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var d in gpus)
+        {
+            var row = L.Grid("2*,*,*,*", columnSpacing: 8);
+            var cb = new CheckBox { Content = new TextBlock { Text = d.Name, TextTrimming = TextTrimming.CharacterEllipsis }, IsChecked = !_s.DisabledDevices.Contains(d.Id) };
+            cb.IsCheckedChanged += (_, _) => _gpuChanged?.Invoke();
+            row.Put(cb, 0, 0);
+            row.Put(L.Text(d.Processors > 0 ? d.Processors.ToString() : "n/a"), 0, 1);
+            row.Put(L.Text(d.ClockMhz > 0 ? $"{d.ClockMhz} MHz" : "n/a"), 0, 2);
+            row.Put(L.Text(d.MemoryMb > 0 ? $"{d.MemoryMb} MB" : "n/a"), 0, 3);
+            _gpuList.Children.Add(row);
+            _gpuChecks.Add((cb, d.Id));
+        }
+        if (gpus.Count == 0) _gpuList.Children.Add(L.Text("No compatible GPU devices detected.", dim: true));
+        _workload.IsEnabled = gpus.Count > 0;
+        _backendLabel.Text = gpus.Count == 0 ? ""
+            : string.Join(", ", gpus.Select(d => d.Backend + (d.BackendVersion.Length > 0 ? " " + d.BackendVersion : "")).Distinct());
+    }
+
+    private void Apply()
+    {
+        _s.Strategy = (DeviceStrategy)Math.Max(0, _strategy.SelectedIndex);
+        _s.Priority = (ProcessPriority)Math.Max(0, _priority.SelectedIndex);
+        _s.MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue();
+        _s.OptimizedKernels = _optimized.IsChecked == true;
+        _s.UseNativeCpuEngine = _native.IsChecked == true;
+        _s.ExtraArguments = (_extra.Text ?? "").Trim();
+        _s.Workload = (int)Math.Round(_workload.Value);
+        _s.PreventScreensaver = _screensaver.IsChecked == true;
+        _s.DisabledDevices = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Id).ToList();
+        _s.UseExternalScenarioFile = _useScenario.IsChecked == true;
+        _s.ExternalScenarioFile = Null(_scenarioFile.Text);
+        var hp = Null(_hashcatPath.Text);
+        if (hp != _s.HashcatPath && hp != _hashcat?.Exe) HashcatChanged = true;
+        _s.HashcatPath = hp;
+        _s.DataPath = Null(_dataPath.Text);
+        _s.DefaultDictionary = Null(_defaultDict.Text);
+        _s.ExecuteOnSuccess = Null(_onSuccess.Text);
+        _s.ExecuteOnFail = Null(_onFail.Text);
+        _s.RainbowTablesPath = Null(_rainbowPath.Text);
+        _s.AutoDecrypt = _autoDecrypt.IsChecked == true;
+        _s.DecryptSuffix = string.IsNullOrWhiteSpace(_decryptSuffix.Text) ? "_decrypted" : _decryptSuffix.Text.Trim();
+        _s.DontUsePasswordCache = _noCache.IsChecked == true;
+        _s.DontUseKeyCache = _noKeyCache.IsChecked == true;
+        _s.ReduceOutput = _reduce.IsChecked == true;
+        _s.DebugLogIncludeHashes = _logHashes.IsChecked == true;
+        DebugLog.IncludeHashes = _s.DebugLogIncludeHashes;
+    }
+
+    private static string? Null(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+}

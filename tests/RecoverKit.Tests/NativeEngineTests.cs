@@ -93,13 +93,13 @@ public class NativeEngineTests
     }
 
     [Fact]
-    public void Rar3VerifiesHashcatExampleAndSearchesWithAvx2()
+    public void Rar3VerifiesHashcatExampleAndSearchesWithVectors()
     {
         var k = Rar3Kernel.TryParse("$RAR3$*0*45109af8ab5f297a*adbf6c5385d7a40373e8f77d7b89d317")!;
         Assert.True(k.Verify("hashcat"u8));
         Assert.False(k.Verify("hashcab"u8));
-        // The vector search is ~100,000 SHA-1 blocks per candidate: only run it where AVX2 is real.
-        if (System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated)
+        // The vector search is ~100,000 SHA-1 blocks per candidate: only run it with a real vector path.
+        if (Rar3Kernel.NativeFast || System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated)
             Assert.Equal("hashcat", Find(k, "-a", "3", "hashca?l"));
     }
 
@@ -155,7 +155,7 @@ public class NativeEngineTests
     [InlineData(10500, "$pdf$2*3*128*-4*1*16*62888255846156252261477183186121*32*6879919b1afd520bd3b7dbcc0868a0a500000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000")]
     public unsafe void NativeRc4FiltersFindTheExamplePassword(int mode, string hash)
     {
-        if (!RkNative.HasAvx2) return;      // the native filters are AVX2-only for now
+        if (!RkNative.HasVectorPath) return;    // AVX2 or NEON
         var k = NativeKernels.TryCreate(mode, hash)!;
         Assert.IsType<NativeFilterWorker>(k.CreateWorker());
         // 40 candidates of length 7 (three 16-lane groups, the last one partial); "hashcat" is number 37.

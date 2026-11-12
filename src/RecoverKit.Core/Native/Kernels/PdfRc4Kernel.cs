@@ -102,9 +102,9 @@ public sealed unsafe class PdfRc4Kernel : NativeKernel, INativeFilter
 
     public override KernelWorker CreateWorker() =>
         !_twoBlocks ? new ScalarWorker(this)
-        : RkNative.HasAvx2 ? new NativeFilterWorker(this, this, new Worker(this)) : new Worker(this);
+        : RkNative.HasVectorPath ? new NativeFilterWorker(this, this, new Worker(this)) : new Worker(this);
 
-    public override int PrefixBatch(int lastCount) => _twoBlocks && RkNative.HasAvx2 ? RkNative.BatchFor(lastCount, _r == 2 ? 256 : 32) : 1;
+    public override int PrefixBatch(int lastCount) => _twoBlocks && RkNative.HasVectorPath ? RkNative.BatchFor(lastCount, _r == 2 ? 256 : 32) : 1;
 
     int INativeFilter.Filter(byte* pws, int len, int n, int* hits, int maxHits)
     {

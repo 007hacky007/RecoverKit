@@ -3,12 +3,12 @@
     Build the RecoverKit MSI installer.
 
 .DESCRIPTION
-    Publishes the WinForms app and packages it into a standard Windows Installer
+    Publishes the Avalonia app and packages it into a standard Windows Installer
     (.msi) with WiX v6. Run this on Windows x64 with the .NET 10 SDK installed.
 
     By default the publish is self-contained, so the installed app runs without a
     separate .NET runtime. Pass -FrameworkDependent for a much smaller MSI that
-    requires the .NET 10 Desktop Runtime on the target machine.
+    requires the .NET 10 Runtime on the target machine.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File installer\build.ps1

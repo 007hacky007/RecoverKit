@@ -182,6 +182,15 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
                     : await runner.RunAsync(request, ct);
 
+                // hashcat refuses some modes on Apple GPUs (e.g. PKZIP 17200 family): run the built-in CPU engine instead.
+                if (nativePlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true) is { } fallback)
+                {
+                    Log?.Invoke(LogKind.Warning, $"hashcat cannot run hash mode {mode} on this GPU; using the built-in CPU engine instead.");
+                    request = request with { Restore = false };
+                    result = await native.RunAsync(fallback.Kernel, fallback.Space, target.HashLines, request, ct);
+                }
+
                 if (result.LastStatus is { TotalSpeed: > 0 } ls) settings.SpeedByMode[mode] = ls.TotalSpeed;
 
                 switch (result.Outcome)

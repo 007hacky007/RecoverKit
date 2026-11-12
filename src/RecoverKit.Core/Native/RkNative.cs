@@ -9,10 +9,11 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 5;
+    private const int RequiredVersion = 6;
 
+    /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits are the ARMv8 Crypto Extensions.</summary>
     [Flags]
-    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8 }
+    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256 }
 
     [LibraryImport(Lib, EntryPoint = "rk_version")] private static partial int Version();
     [LibraryImport(Lib, EntryPoint = "rk_features")] private static partial int FeaturesRaw();
@@ -61,11 +62,22 @@ internal static unsafe partial class RkNative
     /// <summary>Restricts the vector paths the library may use (benchmarks and tests).</summary>
     internal static void LimitFeatures(Feature mask) { if (Available) SetFeaturesRaw((int)mask); }
 
-    /// <summary>True when the library is present and has a vector path for this CPU.</summary>
+    /// <summary>
+    /// True when the library is present and has a vector path for this CPU (AVX2 on x64, NEON on
+    /// arm64): the RAR 3 hash and the Office 97 / 2003 and PDF RC4 filters.
+    /// </summary>
     public static bool HasVectorPath => Available && (Features & (Feature.Avx2 | Feature.Neon)) != 0;
 
-    /// <summary>True when the library's AVX2 paths can run.</summary>
-    public static bool HasAvx2 => Available && (Features & Feature.Avx2) != 0;
+    /// <summary>True when the library's PDF R6 path can run (AVX2 + AES-NI, or the ARMv8 AES / SHA-2 / SHA-512 instructions).</summary>
+    public static bool HasPdf6Path
+    {
+        get
+        {
+            const Feature x64 = Feature.Avx2 | Feature.AesNi, arm = Feature.ArmAes | Feature.ArmSha2 | Feature.ArmSha512;
+            var f = Features;
+            return (f & x64) == x64 || (f & arm) == arm;
+        }
+    }
 
     /// <summary>
     /// Prefixes per batch so that one call tests at least <paramref name="minCandidates"/> and its last

@@ -25,3 +25,17 @@ magick -size 493x312 gradient:'#F3F6FB-#FFFFFF' \
 
 rm -f icon_*.png
 echo "Regenerated recoverkit.ico, banner.bmp, dialog.bmp"
+
+# macOS app icon: the badge at Apple's icon grid size (824 of 1024 px) with a soft shadow.
+iconset="$(mktemp -d)/RecoverKit.iconset"
+mkdir -p "$iconset"
+rsvg-convert -w 908 -h 908 recoverkit.svg -o badge.png   # the badge spans 232/256 of the SVG, so 908 px gives an 824 px badge
+magick -size 1024x1024 xc:none \( badge.png -background 'rgba(0,0,0,0.35)' -shadow 60x14+0+12 \) -gravity center -geometry +0+10 -composite \
+  badge.png -gravity center -composite icon_1024.png
+for s in 16 32 128 256 512; do
+  magick icon_1024.png -resize ${s}x${s} "$iconset/icon_${s}x${s}.png"
+  magick icon_1024.png -resize $((s * 2))x$((s * 2)) "$iconset/icon_${s}x${s}@2x.png"
+done
+iconutil -c icns "$iconset" -o "$repo/macos/RecoverKit.icns"
+rm -rf "$(dirname "$iconset")" badge.png icon_1024.png
+echo "Regenerated macos/RecoverKit.icns"

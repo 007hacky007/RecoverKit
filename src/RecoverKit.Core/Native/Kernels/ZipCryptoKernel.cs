@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 
 namespace RecoverKit.Core.Native.Kernels;
@@ -74,6 +75,12 @@ public sealed class ZipCryptoKernel : NativeKernel
     }
 
     public override KernelWorker CreateWorker() => new Worker(this);
+
+    /// <summary>
+    /// The AdvSimd path on arm64: ~1.6x the scalar one on an M1 Pro (docs/benchmarks/apple-m1-pro-native.txt).
+    /// RECOVERKIT_ZIP_NEON=0 turns it off (tuning switch; tests run both).
+    /// </summary>
+    internal static bool UseAdvSimd { get; set; } = AdvSimd.Arm64.IsSupported && Environment.GetEnvironmentVariable("RECOVERKIT_ZIP_NEON") != "0";
 
     public override bool Verify(ReadOnlySpan<byte> password)
     {
@@ -176,6 +183,7 @@ public sealed class ZipCryptoKernel : NativeKernel
         {
             PrefixKeys(prefix, out uint a0, out uint a1, out uint a2);
             if (Avx2.IsSupported) return SearchAvx2(prefix, last, a0, a1, a2);
+            if (AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefix, last, a0, a1, a2);
             return SearchScalar(prefix, last, a0, a1, a2);
         }
 
@@ -417,6 +425,106 @@ public sealed class ZipCryptoKernel : NativeKernel
                 m |= (ulong)(uint)Avx.MoveMask((Avx2.CompareEqual(cx, chk1) | Avx2.CompareEqual(cx, chk2)).AsSingle()) << 16;
                 var dx = Keystream(d2, two, one, ff) ^ h11;
                 m |= (ulong)(uint)Avx.MoveMask((Avx2.CompareEqual(dx, chk1) | Avx2.CompareEqual(dx, chk2)).AsSingle()) << 24;
+                while (m != 0)
+                {
+                    int l = System.Numerics.BitOperations.TrailingZeroCount(m);
+                    m &= m - 1;
+                    if (i + l < n && Confirm(prefix, last[i + l])) return i + l;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>CRC byte table split 4+4 bits (it is linear over GF(2)): two 16-entry tables, 64 bytes each, for tbl.</summary>
+        private static readonly byte[] NibbleTables = BuildNibbleTables();
+        private static byte[] BuildNibbleTables()
+        {
+            var t = new byte[128];
+            for (int i = 0; i < 16; i++)
+            {
+                BitConverter.TryWriteBytes(t.AsSpan(4 * i), Crc[i]);
+                BitConverter.TryWriteBytes(t.AsSpan(64 + 4 * i), Crc[i << 4]);
+            }
+            return t;
+        }
+
+        /// <summary>T[x &amp; 0xff] for each lane: two tbl lookups (low and high nibble) of each lane's low byte, replicated.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector128<uint> L4(Vector128<uint> x, Vector128<byte> lo0, Vector128<byte> lo1, Vector128<byte> lo2, Vector128<byte> lo3,
+            Vector128<byte> hi0, Vector128<byte> hi1, Vector128<byte> hi2, Vector128<byte> hi3)
+        {
+            var rx = AdvSimd.Arm64.VectorTableLookup(x.AsByte(), Vector128.Create((byte)0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12));
+            var bytes = Vector128.Create(0x03020100u).AsByte();
+            var il = (Vector128.ShiftLeft(rx, 2) & Vector128.Create((byte)0x3c)) | bytes;
+            var ih = (Vector128.ShiftRightLogical(rx, 2) & Vector128.Create((byte)0x3c)) | bytes;
+            return (AdvSimd.Arm64.VectorTableLookup((lo0, lo1, lo2, lo3), il) ^ AdvSimd.Arm64.VectorTableLookup((hi0, hi1, hi2, hi3), ih)).AsUInt32();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector128<uint> Ks4(Vector128<uint> k2)
+        {
+            var t = k2 | Vector128.Create(2u);
+            return Vector128.ShiftRightLogical(AdvSimd.Multiply(t.AsUInt16(), (t ^ Vector128<uint>.One).AsUInt16()).AsUInt32(), 8) & Vector128.Create(0xffu);
+        }
+
+        /// <summary>16 candidates per iteration in 4 interleaved 4-lane vectors; table lookups through tbl.</summary>
+        private unsafe int SearchAdvSimd(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2)
+        {
+            int n = last.Length;
+            Vector128<byte> lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
+            fixed (byte* t = NibbleTables)
+            {
+                lo0 = Vector128.Load(t); lo1 = Vector128.Load(t + 16); lo2 = Vector128.Load(t + 32); lo3 = Vector128.Load(t + 48);
+                hi0 = Vector128.Load(t + 64); hi1 = Vector128.Load(t + 80); hi2 = Vector128.Load(t + 96); hi3 = Vector128.Load(t + 112);
+            }
+            var one = Vector128.Create(1u);
+            var ff = Vector128.Create(0xffu);
+            var mult = Vector128.Create(134775813u);
+            var chk1 = Vector128.Create((uint)k._check1);
+            var chk2 = Vector128.Create((uint)(k._twoBytes ? k._check1 : k._check2));
+            var h11 = Vector128.Create((uint)k._header[11]);
+            uint* lanes = stackalloc uint[16];
+            Vector128<uint>* hdr = stackalloc Vector128<uint>[11];
+            for (int j = 0; j < 11; j++) hdr[j] = Vector128.Create((uint)k._header[j]);
+
+            for (int i = 0; i < n; i += 16)
+            {
+                for (int l = 0; l < 16; l++) lanes[l] = last[Math.Min(i + l, n - 1)];
+                Vector128<uint> a0 = Vector128.Create(p0), a1 = Vector128.Create(p1), a2 = Vector128.Create(p2);
+                Vector128<uint> b0 = a0, b1 = a1, b2 = a2, c0 = a0, c1 = a1, c2 = a2, d0 = a0, d1 = a1, d2 = a2;
+                var ap = Vector128.Load(lanes);
+                var bp = Vector128.Load(lanes + 4);
+                var cp = Vector128.Load(lanes + 8);
+                var dp = Vector128.Load(lanes + 12);
+                for (int j = 0; ; j++)
+                {
+                    a0 = Vector128.ShiftRightLogical(a0, 8) ^ L4(a0 ^ ap, lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    b0 = Vector128.ShiftRightLogical(b0, 8) ^ L4(b0 ^ bp, lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    c0 = Vector128.ShiftRightLogical(c0, 8) ^ L4(c0 ^ cp, lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    d0 = Vector128.ShiftRightLogical(d0, 8) ^ L4(d0 ^ dp, lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    a1 = (a1 + (a0 & ff)) * mult + one;
+                    b1 = (b1 + (b0 & ff)) * mult + one;
+                    c1 = (c1 + (c0 & ff)) * mult + one;
+                    d1 = (d1 + (d0 & ff)) * mult + one;
+                    a2 = Vector128.ShiftRightLogical(a2, 8) ^ L4(a2 ^ Vector128.ShiftRightLogical(a1, 24), lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    b2 = Vector128.ShiftRightLogical(b2, 8) ^ L4(b2 ^ Vector128.ShiftRightLogical(b1, 24), lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    c2 = Vector128.ShiftRightLogical(c2, 8) ^ L4(c2 ^ Vector128.ShiftRightLogical(c1, 24), lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    d2 = Vector128.ShiftRightLogical(d2, 8) ^ L4(d2 ^ Vector128.ShiftRightLogical(d1, 24), lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3);
+                    if (j == 11) break;
+                    var h = hdr[j];
+                    ap = Ks4(a2) ^ h;
+                    bp = Ks4(b2) ^ h;
+                    cp = Ks4(c2) ^ h;
+                    dp = Ks4(d2) ^ h;
+                }
+                var ax = Ks4(a2) ^ h11;
+                var bx = Ks4(b2) ^ h11;
+                var cx = Ks4(c2) ^ h11;
+                var dx = Ks4(d2) ^ h11;
+                uint m = Vector128.ExtractMostSignificantBits(Vector128.Equals(ax, chk1) | Vector128.Equals(ax, chk2))
+                       | Vector128.ExtractMostSignificantBits(Vector128.Equals(bx, chk1) | Vector128.Equals(bx, chk2)) << 4
+                       | Vector128.ExtractMostSignificantBits(Vector128.Equals(cx, chk1) | Vector128.Equals(cx, chk2)) << 8
+                       | Vector128.ExtractMostSignificantBits(Vector128.Equals(dx, chk1) | Vector128.Equals(dx, chk2)) << 12;
                 while (m != 0)
                 {
                     int l = System.Numerics.BitOperations.TrailingZeroCount(m);

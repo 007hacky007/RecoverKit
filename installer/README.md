@@ -9,7 +9,7 @@ supporting clean uninstall and in-place upgrades.
 
 ## Prerequisites
 
-- Windows x64 (the GUI and WiX are Windows-only).
+- Windows x64 (WiX is Windows-only; the macOS app is built by `macos/package.sh`).
 - .NET 10 SDK (to publish the app).
 - Windows PowerShell 5.1 or PowerShell 7. The default execution policy blocks
   scripts, hence `-ExecutionPolicy Bypass`. The build script installs the WiX CLI as a global dotnet tool on
@@ -32,7 +32,7 @@ installer\out\RecoverKit-1.0.0-x64.msi
 By default the publish is **self-contained**: the MSI carries the .NET runtime, so
 the installed app runs on any 64-bit Windows with no prerequisites (larger MSI,
 about 40 MB). For a small MSI that relies on the machine having the
-.NET 10 Desktop Runtime:
+.NET 10 Runtime:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build.ps1 -FrameworkDependent

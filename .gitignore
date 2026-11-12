@@ -5,3 +5,5 @@ publish/
 installer/stage/
 installer/out/
 .DS_Store
+macos/out/
+macos/build/

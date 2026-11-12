@@ -8,7 +8,7 @@ namespace RecoverKit.Core.Native.Kernels;
 /// AES-128-CBC over 64 copies of (password || K) followed by SHA-256, -384 or -512, chosen by the
 /// data. The native library keeps a pool of candidates per thread and runs the rounds in groups
 /// of eight that need the same hash; there is no managed fast path, so the kernel is only offered
-/// when that library can run (AVX2 + AES-NI).
+/// when that library can run (AVX2 + AES-NI, or the ARMv8 AES / SHA-2 / SHA-512 instructions).
 /// </summary>
 public sealed unsafe class PdfR6Kernel : NativeKernel, INativeFilter
 {
@@ -21,8 +21,7 @@ public sealed unsafe class PdfR6Kernel : NativeKernel, INativeFilter
     private PdfR6Kernel(byte[] u) => _u = u;
 
     /// <summary>True when the native R6 path can run on this machine.</summary>
-    internal static bool NativeFast => RkNative.Available
-        && (RkNative.Features & (RkNative.Feature.Avx2 | RkNative.Feature.AesNi)) == (RkNative.Feature.Avx2 | RkNative.Feature.AesNi);
+    internal static bool NativeFast => RkNative.HasPdf6Path;
 
     public static PdfR6Kernel? TryParse(string line)
     {

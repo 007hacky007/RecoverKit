@@ -8,7 +8,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  AVALONIA_TELEMETRY_OPTOUT: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  # Release version: the tag without its "v"; other builds use the run number.
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v0.0.{0}', github.run_number) }}
 
 jobs:
   windows:
@@ -20,7 +26,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
 
@@ -28,9 +34,7 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          if ('${{ github.ref }}' -like 'refs/tags/v*') { $v = '${{ github.ref_name }}'.Substring(1) }
-          else { $v = '0.0.${{ github.run_number }}' }
-          "version=$v" >> $env:GITHUB_OUTPUT
+          "version=$($env:VERSION.Substring(1))" >> $env:GITHUB_OUTPUT
 
       - name: Build native kernels
         shell: bash
@@ -51,16 +55,78 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: RecoverKit-${{ steps.ver.outputs.version }}
+          name: windows
           path: |
             installer/out/*.msi
             installer/out/*.zip
 
+  macos:
+    runs-on: macos-15   # Apple silicon (arm64)
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Version
+        id: ver
+        run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build native kernels
+        run: sh native/build.sh
+
+      - name: Run tests
+        run: dotnet test tests/RecoverKit.Tests -c Release
+
+      # hashcat has no official macOS build: compile the pinned release with its Metal backend.
+      - name: Cache hashcat build
+        uses: actions/cache@v4
+        with:
+          path: macos/out/hashcat
+          key: hashcat-macos-arm64-${{ hashFiles('macos/build-hashcat.sh') }}
+
+      - name: Build hashcat
+        run: sh macos/build-hashcat.sh
+
+      - name: Build app and disk image
+        run: |
+          python -m pip install dmgbuild==1.6.7
+          PYTHON=python sh macos/package.sh ${{ steps.ver.outputs.version }}
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos
+          path: |
+            macos/out/*.dmg
+            macos/out/*.dmg.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only this job publishes
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
-            installer/out/*.msi
-            installer/out/*.zip
+            dist/*.msi
+            dist/*.zip
+            dist/*.dmg
+            dist/*.dmg.sha256
           generate_release_notes: true

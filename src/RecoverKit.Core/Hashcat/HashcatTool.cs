@@ -18,8 +18,20 @@ public sealed class BackendDevice
     public int ClockMhz { get; init; }
     public long MemoryMb { get; init; }
 
-    /// <summary>hashcat skips a device that is an alias of a lower-numbered device.</summary>
-    public bool IsSkippedAlias => AliasOf is int a && a < Id;
+    private bool? _skipped;
+
+    /// <summary>
+    /// Whether hashcat skips this device unless it is selected with -d: an alias of a lower-numbered
+    /// device that is itself used, or (macOS) a Metal device while OpenCL devices exist, because
+    /// hashcat prefers Apple's OpenCL runtime and disables Metal then.
+    /// </summary>
+    public bool IsSkippedAlias
+    {
+        get => _skipped ?? (AliasOf is int a && a < Id);
+        internal set => _skipped = value;
+    }
+
+    public bool IsMetal => Backend == "Metal";
 }
 
 public sealed class HashModeInfo
@@ -49,28 +61,39 @@ public sealed partial class HashcatTool
         Directory = Path.GetDirectoryName(Path.GetFullPath(exe)) ?? ".";
     }
 
-    /// <summary>Finds hashcat: configured path, ./hashcat/ next to the application, then PATH.</summary>
+    /// <summary>
+    /// Finds hashcat: configured path, ./hashcat/ next to the application, the per-user engines
+    /// folder, then PATH. On macOS the engines copy of the bundled hashcat comes first and the copy
+    /// inside the app bundle is never used directly (see <see cref="HashcatInstaller.TryInstallBundled"/>).
+    /// </summary>
     public static HashcatTool? Locate(string? configured)
+        => Locate(configured, AppContext.BaseDirectory, Path.Combine(Settings.AppDataDir, "engines"));
+
+    internal static HashcatTool? Locate(string? configured, string baseDir, string enginesDir)
     {
         string exeName = OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
         var candidates = new List<string>();
         if (!string.IsNullOrWhiteSpace(configured)) candidates.Add(configured);
-        string baseDir = AppContext.BaseDirectory;
+        if (OperatingSystem.IsMacOS())
+            candidates.Add(Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName));
+        // hashcat writes into its own folder, so the read-only copy inside the app bundle is skipped.
+        string? bundle = OperatingSystem.IsMacOS() ? HashcatInstaller.FindBundle(baseDir) : null;
         // Next to the application, and in the per-user engines folder a download installs into.
-        foreach (var root in new[] { baseDir, Path.Combine(Settings.AppDataDir, "engines") })
+        foreach (var root in new[] { baseDir, enginesDir })
         {
             candidates.Add(Path.Combine(root, "hashcat", exeName));
             try
             {
                 foreach (var d in System.IO.Directory.EnumerateDirectories(root, "hashcat*"))
-                    candidates.Add(Path.Combine(d, exeName));
+                    if (!d.EndsWith(".partial", StringComparison.Ordinal)) candidates.Add(Path.Combine(d, exeName));
             }
             catch (IOException) { }
         }
         foreach (var p in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             candidates.Add(Path.Combine(p, exeName));
 
-        var hit = candidates.FirstOrDefault(File.Exists);
+        var hit = candidates.FirstOrDefault(c => File.Exists(c) &&
+            (bundle is null || !Path.GetFullPath(c).StartsWith(bundle + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
         if (hit is null) return null;
         // Homebrew and similar installs use a symlink; resolve it so the data directory is found.
         try
@@ -188,7 +211,27 @@ public sealed partial class HashcatTool
                 MemoryMb = Num("Memory.Total"),
             });
         }
+        ResolveSkipped(list);
         return list;
+    }
+
+    /// <summary>
+    /// Mirrors hashcat's default device selection. On macOS hashcat disables every Metal device when
+    /// an OpenCL device exists (it cannot map one to the other and its OpenCL support is better), so
+    /// the OpenCL alias of a Metal GPU is the one that runs. Other aliases: the lower-numbered device
+    /// of a pair survives, unless it is itself skipped.
+    /// </summary>
+    private static void ResolveSkipped(List<BackendDevice> list)
+    {
+        bool anyOpenCl = list.Any(d => d.Backend == "OpenCL");
+        var skipped = new HashSet<int>();
+        foreach (var d in list.OrderBy(d => d.Id))
+        {
+            bool skip = d.IsMetal ? anyOpenCl
+                : d.AliasOf is int a && a < d.Id && !skipped.Contains(a);
+            if (skip) skipped.Add(d.Id);
+            d.IsSkippedAlias = skip;
+        }
     }
 
     [GeneratedRegex(@"^(CUDA|HIP|Metal|OpenCL) Info:")] private static partial Regex ApiHeader();

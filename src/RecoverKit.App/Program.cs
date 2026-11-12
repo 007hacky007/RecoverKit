@@ -1,4 +1,5 @@
-using RecoverKit.App.Forms;
+using Avalonia;
+using RecoverKit.App.Views;
 using RecoverKit.Core;
 
 namespace RecoverKit.App;
@@ -6,9 +7,9 @@ namespace RecoverKit.App;
 internal static class Program
 {
     [STAThread]
-    private static void Main(string[] args)
+    private static int Main(string[] args)
     {
-        DebugLog.Start(MainForm.AppName, MainForm.AppVersion, args);
+        DebugLog.Start(MainWindow.AppName, MainWindow.AppVersion, args);
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             if (e.ExceptionObject is Exception ex) DebugLog.Error("Unhandled exception (terminating=" + e.IsTerminating + ")", ex);
@@ -16,15 +17,14 @@ internal static class Program
         };
         TaskScheduler.UnobservedTaskException += (_, e) => DebugLog.Error("Unobserved task exception", e.Exception);
 
-        ApplicationConfiguration.Initialize();
-        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.ThreadException += (_, e) =>
-        {
-            DebugLog.Error("UI thread exception", e.Exception);
-            MessageBox.Show(e.Exception.Message + "\r\n\r\nDetails are in the debug log: " + DebugLog.CurrentFile,
-                "RecoverKit", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        };
-        try { Application.Run(new MainForm(args.FirstOrDefault(File.Exists))); }
+        // Finder passes -psn_... on old systems; only real files are opened.
+        App.FileToOpen = args.FirstOrDefault(File.Exists);
+        try { return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
         finally { DebugLog.Stop(); }
     }
+
+    // Also used by the Avalonia designer.
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>()
+        .UsePlatformDetect()
+        .LogToTrace();
 }

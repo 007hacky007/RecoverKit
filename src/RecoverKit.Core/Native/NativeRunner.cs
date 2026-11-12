@@ -23,12 +23,12 @@ public sealed class NativeRunner
     /// is supported, and no GPU is going to be used.
     /// </summary>
     public static (NativeKernel Kernel, MaskSpace Space)? Plan(int mode, string hashLines, Attacks.PreparedAttack attack,
-        Settings settings, IReadOnlyList<BackendDevice>? devices)
+        Settings settings, IReadOnlyList<BackendDevice>? devices, bool ignoreGpu = false)
     {
         // Extra hashcat options can change candidate interpretation (for example TrueCrypt keyfiles).
         if (!settings.UseNativeCpuEngine || attack.Stdin is not null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
         bool gpu = devices?.Any(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)) == true;
-        if (gpu && settings.Strategy != DeviceStrategy.CpuOnly) return null;
+        if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly) return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length != 1) return null;
         var space = MaskSpace.FromHashcatArgs(attack.Args);

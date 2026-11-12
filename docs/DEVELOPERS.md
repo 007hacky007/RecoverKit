@@ -19,13 +19,14 @@ attacks when no GPU is used: managed .NET kernels plus a small native C library
 ```
 src/RecoverKit.Core   format parsers, attack model, scenarios, hashcat integration (no UI)
 src/RecoverKit.Cli    headless front-end (recoverkit-cli), also used for testing
-src/RecoverKit.App    WinForms GUI (net10.0-windows, win-x64)
+src/RecoverKit.App    Avalonia GUI (net10.0; Windows x64 and macOS arm64)
 tests/RecoverKit.Tests  xUnit tests for parsers, charsets, extractors
 native/               native CPU kernels (C, built with zig)
 docs/                 benchmarks, screenshots, this file
 ```
 
-`RecoverKit.Core` is plain cross-platform .NET; only `RecoverKit.App` requires Windows.
+Everything is cross-platform .NET. The GUI is written in C# against Avalonia 12 (code only, no
+XAML) and uses the system menu bar on macOS and an in-window menu elsewhere.
 
 ## Building
 
@@ -37,11 +38,16 @@ dotnet build RecoverKit.sln -c Release
 dotnet test tests/RecoverKit.Tests
 ```
 
-The Windows GUI:
+The GUI:
 
 ```
 dotnet publish src/RecoverKit.App -c Release -r win-x64 --self-contained false -o publish
+dotnet run --project src/RecoverKit.App          # on any desktop, for development
 ```
+
+Set `AVALONIA_TELEMETRY_OPTOUT=1` to keep Avalonia's build tooling from sending usage data. In
+Debug builds `RECOVERKIT_SNAPSHOTS=<dir>` renders every window and wizard page to PNG and exits,
+which makes layout changes quick to check.
 
 hashcat is the GPU engine and is fetched on demand: the first time you start RecoverKit
 without it, choose **Tools > Download hashcat** (also on the Preferences "Files and Paths"
@@ -52,6 +58,62 @@ downloaded too when no 7-Zip is already installed.
 
 You can still place hashcat in a `hashcat` folder next to `RecoverKit.exe`, or point at an
 existing install in Options > Preferences > Files and Paths.
+
+## macOS hashcat
+
+hashcat.net publishes no macOS binary, so the macOS app bundles its own build. On an Apple
+Silicon Mac with the Xcode command line tools:
+
+```
+macos/build-hashcat.sh            # add --force to rebuild, --jobs N to limit parallelism
+```
+
+It downloads the official hashcat 7.1.2 source tarball (SHA-256 pinned in the script), builds
+an arm64-only binary with the Metal backend using hashcat's bundled dependencies (nothing from
+Homebrew; `otool -L` is checked so that only system libraries and frameworks are linked) and
+assembles a portable folder in `macos/out/hashcat/`: the executable, `modules/`, `bridges/`
+(argon2, scrypt; the Python and Rust plugin bridges are left out), `OpenCL/` kernel sources,
+`charsets/`, `layouts/`, `masks/`, `rules/`, `tunings/`, `hashcat.hcstat2`, the license texts
+in `docs/` and a `RECOVERKIT_BUNDLE` stamp (`<hashcat version>-<bundle revision>`). The build
+takes about a minute and the folder is about 200 MB. It is skipped when the folder already holds
+the same stamp.
+
+Portable mode: hashcat compares the folder of its resolved executable with the install folder
+compiled in (`PREFIX/bin`, `/usr/local/bin`). When they differ, which is everywhere except
+`/usr/local/bin`, it reads its data from and writes kernel caches, `hashcat.log`, dictstat and
+pid files to the executable's own folder.
+
+That folder goes into `RecoverKit.app/Contents/Resources/hashcat/`. Because hashcat writes into
+its folder and the signed app bundle must stay unchanged (it may also be read-only), RecoverKit
+never runs it there: `HashcatInstaller.TryInstallBundled()` copies it to
+`~/Library/Application Support/RecoverKit/engines/hashcat-7.1.2` (keeping executable bits,
+dropping the quarantine attribute) when that copy is missing or has another stamp, and
+`HashcatTool.Locate` prefers that copy. `recoverkit-cli install-hashcat --from macos/out/hashcat`
+installs a build by hand.
+
+On Apple Silicon hashcat lists the GPU twice, as a Metal device and as an OpenCL alias, and by
+default disables Metal while an OpenCL device exists (`-d <metal id>` forces Metal). There is no
+CPU device, so the "Don't use GPU threads" strategy only works for formats the built-in CPU
+engine supports. Some modes (for example 17200, PKZIP) are refused on the Apple GPU by hashcat;
+when the built-in CPU engine supports such a mode, the attack step reruns on it automatically.
+
+## macOS app
+
+On an Apple Silicon Mac with the .NET 10 SDK, zig and the Xcode command line tools:
+
+```
+sh native/build.sh
+pip install dmgbuild            # or PYTHON=/path/to/venv/bin/python
+macos/package.sh 1.2.0          # -> macos/out/RecoverKit-1.2.0-macos-arm64.dmg
+```
+
+It builds hashcat if needed, publishes a self-contained osx-arm64 app, assembles
+`RecoverKit.app` (Info.plist template and icon in `macos/`), signs every file ad hoc
+(`codesign --sign -`; there is no Apple Developer ID, so the app is not notarized) and builds a
+compressed disk image whose background explains the Gatekeeper steps. The background is
+`macos/dmg/background.html`, rendered to PNG by `macos/dmg/render_background.sh` (headless
+Chrome). The app needs macOS 15 or later, hashcat 7's own minimum. `assets/make-icons.sh` also
+regenerates `macos/RecoverKit.icns`.
 
 ## Installer
 
@@ -65,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1
 It publishes the app and writes `installer\out\RecoverKit-1.0.0-x64.msi`, which installs
 into `Program Files\RecoverKit` with Start Menu and desktop shortcuts and an Add/Remove
 Programs entry. The default build is self-contained (no runtime prerequisite); pass
-`-FrameworkDependent` for a smaller MSI that needs the .NET 10 Desktop Runtime. See
+`-FrameworkDependent` for a smaller MSI that needs the .NET 10 Runtime. See
 [installer/README.md](../installer/README.md) for details.
 
 ## Command line
@@ -103,9 +165,12 @@ charset, `/u:` user charset, `/l:` national alphabet, `/m:` mask, `/ms:` mask sy
 
 ## Continuous integration
 
-`.github/workflows/build.yml` runs on every push and pull request on `windows-latest`: it builds
-the native kernels, runs the tests, builds the MSI and a portable zip, and uploads both as workflow
-artifacts. Pushing a tag such as `v1.2.0` also publishes them as a GitHub release with that version.
+`.github/workflows/build.yml` runs on every push and pull request. The `windows` job
+(`windows-latest`) builds the native kernels, runs the tests and builds the MSI and a portable zip.
+The `macos` job (`macos-15`, Apple Silicon) runs the tests on arm64, builds hashcat (cached by
+the build script's hash) and the disk image. Both upload their files as workflow artifacts. Pushing
+a tag such as `v1.2.0` makes the `release` job publish all three files as a GitHub release with
+that version.
 
 ## Technical notes
 
@@ -114,7 +179,7 @@ artifacts. Pushing a tag such as `v1.2.0` also publishes them as a GitHub releas
 - The per-user CPU runtime is not used when RecoverKit runs as administrator: the OpenCL loader
   ignores per-process driver lists in elevated processes on purpose, and RecoverKit does not register
   a user-writable DLL system-wide.
-- The debug log (`%APPDATA%\RecoverKit\logs`) records environment, settings, every hashcat command
+- The debug log (`%APPDATA%\RecoverKit\logs`, `~/Library/Logs/RecoverKit` on macOS) records environment, settings, every hashcat command
   with output and exit code, detection results, wizard choices and crashes. Recovered passwords are
   never written to it, and the profile path and account name are replaced by `%USERPROFILE%` / `%USERNAME%`.
 - The built-in downloader pins hashcat 7.1.2. hashcat 8 changed `--restore` and `-w` handling, which

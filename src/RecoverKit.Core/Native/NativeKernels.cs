@@ -11,9 +11,15 @@ public static class NativeKernels
     {
         29331 when RkNative.Available => TrueCryptWhirlpoolKernel.TryParse(hashLine),
         17200 or 17210 => ZipCryptoKernel.TryParse(hashLine),
-        // The vector kernels need hardware AVX2 / NEON; emulated Vector256 would be slower than hashcat.
+        // The native library's vector paths (AVX2 / NEON) run these regardless of .NET's vector support.
         12500 when Rar3Kernel.NativeFast => Rar3Kernel.TryParse(hashLine),
         10700 => PdfR6Kernel.NativeFast ? PdfR6Kernel.TryParse(hashLine) : null,
+        9700 when RkNative.HasVectorPath => Office97Kernel.TryParse(hashLine),
+        9800 when RkNative.HasVectorPath => Office2003Kernel.TryParse(hashLine),
+        10400 or 10500 when RkNative.HasVectorPath => PdfRc4Kernel.TryParse(hashLine),
+        // Without the library the managed Vector256 kernels need hardware AVX2. On arm64 .NET does not
+        // accelerate Vector256: they run 2.5-9x slower than the native NEON paths there
+        // (docs/benchmarks/apple-m1-pro-native.txt), so they stay off and hashcat is used instead.
         _ when !System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated && !ForceVectorKernels => null,
         9700 => Office97Kernel.TryParse(hashLine),
         9800 => Office2003Kernel.TryParse(hashLine),
@@ -21,6 +27,18 @@ public static class NativeKernels
         12500 => Rar3Kernel.TryParse(hashLine),
         _ => null,
     };
+
+    /// <summary>The CPU features the built-in engine sees, for logs and benchmarks (any architecture).</summary>
+    public static string CpuFeatures()
+    {
+        var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture;
+        string native = RkNative.Available ? RkNative.Features.ToString() : "unavailable";
+        string simd = arch is System.Runtime.InteropServices.Architecture.Arm64
+            ? $"AdvSimd={System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported}, ArmAes={System.Runtime.Intrinsics.Arm.Aes.IsSupported}, ArmSha256={System.Runtime.Intrinsics.Arm.Sha256.IsSupported}"
+            : $"AVX2={System.Runtime.Intrinsics.X86.Avx2.IsSupported}, AES-NI={System.Runtime.Intrinsics.X86.Aes.IsSupported}";
+        return $"{arch}, {simd}, Vector128={System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated}, " +
+               $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative: {native}";
+    }
 
     /// <summary>Tests use this to exercise the vector kernels on machines without AVX2.</summary>
     internal static bool ForceVectorKernels { get; set; }

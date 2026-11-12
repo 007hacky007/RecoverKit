@@ -6,7 +6,7 @@ namespace RecoverKit.Core.Hashcat;
 
 public enum RunOutcome { Cracked, Exhausted, Aborted, Error }
 
-public sealed class RunRequest
+public sealed record RunRequest
 {
     public required int Mode { get; init; }
     public required string HashFile { get; init; }
@@ -87,6 +87,18 @@ public sealed class HashcatRunner(HashcatTool tool)
         }
         return a;
     }
+
+    /// <summary>
+    /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
+    /// (Apple Silicon: Apple's OpenCL and Metal expose only the GPU), so -D 1 finds nothing.
+    /// </summary>
+    public static bool NoCpuDevice(Settings s, IReadOnlyList<BackendDevice>? known)
+        => s.Strategy == DeviceStrategy.CpuOnly && known is { Count: > 0 } &&
+           !known.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>hashcat skipped the mode on every device (Apple GPUs refuse a few modes).</summary>
+    public static bool IsGpuRefusal(string? error, int mode)
+        => OperatingSystem.IsMacOS() && error?.Contains($"Skipping (hash-mode {mode})", StringComparison.Ordinal) == true;
 
     public IReadOnlyList<BackendDevice>? KnownDevices { get; set; }
 
@@ -176,6 +188,13 @@ public sealed class HashcatRunner(HashcatTool tool)
             ? string.Join(Environment.NewLine, tail.Where(l => !l.StartsWith('{')).TakeLast(12))
             : null;
         if (outcome == RunOutcome.Error && string.IsNullOrWhiteSpace(error)) error = $"hashcat exited with code {code}.";
+        if (outcome == RunOutcome.Error && NoCpuDevice(r.Settings, KnownDevices) && error!.Contains("No devices found", StringComparison.OrdinalIgnoreCase))
+            error = "hashcat has no processor (CPU) device on this computer: Apple Silicon Macs expose only the GPU to hashcat. " +
+                    "Choose a GPU strategy in Preferences (the built-in CPU engine still runs the formats it supports).\n" + error;
+        // hashcat refuses some modes on Apple GPUs (e.g. 17200 PKZIP: no 'goto' in Metal, OpenCL compiler hang).
+        else if (outcome == RunOutcome.Error && IsGpuRefusal(error, r.Mode))
+            error = $"hashcat cannot run hash mode {r.Mode} on the Apple GPU (a known Metal/OpenCL runtime limitation). " +
+                    "If the built-in CPU engine supports this format, choose \"Don't use GPU threads\" in Preferences to use it.\n" + error;
 
         return new RunResult { Outcome = outcome, ExitCode = code, Passwords = passwords, RawPasswords = raw, Error = error, LastStatus = last };
     }

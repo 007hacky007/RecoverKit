@@ -56,9 +56,9 @@ public sealed unsafe class Office2003Kernel : NativeKernel, INativeFilter
         return SHA1.HashData(plain.AsSpan(0, 16)).AsSpan().SequenceEqual(plain.AsSpan(16, 20));
     }
 
-    public override KernelWorker CreateWorker() => RkNative.HasAvx2 ? new NativeFilterWorker(this, this, new Worker(this)) : new Worker(this);
+    public override KernelWorker CreateWorker() => RkNative.HasVectorPath ? new NativeFilterWorker(this, this, new Worker(this)) : new Worker(this);
 
-    public override int PrefixBatch(int lastCount) => RkNative.HasAvx2 ? RkNative.BatchFor(lastCount, 256) : 1;
+    public override int PrefixBatch(int lastCount) => RkNative.HasVectorPath ? RkNative.BatchFor(lastCount, 256) : 1;
 
     int INativeFilter.Filter(byte* pws, int len, int n, int* hits, int maxHits)
     {

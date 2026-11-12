@@ -5,7 +5,8 @@ using System.Text;
 namespace RecoverKit.Core;
 
 /// <summary>
-/// One plain-text diagnostic log per application run, in &lt;AppData&gt;\RecoverKit\logs. It is meant
+/// One plain-text diagnostic log per application run, in &lt;AppData&gt;\RecoverKit\logs
+/// (~/Library/Logs/RecoverKit on macOS). It is meant
 /// to be sent back by a tester together with screenshots, so it records everything needed to
 /// reproduce a session: environment, settings, every hashcat command line with its full output and
 /// exit code, file detection, wizard choices, the text shown in the information pane, and crashes.
@@ -21,7 +22,14 @@ public static class DebugLog
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
     private static int _cmdSeq;
 
-    public static string Directory => Path.Combine(Settings.AppDataDir, "logs");
+    /// <summary>
+    /// The log folder: &lt;data dir&gt;/logs, except on macOS where logs go to ~/Library/Logs/RecoverKit
+    /// (where Console.app finds them) unless the data folder was relocated.
+    /// </summary>
+    public static string Directory =>
+        OperatingSystem.IsMacOS() && !Settings.IsRelocated
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "RecoverKit")
+            : Path.Combine(Settings.AppDataDir, "logs");
 
     /// <summary>
     /// Whether extracted hashes may appear in the log. Off by default: they are only needed to debug
@@ -65,10 +73,13 @@ public static class DebugLog
         Write("ENV", $"Logical processors: {Environment.ProcessorCount}, CPU: {CpuName()}");
         Write("ENV", $"Memory: {GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1_048_576:N0} MB available to the process");
         Write("ENV", $"Culture: {System.Globalization.CultureInfo.CurrentCulture.Name}, UI culture {System.Globalization.CultureInfo.CurrentUICulture.Name}");
-        Write("ENV", $"Elevated (administrator): {Hashcat.CpuRuntime.IsElevatedProcess}");
+        if (OperatingSystem.IsWindows()) Write("ENV", $"Elevated (administrator): {Hashcat.CpuRuntime.IsElevatedProcess}");
         Write("ENV", $"App directory: {AppContext.BaseDirectory}");
         Write("ENV", $"Data directory: {Settings.AppDataDir}");
-        Write("ENV", $"CPU OpenCL runtime: {Hashcat.CpuRuntime.Locate() ?? "(not installed)"}");
+        if (Hashcat.CpuRuntime.IsSupportedPlatform)
+            Write("ENV", $"CPU OpenCL runtime: {Hashcat.CpuRuntime.Locate() ?? "(not installed)"}");
+        if (Hashcat.HashcatInstaller.BundledDirectory is { } bundled)
+            Write("ENV", $"Bundled hashcat: {bundled} ({Hashcat.HashcatInstaller.BundledStamp ?? "no stamp"})");
         foreach (var v in new[] { "OCL_ICD_FILENAMES", "CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "GPU_DEVICE_ORDINAL" })
             if (Environment.GetEnvironmentVariable(v) is { } val) Write("ENV", $"{v}={val}");
     }
@@ -159,8 +170,23 @@ public static class DebugLog
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
+    private static string? MacCpuName()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo("/usr/sbin/sysctl", ["-n", "machdep.cpu.brand_string"])
+                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+            if (p is null) return null;
+            var name = p.StandardOutput.ReadToEnd().Trim();
+            p.WaitForExit(2000);
+            return name.Length > 0 ? name : null;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException) { return null; }
+    }
+
     private static string CpuName()
     {
+        if (OperatingSystem.IsMacOS()) return MacCpuName() ?? RuntimeInformation.ProcessArchitecture.ToString();
         if (!OperatingSystem.IsWindows()) return RuntimeInformation.ProcessArchitecture.ToString();
         try
         {

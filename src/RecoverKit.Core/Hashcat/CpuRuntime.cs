@@ -88,7 +88,8 @@ public static class CpuRuntime
     {
         if (!IsSupportedPlatform)
             throw new InstallException("The CPU runtime download is for Windows. On Linux install PoCL (for example " +
-                                       "apt install pocl-opencl-icd); macOS already provides an OpenCL CPU device.");
+                                       "apt install pocl-opencl-icd). On macOS hashcat uses the GPU through Metal/OpenCL, " +
+                                       "and the built-in CPU engine covers the processor.");
 
         Directory.CreateDirectory(InstallRoot);
         var tmp = Directory.CreateDirectory(Path.Combine(InstallRoot, ".tmp-opencl-cpu")).FullName;

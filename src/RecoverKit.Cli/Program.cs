@@ -37,12 +37,15 @@ try
         }
         case "bench-native":
         {
-            // recoverkit-cli bench-native [--threads N] [--seconds S] [--mode M] [--length L]
+            // recoverkit-cli bench-native [--threads N] [--seconds S] [--mode M] [--length L] [--managed] [--force-vector]
             int threads = int.TryParse(Opt(argv, "--threads"), out var th) ? th : Environment.ProcessorCount;
             int seconds = int.TryParse(Opt(argv, "--seconds"), out var se) ? se : 6;
             int length = int.TryParse(Opt(argv, "--length"), out var le) ? le : 0;
             var modes = Opt(argv, "--mode") is { } m ? [int.Parse(m)] : RecoverKit.Core.Native.NativeKernels.BenchmarkHashes.Keys.ToArray();
-            Console.WriteLine($"Built-in CPU engine, {threads} threads, AVX2={System.Runtime.Intrinsics.X86.Avx2.IsSupported}");
+            // --managed: skip the native library; --force-vector: run the managed vector kernels even without hardware Vector256.
+            if (argv.Contains("--managed")) RecoverKit.Core.Native.RkNative.Disabled = true;
+            if (argv.Contains("--force-vector")) RecoverKit.Core.Native.NativeKernels.ForceVectorKernels = true;
+            Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
                 Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s");
             return 0;
@@ -92,9 +95,12 @@ try
             });
             try
             {
-                var res = await inst.InstallAsync(prog, cts.Token);
+                // --from <dir>: install a portable hashcat folder (for example macos/out/hashcat) instead.
+                var res = Opt(argv, "--from") is { } from
+                    ? await inst.InstallFromFolderAsync(from, prog, cts.Token)
+                    : await inst.InstallAsync(prog, cts.Token);
                 Console.WriteLine();
-                Console.WriteLine($"Extracted to: {res.Directory}");
+                Console.WriteLine($"Installed to: {res.Directory}");
                 if (res.ExecutablePath is { } exe)
                 {
                     var st = Settings.Load();
@@ -106,7 +112,6 @@ try
                 else
                 {
                     Console.WriteLine("The release contains no binary for this OS (it ships hashcat.exe and hashcat.bin).");
-                    Console.WriteLine("On macOS, install hashcat with Homebrew instead: brew install hashcat");
                 }
                 return 0;
             }
@@ -123,6 +128,10 @@ try
             settings.HashcatPath = Opt(argv, "--hashcat") ?? settings.HashcatPath;
             if (Opt(argv, "--workload") is { } w) settings.Workload = int.Parse(w);
             if (argv.Contains("--no-potfile")) settings.DontUsePasswordCache = true;
+            if (Opt(argv, "--strategy") is { } strat) settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true);
+            // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
+            if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
+                Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
             var tool = HashcatTool.Locate(settings.HashcatPath)
                 ?? throw new InvalidOperationException("hashcat not found. Run 'recoverkit-cli install-hashcat' to download it, or pass --hashcat <path>.");
             Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
@@ -132,7 +141,11 @@ try
             if (d.Target is null) return 2;
 
             var steps = BuildSteps(argv, d.Target);
-            var session = new RecoverySession(tool, settings);
+            // Same device detection as the GUI, so the CPU/GPU strategy and built-in engine decisions match.
+            var devices = await tool.DevicesAsync();
+            foreach (var dev in devices)
+                Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.IsSkippedAlias ? ", skipped by hashcat" : "")})");
+            var session = new RecoverySession(tool, settings) { Devices = devices };
             session.Log += (k, m) => Console.WriteLine($"[{k}] {m}");
             DateTime lastPrint = DateTime.MinValue;
             session.Status += s =>
@@ -269,6 +282,6 @@ static void Print(Detection d)
 
 static int Usage()
 {
-    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | scenario-line \"/a:b ...\" | install-hashcat [--into dir]");
+    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
     return 64;
 }

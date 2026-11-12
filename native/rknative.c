@@ -2,8 +2,10 @@
  * rknative - RecoverKit's native CPU kernels.
  *
  * Plain C with compiler intrinsics. Every vector path is compiled with a per-function target
- * attribute and chosen at run time, so the library loads on any x86-64 (or arm64) CPU. The .NET
- * side keeps its managed kernels as a fallback when this library is missing.
+ * attribute and chosen at run time, so the library loads on any x86-64 (or arm64) CPU. On arm64
+ * the 8-lane AVX2 kernels run on NEON register pairs (clang vector types, the same source), and
+ * PDF R6 uses the ARMv8 AES / SHA-2 / SHA-512 instructions. The .NET side keeps its managed
+ * kernels as a fallback when this library is missing.
  *
  * Built with build.sh (zig cc) for win-x64 and osx-arm64.
  */
@@ -21,11 +23,35 @@
 #define RK_X64 1
 #include <immintrin.h>
 #define AVX2 __attribute__((target("avx2")))
+#elif defined(__aarch64__)
+#define RK_ARM64 1
+#include <arm_neon.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sys/auxv.h>
+#endif
+/* ARMv8 Crypto Extensions; clang puts the SHA-512 instructions under "sha3". */
+#define ARMCE __attribute__((target("aes,sha2,sha3")))
+#endif
+#if defined(RK_X64) || defined(RK_ARM64)
+#define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 5
+#define RK_API_VERSION 6
 
-enum { RK_FEAT_AVX2 = 1, RK_FEAT_SHANI = 2, RK_FEAT_AESNI = 4, RK_FEAT_NEON = 8 };
+enum
+{
+    RK_FEAT_AVX2 = 1, RK_FEAT_SHANI = 2, RK_FEAT_AESNI = 4, RK_FEAT_NEON = 8,
+    RK_FEAT_ARM_AES = 16, RK_FEAT_ARM_SHA1 = 32, RK_FEAT_ARM_SHA2 = 64, RK_FEAT_ARM_SHA512 = 128, RK_FEAT_ARM_SHA3 = 256,
+};
+
+/* The feature that enables the 16-lane vector kernels on this architecture. */
+#if RK_X64
+#define RK_FEAT_VEC RK_FEAT_AVX2
+#elif RK_ARM64
+#define RK_FEAT_VEC RK_FEAT_NEON
+#endif
 
 static int g_features = -1;
 
@@ -51,8 +77,28 @@ static int detect_features(void)
         if (osAvx && (b & (1u << 5))) f |= RK_FEAT_AVX2;
         if (b & (1u << 29)) f |= RK_FEAT_SHANI;
     }
-#elif defined(__aarch64__)
-    f |= RK_FEAT_NEON;
+#elif RK_ARM64
+    f |= RK_FEAT_NEON;      /* Advanced SIMD is mandatory on AArch64 */
+#if defined(__APPLE__)
+    static const struct { const char* name; int bit; } arm[] = {
+        { "hw.optional.arm.FEAT_AES", RK_FEAT_ARM_AES }, { "hw.optional.arm.FEAT_SHA1", RK_FEAT_ARM_SHA1 },
+        { "hw.optional.arm.FEAT_SHA256", RK_FEAT_ARM_SHA2 }, { "hw.optional.arm.FEAT_SHA512", RK_FEAT_ARM_SHA512 },
+        { "hw.optional.arm.FEAT_SHA3", RK_FEAT_ARM_SHA3 },
+    };
+    for (size_t i = 0; i < sizeof arm / sizeof arm[0]; i++)
+    {
+        int v = 0;
+        size_t sz = sizeof v;
+        if (sysctlbyname(arm[i].name, &v, &sz, NULL, 0) == 0 && v) f |= arm[i].bit;
+    }
+#elif defined(__linux__)
+    unsigned long hw = getauxval(AT_HWCAP);
+    if (hw & (1ul << 3)) f |= RK_FEAT_ARM_AES;
+    if (hw & (1ul << 5)) f |= RK_FEAT_ARM_SHA1;
+    if (hw & (1ul << 6)) f |= RK_FEAT_ARM_SHA2;
+    if (hw & (1ul << 17)) f |= RK_FEAT_ARM_SHA3;
+    if (hw & (1ul << 21)) f |= RK_FEAT_ARM_SHA512;
+#endif
 #endif
     return f;
 }
@@ -286,17 +332,60 @@ static void rar3_scalar(const rar3_layout* L, const uint8_t* pws, int n, uint8_t
     free(S); free(st); free(iv);
 }
 
+/* ---- Eight 32-bit lanes: one AVX2 register, or two NEON registers through a clang vector type ---- */
 #if RK_X64
-
 #define V256 __m256i
 #define VADD _mm256_add_epi32
 #define VXOR _mm256_xor_si256
 #define VAND _mm256_and_si256
 #define VOR _mm256_or_si256
 #define VROTL(x, n) VOR(_mm256_slli_epi32((x), (n)), _mm256_srli_epi32((x), 32 - (n)))
+#define VSET1(x) _mm256_set1_epi32((int)(x))
+#define VSRLI(x, n) _mm256_srli_epi32((x), (n))
+#define VSLLV(x, s) _mm256_sllv_epi32((x), (s))
+#define VZERO _mm256_setzero_si256()
+#define VLOAD(p) _mm256_load_si256((const V256*)(p))
+#define VSTORE(p, v) _mm256_store_si256((V256*)(p), (v))
+#define VLOADU(p) _mm256_loadu_si256((const V256*)(p))
+#define VSTOREU(p, v) _mm256_storeu_si256((V256*)(p), (v))
+#define VEQMASK(a, b) ((uint32_t)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32((a), (b)))))
+#define VECFN AVX2
+#elif RK_ARM64
+typedef uint32_t V256 __attribute__((vector_size(32), aligned(32)));
+#define VADD(a, b) ((a) + (b))
+#define VXOR(a, b) ((a) ^ (b))
+#define VAND(a, b) ((a) & (b))
+#define VOR(a, b) ((a) | (b))
+#define VROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))      /* shl + usra */
+#define VSET1(x) v8_set1((uint32_t)(x))
+#define VSRLI(x, n) ((x) >> (n))
+#define VSLLV(x, s) ((x) << (s))
+#define VZERO ((V256){ 0 })
+#define VLOAD(p) (*(const V256*)(p))
+#define VSTORE(p, v) (*(V256*)(p) = (v))
+#define VLOADU(p) v8_loadu(p)
+#define VSTOREU(p, v) do { V256 v_ = (v); memcpy((p), &v_, 32); } while (0)
+#define VEQMASK(a, b) v8_eqmask((a), (b))
+#define VECFN
+static inline V256 v8_set1(uint32_t x) { return (V256){ x, x, x, x, x, x, x, x }; }
+static inline V256 v8_loadu(const void* p) { V256 v; memcpy(&v, p, 32); return v; }
+/* Bit l set when lane l of a equals lane l of b (movemask of a compare). */
+static inline uint32_t v8_eqmask(V256 a, V256 b)
+{
+    V256 m = (V256)(a == b) & (V256){ 1, 2, 4, 8, 16, 32, 64, 128 };
+    uint32x4_t lo, hi;
+    memcpy(&lo, &m, 16); memcpy(&hi, (const uint8_t*)&m + 16, 16);
+    return vaddvq_u32(vorrq_u32(lo, hi));
+}
+#endif
+
+#if RK_VEC
+#define F1(b, c, d) VXOR(d, VAND(b, VXOR(c, d)))
+#define F2(b, c, d) VXOR(VXOR(b, c), d)
+#define F3(b, c, d) VOR(VAND(b, c), VAND(d, VOR(b, c)))
 
 /* Plain 8-lane SHA-1 block with its own schedule (rare paths). */
-AVX2 static void sha1x8_block(V256 st[5], const V256* m)
+VECFN static void sha1x8_block(V256 st[5], const V256* m)
 {
     V256 w[80];
     for (int j = 0; j < 16; j++) w[j] = m[j];
@@ -305,10 +394,10 @@ AVX2 static void sha1x8_block(V256 st[5], const V256* m)
     for (int t = 0; t < 80; t++)
     {
         V256 f, k;
-        if (t < 20) { f = VXOR(d, VAND(b, VXOR(c, d))); k = _mm256_set1_epi32(0x5A827999); }
-        else if (t < 40) { f = VXOR(VXOR(b, c), d); k = _mm256_set1_epi32(0x6ED9EBA1); }
-        else if (t < 60) { f = VOR(VAND(b, c), VAND(d, VOR(b, c))); k = _mm256_set1_epi32((int)0x8F1BBCDCu); }
-        else { f = VXOR(VXOR(b, c), d); k = _mm256_set1_epi32((int)0xCA62C1D6u); }
+        if (t < 20) { f = VXOR(d, VAND(b, VXOR(c, d))); k = VSET1(0x5A827999); }
+        else if (t < 40) { f = VXOR(VXOR(b, c), d); k = VSET1(0x6ED9EBA1); }
+        else if (t < 60) { f = VOR(VAND(b, c), VAND(d, VOR(b, c))); k = VSET1(0x8F1BBCDCu); }
+        else { f = VXOR(VXOR(b, c), d); k = VSET1(0xCA62C1D6u); }
         V256 tmp = VADD(VADD(VROTL(a, 5), f), VADD(VADD(e, k), w[t]));
         e = d; d = c; c = VROTL(b, 30); b = a; a = tmp;
     }
@@ -316,32 +405,28 @@ AVX2 static void sha1x8_block(V256 st[5], const V256* m)
 }
 
 /* Schedule expansion of the shared words, 8 blocks per vector. */
-AVX2 static void rar3_expand_avx2(const rar3_layout* L, uint32_t* S)
+VECFN static void rar3_expand_vec(const rar3_layout* L, uint32_t* S)
 {
     const int n = RAR3_NBP, cols = (L->nb + 7) & ~7;
     for (int t = 16; t < 80; t++)
         for (int b = 0; b < cols; b += 8)
         {
-            V256 x = VXOR(VXOR(_mm256_load_si256((const V256*)(S + (t - 3) * n + b)), _mm256_load_si256((const V256*)(S + (t - 8) * n + b))),
-                          VXOR(_mm256_load_si256((const V256*)(S + (t - 14) * n + b)), _mm256_load_si256((const V256*)(S + (t - 16) * n + b))));
-            _mm256_store_si256((V256*)(S + t * n + b), VROTL(x, 1));
+            V256 x = VXOR(VXOR(VLOAD(S + (t - 3) * n + b), VLOAD(S + (t - 8) * n + b)),
+                          VXOR(VLOAD(S + (t - 14) * n + b), VLOAD(S + (t - 16) * n + b)));
+            VSTORE(S + t * n + b, VROTL(x, 1));
         }
     /* Rows 80..95: words 0..15 with the round constant already added, for the rounds whose word
        does not involve the last character (the same for every candidate). */
-    const V256 k1 = _mm256_set1_epi32(0x5A827999);
+    const V256 k1 = VSET1(0x5A827999);
     for (int t = 0; t < 16; t++)
         for (int b = 0; b < cols; b += 8)
-            _mm256_store_si256((V256*)(S + (80 + t) * n + b), VADD(_mm256_load_si256((const V256*)(S + t * n + b)), k1));
+            VSTORE(S + (80 + t) * n + b, VADD(VLOAD(S + t * n + b), k1));
 }
-
-#define F1(b, c, d) VXOR(d, VAND(b, VXOR(c, d)))
-#define F2(b, c, d) VXOR(VXOR(b, c), d)
-#define F3(b, c, d) VOR(VAND(b, c), VAND(d, VOR(b, c)))
 
 /* One round for both groups: W = broadcast(shared word) ^ per-group last-character word. */
 #define RND(F, K, t, a, b, c, d, e)                                                     \
     do {                                                                                \
-        V256 ws_ = _mm256_set1_epi32((int)Sb[(t) * RAR3_NBP]);                               \
+        V256 ws_ = VSET1(Sb[(t) * RAR3_NBP]);                                           \
         e##0 = VADD(VADD(e##0, VADD(K, VXOR(ws_, Va[t]))), VADD(VROTL(a##0, 5), F(b##0, c##0, d##0))); \
         e##1 = VADD(VADD(e##1, VADD(K, VXOR(ws_, Vb[t]))), VADD(VROTL(a##1, 5), F(b##1, c##1, d##1))); \
         b##0 = VROTL(b##0, 30);                                                         \
@@ -353,7 +438,7 @@ AVX2 static void rar3_expand_avx2(const rar3_layout* L, uint32_t* S)
     do {                                                                                \
         if (lcm & (1u << (t))) RND(F1, k1, t, a, b, c, d, e);                           \
         else {                                                                          \
-            V256 wk_ = _mm256_set1_epi32((int)Sb[(80 + (t)) * RAR3_NBP]);               \
+            V256 wk_ = VSET1(Sb[(80 + (t)) * RAR3_NBP]);                                \
             e##0 = VADD(VADD(e##0, wk_), VADD(VROTL(a##0, 5), F1(b##0, c##0, d##0)));   \
             e##1 = VADD(VADD(e##1, wk_), VADD(VROTL(a##1, 5), F1(b##1, c##1, d##1)));   \
             b##0 = VROTL(b##0, 30);                                                     \
@@ -376,12 +461,12 @@ AVX2 static void rar3_expand_avx2(const rar3_layout* L, uint32_t* S)
     RND(F, K, (t) + 4, b, c, d, e, a)
 
 /* One block for two groups of 8 candidates. Sb points at the block's column of S (stride nbp). */
-AVX2 static inline void rar3_block2(V256* st0, V256* st1, const uint32_t* Sb, uint32_t lcm, const V256* Va, const V256* Vb)
+VECFN static inline void rar3_block2(V256* st0, V256* st1, const uint32_t* Sb, uint32_t lcm, const V256* Va, const V256* Vb)
 {
     V256 a0 = st0[0], b0 = st0[1], c0 = st0[2], d0 = st0[3], e0 = st0[4];
     V256 a1 = st1[0], b1 = st1[1], c1 = st1[2], d1 = st1[3], e1 = st1[4];
-    const V256 k1 = _mm256_set1_epi32(0x5A827999), k2 = _mm256_set1_epi32(0x6ED9EBA1);
-    const V256 k3 = _mm256_set1_epi32((int)0x8F1BBCDCu), k4 = _mm256_set1_epi32((int)0xCA62C1D6u);
+    const V256 k1 = VSET1(0x5A827999), k2 = VSET1(0x6ED9EBA1);
+    const V256 k3 = VSET1(0x8F1BBCDCu), k4 = VSET1(0xCA62C1D6u);
     R5E(0); R5E(5); R5E(10); RNDE(15, a, b, c, d, e); RND(F1, k1, 16, e, a, b, c, d);
     RND(F1, k1, 17, d, e, a, b, c); RND(F1, k1, 18, c, d, e, a, b); RND(F1, k1, 19, b, c, d, e, a);
     R5(F2, k2, 20); R5(F2, k2, 25); R5(F2, k2, 30); R5(F2, k2, 35);
@@ -391,7 +476,7 @@ AVX2 static inline void rar3_block2(V256* st0, V256* st1, const uint32_t* Sb, ui
     st1[0] = VADD(st1[0], a1); st1[1] = VADD(st1[1], b1); st1[2] = VADD(st1[2], c1); st1[3] = VADD(st1[3], d1); st1[4] = VADD(st1[4], e1);
 }
 
-AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint8_t* out)
+VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint8_t* out)
 {
     int nb = L->nb, nbp = L->nbp, p = L->p;
     void *rawS, *rawV;
@@ -415,7 +500,7 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
                     int idx = i + 8 * g + l;
                     lanes[l] = pws[(idx < n ? idx : n - 1) * len + q];
                 }
-                pb[q] = _mm256_loadu_si256((const V256*)lanes);
+                pb[q] = VLOADU(lanes);
             }
             for (int blk = 0; blk < nb; blk++)
             {
@@ -423,9 +508,9 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
                 for (int j = 0; j < 16; j++)
                 {
                     int wi = blk * 16 + j;
-                    V256 v = _mm256_setzero_si256();
+                    V256 v = VZERO;
                     for (int k = 0; k < L->nent[wi]; k++)
-                        v = VOR(v, _mm256_sllv_epi32(pb[L->entq[wi][k]], _mm256_set1_epi32(L->ents[wi][k])));
+                        v = VOR(v, VSLLV(pb[L->entq[wi][k]], VSET1(L->ents[wi][k])));
                     w[j] = v;
                 }
                 for (int t = 16; t < 80; t++) w[t] = VROTL(VXOR(VXOR(w[t - 3], w[t - 8]), VXOR(w[t - 14], w[t - 16])), 1);
@@ -433,7 +518,7 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
         }
         V256 st[2][5];
         for (int g = 0; g < 2; g++)
-            for (int q = 0; q < 5; q++) st[g][q] = _mm256_set1_epi32((int)SHA1_IV[q]);
+            for (int q = 0; q < 5; q++) st[g][q] = VSET1(SHA1_IV[q]);
         uint8_t iv[16][16];
         memset(iv, 0, sizeof iv);
 
@@ -441,7 +526,7 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
         for (int s = 0; s < RAR3_PERIODS; s++)
         {
             rar3_period_words(L, s, S);
-            rar3_expand_avx2(L, S);
+            rar3_expand_vec(L, S);
             if ((s & 255) == 0)
             {
                 /* IV byte: SHA-1 final of a copy after the first round of this period (inside block 0). */
@@ -452,24 +537,24 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
                     const V256* Vg = V + (size_t)g * nb * 80;
                     for (int j = 0; j < 16; j++)
                     {
-                        V256 v = VXOR(_mm256_set1_epi32((int)S[j * nbp]), Vg[j]);
+                        V256 v = VXOR(VSET1(S[j * nbp]), Vg[j]);
                         int start = 4 * j;
-                        if (start >= cutOff) v = _mm256_setzero_si256();
-                        else if (start + 4 > cutOff) v = VAND(v, _mm256_set1_epi32((int)(0xffffffffu << (8 * (start + 4 - cutOff)))));
+                        if (start >= cutOff) v = VZERO;
+                        else if (start + 4 > cutOff) v = VAND(v, VSET1(0xffffffffu << (8 * (start + 4 - cutOff))));
                         m[j] = v;
                     }
-                    m[cutOff / 4] = VOR(m[cutOff / 4], _mm256_set1_epi32((int)(0x80u << (8 * (3 - cutOff % 4)))));
+                    m[cutOff / 4] = VOR(m[cutOff / 4], VSET1(0x80u << (8 * (3 - cutOff % 4))));
                     uint64_t bits = ((uint64_t)(64 * s) + 1) * (uint64_t)p * 8;
                     if (cutOff > 55)
                     {
                         sha1x8_block(cs, m);
-                        for (int j = 0; j < 14; j++) m[j] = _mm256_setzero_si256();
+                        for (int j = 0; j < 14; j++) m[j] = VZERO;
                     }
-                    m[14] = _mm256_set1_epi32((int)(uint32_t)(bits >> 32));
-                    m[15] = _mm256_set1_epi32((int)(uint32_t)bits);
+                    m[14] = VSET1((uint32_t)(bits >> 32));
+                    m[15] = VSET1((uint32_t)bits);
                     sha1x8_block(cs, m);
                     uint32_t ev[8];
-                    _mm256_storeu_si256((V256*)ev, cs[4]);
+                    VSTOREU(ev, cs[4]);
                     for (int l = 0; l < 8; l++) iv[8 * g + l][s >> 8] = (uint8_t)ev[l];
                 }
             }
@@ -478,16 +563,16 @@ AVX2 static void rar3_avx2(const rar3_layout* L, const uint8_t* pws, int n, uint
         }
         /* Final padding block: the total length is a multiple of 64 bytes. */
         V256 m[16];
-        for (int j = 0; j < 16; j++) m[j] = _mm256_setzero_si256();
+        for (int j = 0; j < 16; j++) m[j] = VZERO;
         uint64_t total = (uint64_t)RAR3_ROUNDS * (uint64_t)p * 8;
-        m[0] = _mm256_set1_epi32((int)0x80000000u);
-        m[14] = _mm256_set1_epi32((int)(uint32_t)(total >> 32));
-        m[15] = _mm256_set1_epi32((int)(uint32_t)total);
+        m[0] = VSET1(0x80000000u);
+        m[14] = VSET1((uint32_t)(total >> 32));
+        m[15] = VSET1((uint32_t)total);
         for (int g = 0; g < 2; g++)
         {
             sha1x8_block(st[g], m);
             uint32_t sv[5][8];
-            for (int q = 0; q < 5; q++) _mm256_storeu_si256((V256*)sv[q], st[g][q]);
+            for (int q = 0; q < 5; q++) VSTOREU(sv[q], st[g][q]);
             for (int l = 0; l < 8; l++)
             {
                 int idx = i + 8 * g + l;
@@ -513,7 +598,11 @@ RK_EXPORT int rk_rar3_hash(const uint8_t* salt, const uint8_t* pws, int len, int
     if (!L) return -1;
     rar3_layout_init(L, salt, pws, len, n);
 #if RK_X64
-    if (features() & RK_FEAT_AVX2) rar3_avx2(L, pws, n, out);
+    if (features() & RK_FEAT_AVX2) rar3_vec(L, pws, n, out);
+    else
+#elif RK_ARM64
+    /* NEON, 16 lanes: on the M1 the SHA-1 instructions (one sha1c per 4 cycles) are ~30 % slower. */
+    if (features() & RK_FEAT_NEON) rar3_vec(L, pws, n, out);
     else
 #endif
         rar3_scalar(L, pws, n, out);
@@ -605,7 +694,7 @@ static inline void rc4_stream(uint8_t* s, uint8_t* out, int n)
 
 
 /* ------------------------------------------------------------------------------------------ */
-/* MD5 and SHA-1 on 16 candidates (two AVX2 groups of 8)                                       */
+/* MD5 and SHA-1 on 16 candidates (two groups of 8: AVX2, or NEON register pairs)            */
 /*                                                                                            */
 /* Message words that are equal in every lane come as scalars (cw), the others as vectors       */
 /* (WA, WB). `mask` (bit g = word g is per lane) is a compile-time constant at every call, so   */
@@ -615,7 +704,7 @@ static inline void rc4_stream(uint8_t* s, uint8_t* out, int n)
 static const uint32_t MD5_IV[4] = { 0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u };
 
 #define FORCE __attribute__((always_inline)) inline
-#if RK_X64
+#if RK_VEC
 #define MF(b, c, d) VXOR(d, VAND(b, VXOR(c, d)))
 #define MG(b, c, d) VXOR(c, VAND(d, VXOR(b, c)))
 #define MH(b, c, d) VXOR(VXOR(b, c), d)
@@ -624,16 +713,16 @@ static const uint32_t MD5_IV[4] = { 0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x103
 #define MSTEP(F, a, b, c, d, g, k, s)                                                   \
     do {                                                                                \
         V256 wa_, wb_;                                                                  \
-        if ((mask >> (g)) & 1) { V256 k_ = _mm256_set1_epi32((int)(k)); wa_ = VADD(WA[g], k_); wb_ = VADD(WB[g], k_); } \
-        else wa_ = wb_ = _mm256_set1_epi32((int)(cw[g] + (k)));                         \
+        if ((mask >> (g)) & 1) { V256 k_ = VSET1(k); wa_ = VADD(WA[g], k_); wb_ = VADD(WB[g], k_); } \
+        else wa_ = wb_ = VSET1(cw[g] + (k));                                            \
         a##0 = VADD(b##0, VROTL(VADD(VADD(a##0, F(b##0, c##0, d##0)), wa_), s));        \
         a##1 = VADD(b##1, VROTL(VADD(VADD(a##1, F(b##1, c##1, d##1)), wb_), s));        \
     } while (0)
 
 /* st: a0 b0 c0 d0 a1 b1 c1 d1 (updated in place). */
-AVX2 static FORCE void md5x16(V256* st, const V256* WA, const V256* WB, const uint32_t* cw, const uint32_t mask)
+VECFN static FORCE void md5x16(V256* st, const V256* WA, const V256* WB, const uint32_t* cw, const uint32_t mask)
 {
-    const V256 ones = _mm256_set1_epi32(-1);
+    const V256 ones = VSET1(-1);
     V256 a0 = st[0], b0 = st[1], c0 = st[2], d0 = st[3], a1 = st[4], b1 = st[5], c1 = st[6], d1 = st[7];
     MSTEP(MF, a, b, c, d, 0, 0xd76aa478u, 7);
     MSTEP(MF, d, a, b, c, 1, 0xe8c7b756u, 12);
@@ -703,9 +792,9 @@ AVX2 static FORCE void md5x16(V256* st, const V256* WA, const V256* WB, const ui
     st[4] = VADD(st[4], a1); st[5] = VADD(st[5], b1); st[6] = VADD(st[6], c1); st[7] = VADD(st[7], d1);
 }
 
-AVX2 static FORCE void md5x16_iv(V256* st)
+VECFN static FORCE void md5x16_iv(V256* st)
 {
-    for (int q = 0; q < 4; q++) st[q] = st[4 + q] = _mm256_set1_epi32((int)MD5_IV[q]);
+    for (int q = 0; q < 4; q++) st[q] = st[4 + q] = VSET1(MD5_IV[q]);
 }
 
 /* SHA-1, 16 lanes; words 0..15 big-endian. st: a b c d e for group 0, then group 1. */
@@ -713,7 +802,7 @@ AVX2 static FORCE void md5x16_iv(V256* st)
     do {                                                                                \
         V256 wa_, wb_;                                                                  \
         if ((t) >= 16 || ((mask >> (t)) & 1)) { wa_ = VADD(K, xa[(t) & 15]); wb_ = VADD(K, xb[(t) & 15]); } \
-        else wa_ = wb_ = _mm256_set1_epi32((int)(cw[(t) & 15] + kk[(t) / 20]));         \
+        else wa_ = wb_ = VSET1(cw[(t) & 15] + kk[(t) / 20]);                            \
         e##0 = VADD(VADD(e##0, wa_), VADD(VROTL(a##0, 5), F(b##0, c##0, d##0)));        \
         e##1 = VADD(VADD(e##1, wb_), VADD(VROTL(a##1, 5), F(b##1, c##1, d##1)));        \
         b##0 = VROTL(b##0, 30); b##1 = VROTL(b##1, 30);                                 \
@@ -730,16 +819,16 @@ AVX2 static FORCE void md5x16_iv(V256* st)
     if ((t) + 3 >= 16) SEXP((t) + 3); SROUND(F, K, (t) + 3, c, d, e, a, b);             \
     if ((t) + 4 >= 16) SEXP((t) + 4); SROUND(F, K, (t) + 4, b, c, d, e, a)
 
-AVX2 static FORCE void sha1x16(V256* st, const V256* WA, const V256* WB, const uint32_t* cw, const uint32_t mask)
+VECFN static FORCE void sha1x16(V256* st, const V256* WA, const V256* WB, const uint32_t* cw, const uint32_t mask)
 {
     static const uint32_t kk[4] = { 0x5A827999u, 0x6ED9EBA1u, 0x8F1BBCDCu, 0xCA62C1D6u };
-    const V256 k1 = _mm256_set1_epi32(0x5A827999), k2 = _mm256_set1_epi32(0x6ED9EBA1);
-    const V256 k3 = _mm256_set1_epi32((int)0x8F1BBCDCu), k4 = _mm256_set1_epi32((int)0xCA62C1D6u);
+    const V256 k1 = VSET1(0x5A827999), k2 = VSET1(0x6ED9EBA1);
+    const V256 k3 = VSET1(0x8F1BBCDCu), k4 = VSET1(0xCA62C1D6u);
     V256 xa[16], xb[16];
     for (int t = 0; t < 16; t++)
     {
         if ((mask >> t) & 1) { xa[t] = WA[t]; xb[t] = WB[t]; }
-        else xa[t] = xb[t] = _mm256_set1_epi32((int)cw[t]);
+        else xa[t] = xb[t] = VSET1(cw[t]);
     }
     V256 a0 = st[0], b0 = st[1], c0 = st[2], d0 = st[3], e0 = st[4];
     V256 a1 = st[5], b1 = st[6], c1 = st[7], d1 = st[8], e1 = st[9];
@@ -751,23 +840,23 @@ AVX2 static FORCE void sha1x16(V256* st, const V256* WA, const V256* WB, const u
     st[5] = VADD(st[5], a1); st[6] = VADD(st[6], b1); st[7] = VADD(st[7], c1); st[8] = VADD(st[8], d1); st[9] = VADD(st[9], e1);
 }
 
-AVX2 static FORCE void sha1x16_iv(V256* st)
+VECFN static FORCE void sha1x16_iv(V256* st)
 {
-    for (int q = 0; q < 5; q++) st[q] = st[5 + q] = _mm256_set1_epi32((int)SHA1_IV[q]);
+    for (int q = 0; q < 5; q++) st[q] = st[5 + q] = VSET1(SHA1_IV[q]);
 }
 
 /* Lane words for 16 candidates: v[lane] -> two vectors. */
-AVX2 static FORCE void load16(const uint32_t* v, V256* a, V256* b)
+VECFN static FORCE void load16(const uint32_t* v, V256* a, V256* b)
 {
-    *a = _mm256_loadu_si256((const V256*)v);
-    *b = _mm256_loadu_si256((const V256*)(v + 8));
+    *a = VLOADU(v);
+    *b = VLOADU(v + 8);
 }
 
 /* Copies st vectors (words q of 16 lanes) out as per-lane little-endian byte keys (16 bytes each). */
-AVX2 static FORCE void keys_le16(const V256* g0, const V256* g1, uint8_t* K /* 16 x 16 */)
+VECFN static FORCE void keys_le16(const V256* g0, const V256* g1, uint8_t* K /* 16 x 16 */)
 {
     uint32_t w[4][16];
-    for (int q = 0; q < 4; q++) { _mm256_storeu_si256((V256*)w[q], g0[q]); _mm256_storeu_si256((V256*)(w[q] + 8), g1[q]); }
+    for (int q = 0; q < 4; q++) { VSTOREU(w[q], g0[q]); VSTOREU(w[q] + 8, g1[q]); }
     for (int l = 0; l < 16; l++)
         for (int q = 0; q < 4; q++) memcpy(K + 16 * l + 4 * q, &w[q][l], 4);
 }
@@ -2330,9 +2419,9 @@ typedef struct
 static const uint8_t PDF_PAD[32] = { 0x28,0xbf,0x4e,0x5e,0x4e,0x75,0x8a,0x41,0x64,0x00,0x4e,0x56,0xff,0xfa,0x01,0x08,
                                      0x2e,0x2e,0x00,0xb6,0xd0,0x68,0x3e,0x80,0x2f,0x0c,0xa9,0xfe,0x64,0x53,0x69,0x7a };
 
-#if RK_X64
+#if RK_VEC
 /* ---- MS Office 97-2000 (hashcat 9700) ---- */
-AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uint8_t* pws, int len, int n, int* hits, int maxh)
+VECFN static int office97_vec(const uint8_t* salt, const uint8_t* enc, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
     /* H1 message: 16 x (H0[0..5] || salt) || 0x80 || ... || 2688 bits. Per word: constant part and
        up to 4 H0 bytes (index, shift). */
@@ -2353,7 +2442,7 @@ AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uin
     uint8_t K[16 * 16], ks[2][8 * 32];
     uint32_t lw[16][16];
     int nh = 0;
-    const V256 ff = _mm256_set1_epi32(0xff);
+    const V256 ff = VSET1(0xff);
     for (int i0 = 0; i0 < n; i0 += 16)
     {
         /* H0 = MD5(UTF-16LE password). */
@@ -2374,8 +2463,8 @@ AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uin
         for (int g = 0; g < 2; g++)
         {
             V256 x0 = st[4 * g], x1 = st[4 * g + 1];
-            tb[g][0] = VAND(x0, ff); tb[g][1] = VAND(_mm256_srli_epi32(x0, 8), ff); tb[g][2] = VAND(_mm256_srli_epi32(x0, 16), ff);
-            tb[g][3] = _mm256_srli_epi32(x0, 24); tb[g][4] = VAND(x1, ff);
+            tb[g][0] = VAND(x0, ff); tb[g][1] = VAND(VSRLI(x0, 8), ff); tb[g][2] = VAND(VSRLI(x0, 16), ff);
+            tb[g][3] = VSRLI(x0, 24); tb[g][4] = VAND(x1, ff);
         }
         /* H1: six blocks. */
         md5x16_iv(st);
@@ -2384,12 +2473,12 @@ AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uin
         {                                                                                     \
             int w = 16 * (b) + j;                                                             \
             if (!h1n[w]) continue;                                                            \
-            V256 va = _mm256_set1_epi32((int)h1c[w]), vb = va;                                \
+            V256 va = VSET1(h1c[w]), vb = va;                                                 \
             for (int e = 0; e < h1n[w]; e++)                                                  \
             {                                                                                 \
-                V256 sh = _mm256_set1_epi32(h1s[w][e]);                                       \
-                va = VOR(va, _mm256_sllv_epi32(tb[0][h1i[w][e]], sh));                        \
-                vb = VOR(vb, _mm256_sllv_epi32(tb[1][h1i[w][e]], sh));                        \
+                V256 sh = VSET1(h1s[w][e]);                                                   \
+                va = VOR(va, VSLLV(tb[0][h1i[w][e]], sh));                                    \
+                vb = VOR(vb, VSLLV(tb[1][h1i[w][e]], sh));                                    \
             }                                                                                 \
             WA[j] = va; WB[j] = vb;                                                           \
         }                                                                                     \
@@ -2426,8 +2515,7 @@ AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uin
         }
         V256 ha, hb;
         load16(vw[4], &ha, &hb);
-        uint32_t m = (uint32_t)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(st[0], ha)))
-                   | (uint32_t)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(st[4], hb))) << 8;
+        uint32_t m = VEQMASK(st[0], ha) | VEQMASK(st[4], hb) << 8;
         while (m)
         {
             int l = __builtin_ctz(m);
@@ -2440,7 +2528,7 @@ AVX2 static int office97_avx2(const uint8_t* salt, const uint8_t* enc, const uin
 
 /* ---- MS Office XP-2003 RC4 CryptoAPI (hashcat 9800) ---- */
 
-AVX2 static int office2003_avx2(const uint8_t* salt, const uint8_t* enc, const uint8_t* pws, int len, int n, int* hits, int maxh)
+VECFN static int office2003_vec(const uint8_t* salt, const uint8_t* enc, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
     uint8_t blk[64] = { 0 };
     memcpy(blk, salt, 16);
@@ -2478,8 +2566,8 @@ AVX2 static int office2003_avx2(const uint8_t* salt, const uint8_t* enc, const u
         /* Key: first 5 digest bytes, zero-padded to 16. */
         {
             uint32_t w0[16], w1[16];
-            _mm256_storeu_si256((V256*)w0, st[0]); _mm256_storeu_si256((V256*)(w0 + 8), st[5]);
-            _mm256_storeu_si256((V256*)w1, st[1]); _mm256_storeu_si256((V256*)(w1 + 8), st[6]);
+            VSTOREU(w0, st[0]); VSTOREU(w0 + 8, st[5]);
+            VSTOREU(w1, st[1]); VSTOREU(w1 + 8, st[6]);
             for (int l = 0; l < 16; l++)
             {
                 uint8_t* k = K + 16 * l;
@@ -2508,8 +2596,7 @@ AVX2 static int office2003_avx2(const uint8_t* salt, const uint8_t* enc, const u
         }
         V256 ha, hb;
         load16(vw[4], &ha, &hb);
-        uint32_t m = (uint32_t)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(st[0], ha)))
-                   | (uint32_t)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(st[5], hb))) << 8;
+        uint32_t m = VEQMASK(st[0], ha) | VEQMASK(st[5], hb) << 8;
         while (m)
         {
             int l = __builtin_ctz(m);
@@ -2520,7 +2607,7 @@ AVX2 static int office2003_avx2(const uint8_t* salt, const uint8_t* enc, const u
     return nh;
 }
 
-AVX2 static int pdf_avx2(const rk_pdf_params* P, const uint8_t* pws, int len, int n, int* hits, int maxh)
+VECFN static int pdf_vec(const rk_pdf_params* P, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
     int kl = P->keylen;
     uint8_t S[2][8 * 256] __attribute__((aligned(64)));
@@ -2552,7 +2639,7 @@ AVX2 static int pdf_avx2(const rk_pdf_params* P, const uint8_t* pws, int len, in
         else
         {
             /* Short passwords: the trailing pad words are shared; treat them as lane words anyway. */
-            for (int j = 0; j < 8; j++) if (!((mask1 >> j) & 1)) WA[j] = WB[j] = _mm256_set1_epi32((int)c1[j]);
+            for (int j = 0; j < 8; j++) if (!((mask1 >> j) & 1)) WA[j] = WB[j] = VSET1(c1[j]);
             md5x16(st, WA, WB, c1, 0xff);
         }
         md5x16(st, WA, WB, P->block2, 0x0);
@@ -2575,10 +2662,10 @@ AVX2 static int pdf_avx2(const rk_pdf_params* P, const uint8_t* pws, int len, in
                 cw[14] = (uint32_t)(kl * 8);
                 int pq = kl / 4;
                 uint32_t keep = kl % 4 ? (1u << (8 * (kl % 4))) - 1 : 0;
-                V256 vkeep = _mm256_set1_epi32((int)keep), vpad = _mm256_set1_epi32((int)(0x80u << (8 * (kl % 4))));
+                V256 vkeep = VSET1(keep), vpad = VSET1(0x80u << (8 * (kl % 4)));
                 for (int it = 0; it < 50; it++)
                 {
-                    for (int q = 0; q < 5; q++) { WA[q] = WB[q] = _mm256_setzero_si256(); }
+                    for (int q = 0; q < 5; q++) { WA[q] = WB[q] = VZERO; }
                     for (int q = 0; q < pq; q++) { WA[q] = st[q]; WB[q] = st[4 + q]; }
                     WA[pq] = VOR(VAND(pq < 4 ? st[pq] : WA[pq], vkeep), vpad);
                     WB[pq] = VOR(VAND(pq < 4 ? st[4 + pq] : WB[pq], vkeep), vpad);
@@ -2712,20 +2799,33 @@ static void sha256_short(const uint8_t* m, int n, uint8_t out[32])
     for (int i = 0; i < 8; i++) put_be32(out + 4 * i, s[i]);
 }
 
-#if RK_X64
-#define AVXAES __attribute__((target("avx2,aes")))
 #define PDF6_POOL 64            /* > 9 bins x 7: some bin always has eight lanes while the pool is full */
 #define PDF6_MAXLEN 127
 
+#if RK_X64
+#define AVXAES __attribute__((target("avx2,aes")))
+#define PDF6FN AVXAES
+typedef __m128i V128;
+#define V128_LAST(x) ((uint8_t)_mm_extract_epi8((x), 15))
+#elif RK_ARM64
+#define PDF6FN ARMCE
+typedef uint8x16_t V128;
+#define V128_LAST(x) vgetq_lane_u8((x), 15)
+#endif
+
+#if RK_VEC
 typedef struct
 {
-    __m128i rk[11];             /* AES-128 round keys from K[0..16] */
-    __m128i c;                  /* CBC chain: the last E block produced */
-    __m128i e0;                 /* E block 0 (computed when the lane is binned) */
+    V128 rk[11];                /* AES-128 round keys from K[0..16] */
+    V128 c;                     /* CBC chain: the last E block produced */
+    V128 e0;                    /* E block 0 (computed when the lane is binned) */
     uint8_t k[64];
     uint8_t pk[2 * (PDF6_MAXLEN + 64) + 16];    /* (pw || K) twice: any 16 bytes of the period */
     int idx, round, kl;
 } pdf6_lane;
+#endif
+
+#if RK_X64
 
 #define AES_EXP(i, rc) do { __m128i g_ = _mm_shuffle_epi32(_mm_aeskeygenassist_si128(k_, rc), 0xff); \
     k_ = _mm_xor_si128(k_, _mm_slli_si128(k_, 4)); k_ = _mm_xor_si128(k_, _mm_slli_si128(k_, 4));     \
@@ -2927,8 +3027,186 @@ AVXAES static void pdf6_round(pdf6_lane** g, int bin, int len)
         g[l]->round++;
     }
 }
+#elif RK_ARM64
+/*
+ * ARMv8 Crypto Extensions: AESE/AESMC for the CBC chains, SHA256H/SHA512H for the hashes. The
+ * hash instructions work on one message at a time, so the eight lanes of a group are eight
+ * independent streams, interleaved to cover the instruction latency; each 16-byte AES block is
+ * byte-swapped straight into a message register.
+ */
+#define PDF6_G512 2             /* SHA-384/512 streams per interleaved compression (1: -11 %, 4: -2 %, 8: -14 %) */
 
-AVXAES static int pdf6_avx2(const uint8_t* u48, const uint8_t* pws, int len, int n, int* hits, int maxh)
+/* AES-128 key schedule. SubWord is AESE with a zero key on four copies of the word (ShiftRows then moves nothing). */
+ARMCE static void aes128_expand(uint8x16_t* rk, const uint8_t* key)
+{
+    static const uint8_t rcon[10] = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36 };
+    uint32_t w[44];
+    memcpy(w, key, 16);
+    for (int i = 4; i < 44; i++)
+    {
+        uint32_t t = w[i - 1];
+        if (i % 4 == 0)
+        {
+            uint8x16_t s = vaeseq_u8(vreinterpretq_u8_u32(vdupq_n_u32(t)), vdupq_n_u8(0));
+            t = ror32(vgetq_lane_u32(vreinterpretq_u32_u8(s), 0), 8) ^ rcon[i / 4 - 1];
+        }
+        w[i] = w[i - 4] ^ t;
+    }
+    for (int r = 0; r < 11; r++) rk[r] = vld1q_u8((const uint8_t*)(w + 4 * r));
+}
+
+/* Sets up round `l->round` for K = l->k: key schedule, E block 0, and the lane's bin. */
+ARMCE static int pdf6_prep(pdf6_lane* l, const uint8_t* pw, int len)
+{
+    int p = len + l->kl;
+    memcpy(l->pk, pw, (size_t)len);
+    memcpy(l->pk + len, l->k, (size_t)l->kl);
+    memcpy(l->pk + p, l->pk, (size_t)p);
+    aes128_expand(l->rk, l->k);
+    uint8x16_t x = veorq_u8(vld1q_u8(l->pk), vld1q_u8(l->k + 16));
+    for (int r = 0; r < 9; r++) x = vaesmcq_u8(vaeseq_u8(x, l->rk[r]));
+    x = veorq_u8(vaeseq_u8(x, l->rk[9]), l->rk[10]);
+    l->e0 = l->c = x;
+    int sum = vaddlvq_u8(x);
+    return (sum % 3) * 3 + (l->kl == 32 ? 0 : l->kl == 48 ? 1 : 2);
+}
+
+/* One SHA-256 block for four streams: s0 = ABCD, s1 = EFGH; m[l] = message words 0..15 (overwritten). */
+ARMCE static inline __attribute__((always_inline)) void sha256ce_x4(uint32x4_t* s0, uint32x4_t* s1, uint32x4_t (*m)[4])
+{
+    uint32x4_t a0[4], b0[4];
+    for (int l = 0; l < 4; l++) { a0[l] = s0[l]; b0[l] = s1[l]; }
+#pragma clang loop unroll(full)
+    for (int i = 0; i < 16; i++)
+    {
+        const uint32x4_t k = vld1q_u32(SHA256_K + 4 * i);
+#pragma clang loop unroll(full)
+        for (int l = 0; l < 4; l++)
+        {
+            if (i >= 4) m[l][i & 3] = vsha256su1q_u32(vsha256su0q_u32(m[l][i & 3], m[l][(i + 1) & 3]), m[l][(i + 2) & 3], m[l][(i + 3) & 3]);
+            uint32x4_t wk = vaddq_u32(m[l][i & 3], k), t = s0[l];
+            s0[l] = vsha256hq_u32(s0[l], s1[l], wk);
+            s1[l] = vsha256h2q_u32(s1[l], t, wk);
+        }
+    }
+    for (int l = 0; l < 4; l++) { s0[l] = vaddq_u32(s0[l], a0[l]); s1[l] = vaddq_u32(s1[l], b0[l]); }
+}
+
+/*
+ * One SHA-512 block for PDF6_G512 streams: s[l] = AB CD EF GH; m[l] = message words 0..15 in pairs.
+ * Two rounds per step; the four state registers take turns in each role.
+ */
+ARMCE static inline __attribute__((always_inline)) void sha512ce_g(uint64x2_t (*s)[4], uint64x2_t (*m)[8])
+{
+    uint64x2_t sv[PDF6_G512][4];
+    for (int l = 0; l < PDF6_G512; l++) for (int j = 0; j < 4; j++) sv[l][j] = s[l][j];
+#pragma clang loop unroll(full)
+    for (int i = 0; i < 40; i++)
+    {
+        const uint64x2_t k = vld1q_u64(SHA512_K + 2 * i);
+        const int ab = (4 - (i & 3)) & 3, cd = (5 - (i & 3)) & 3, ef = (6 - (i & 3)) & 3, gh = (7 - (i & 3)) & 3;
+#pragma clang loop unroll(full)
+        for (int l = 0; l < PDF6_G512; l++)
+        {
+            uint64x2_t* r = s[l];
+            uint64x2_t mk = vaddq_u64(m[l][i & 7], k);
+            uint64x2_t t1 = vaddq_u64(vextq_u64(mk, mk, 1), r[gh]);
+            uint64x2_t t0 = vsha512hq_u64(t1, vextq_u64(r[ef], r[gh], 1), vextq_u64(r[cd], r[ef], 1));
+            r[gh] = vsha512h2q_u64(t0, r[cd], r[ab]);
+            r[cd] = vaddq_u64(r[cd], t0);
+            if (i < 32)
+                m[l][i & 7] = vsha512su1q_u64(vsha512su0q_u64(m[l][i & 7], m[l][(i + 1) & 7]), m[l][(i + 7) & 7],
+                                              vextq_u64(m[l][(i + 4) & 7], m[l][(i + 5) & 7], 1));
+        }
+    }
+    for (int l = 0; l < PDF6_G512; l++) for (int j = 0; j < 4; j++) s[l][j] = vaddq_u64(s[l][j], sv[l][j]);
+}
+
+/* One round for eight lanes of bin `bin`, as the AVX2 version: E is hashed as it is produced. */
+ARMCE static void pdf6_round(pdf6_lane** g, int bin, int len)
+{
+    const int fn = bin / 3, kl = 32 + 16 * (bin % 3), p = len + kl;
+    const int T = 64 * p, nchunks = T / 16;
+    const int bsz = fn == 0 ? 64 : 128, cpb = bsz / 16;
+    const int nb = (T + (fn == 0 ? 9 : 17) + bsz - 1) / bsz;
+    uint8x16_t c[8], blk[8][8];
+    uint32x4_t s0[8], s1[8];
+    uint64x2_t s5[8][4];
+    for (int l = 0; l < 8; l++) c[l] = g[l]->c;
+    if (fn == 0)
+        for (int l = 0; l < 8; l++) { s0[l] = vld1q_u32(SHA256_IV); s1[l] = vld1q_u32(SHA256_IV + 4); }
+    else
+        for (int l = 0; l < 8; l++)
+            for (int j = 0; j < 4; j++) s5[l][j] = vld1q_u64((fn == 1 ? SHA384_IV : SHA512_IV) + 2 * j);
+    int off = 16, q = 0;
+    for (int b = 0; b < nb; b++)
+    {
+        for (int ci = 0; ci < cpb; ci++, q++)
+        {
+            if (q == 0) { for (int l = 0; l < 8; l++) blk[l][ci] = g[l]->e0; continue; }
+            if (q < nchunks)
+            {
+                uint8x16_t x[8];
+                for (int l = 0; l < 8; l++) x[l] = veorq_u8(vld1q_u8(g[l]->pk + off), c[l]);
+                for (int r = 0; r < 9; r++)
+                    for (int l = 0; l < 8; l++) x[l] = vaesmcq_u8(vaeseq_u8(x[l], g[l]->rk[r]));
+                for (int l = 0; l < 8; l++) c[l] = blk[l][ci] = veorq_u8(vaeseq_u8(x[l], g[l]->rk[9]), g[l]->rk[10]);
+                off += 16;
+                if (off >= p) off -= p;
+            }
+            else
+            {
+                /* Padding: 0x80 right after E, zeros, the bit length in the block's last 8 bytes. */
+                uint8_t pad[16] = { 0 };
+                if (q == nchunks) pad[0] = 0x80;
+                if (b == nb - 1 && ci == cpb - 1)
+                {
+                    uint64_t bits = (uint64_t)T * 8;
+                    for (int i = 0; i < 8; i++) pad[15 - i] = (uint8_t)(bits >> (8 * i));
+                }
+                for (int l = 0; l < 8; l++) blk[l][ci] = vld1q_u8(pad);
+            }
+        }
+        if (fn == 0)
+            for (int h = 0; h < 8; h += 4)
+            {
+                uint32x4_t m[4][4];
+                for (int l = 0; l < 4; l++)
+                    for (int j = 0; j < 4; j++) m[l][j] = vreinterpretq_u32_u8(vrev32q_u8(blk[h + l][j]));
+                sha256ce_x4(s0 + h, s1 + h, m);
+            }
+        else
+            for (int h = 0; h < 8; h += PDF6_G512)
+            {
+                uint64x2_t m[PDF6_G512][8];
+                for (int l = 0; l < PDF6_G512; l++)
+                    for (int j = 0; j < 8; j++) m[l][j] = vreinterpretq_u64_u8(vrev64q_u8(blk[h + l][j]));
+                sha512ce_g(s5 + h, m);
+            }
+    }
+    /* New K per lane: the state words, big-endian. */
+    int nkl = fn == 0 ? 32 : fn == 1 ? 48 : 64;
+    for (int l = 0; l < 8; l++)
+    {
+        uint8_t kb[64];
+        if (fn == 0)
+        {
+            vst1q_u8(kb, vrev32q_u8(vreinterpretq_u8_u32(s0[l])));
+            vst1q_u8(kb + 16, vrev32q_u8(vreinterpretq_u8_u32(s1[l])));
+        }
+        else
+            for (int j = 0; j < 4; j++) vst1q_u8(kb + 16 * j, vrev64q_u8(vreinterpretq_u8_u64(s5[l][j])));
+        memcpy(g[l]->k, kb, (size_t)nkl);
+        g[l]->kl = nkl;
+        g[l]->c = c[l];
+        g[l]->round++;
+    }
+}
+#endif
+
+#if RK_VEC
+/* Keeps a pool of candidates and runs whichever (hash, |K|) bin has the most lanes ready. */
+PDF6FN static int pdf6_pool(const uint8_t* u48, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
     void* raw;
     pdf6_lane* lanes = (pdf6_lane*)aligned_buf(sizeof(pdf6_lane) * (PDF6_POOL + 8), &raw);
@@ -2960,7 +3238,7 @@ AVXAES static int pdf6_avx2(const uint8_t* u48, const uint8_t* pws, int len, int
         for (int i = 0; i < m; i++)
         {
             pdf6_lane* l = g[i];
-            int elast = (uint8_t)_mm_extract_epi8(l->c, 15);
+            int elast = V128_LAST(l->c);
             if (l->round >= 64 && elast <= l->round - 32)
             {
                 if (memcmp(l->k, u48, 32) == 0) nh = add_hit(hits, nh, maxh, l->idx);
@@ -2988,7 +3266,11 @@ RK_EXPORT int rk_pdf6_search(const uint8_t* u48, const uint8_t* pws, int len, in
 {
 #if RK_X64
     if ((features() & RK_FEAT_AVX2) && (features() & RK_FEAT_AESNI) && len >= 0 && len <= PDF6_MAXLEN && n > 0)
-        return pdf6_avx2(u48, pws, len, n, hits, maxh);
+        return pdf6_pool(u48, pws, len, n, hits, maxh);
+#elif RK_ARM64
+    const int need = RK_FEAT_ARM_AES | RK_FEAT_ARM_SHA2 | RK_FEAT_ARM_SHA512;
+    if ((features() & need) == need && len >= 0 && len <= PDF6_MAXLEN && n > 0)
+        return pdf6_pool(u48, pws, len, n, hits, maxh);
 #endif
     (void)u48; (void)pws; (void)len; (void)n; (void)hits; (void)maxh;
     return -1;
@@ -3001,8 +3283,8 @@ RK_EXPORT int rk_pdf6_search(const uint8_t* u48, const uint8_t* pws, int len, in
  */
 RK_EXPORT int rk_office97_search(const uint8_t* salt16, const uint8_t* enc32, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
-#if RK_X64
-    if ((features() & RK_FEAT_AVX2) && len >= 1 && len <= 15) return office97_avx2(salt16, enc32, pws, len, n, hits, maxh);
+#if RK_VEC
+    if ((features() & RK_FEAT_VEC) && len >= 1 && len <= 15) return office97_vec(salt16, enc32, pws, len, n, hits, maxh);
 #endif
     (void)salt16; (void)enc32; (void)pws; (void)len; (void)n; (void)hits; (void)maxh;
     return -1;
@@ -3010,8 +3292,8 @@ RK_EXPORT int rk_office97_search(const uint8_t* salt16, const uint8_t* enc32, co
 
 RK_EXPORT int rk_office2003_search(const uint8_t* salt16, const uint8_t* enc36, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
-#if RK_X64
-    if ((features() & RK_FEAT_AVX2) && len >= 1 && len <= 15) return office2003_avx2(salt16, enc36, pws, len, n, hits, maxh);
+#if RK_VEC
+    if ((features() & RK_FEAT_VEC) && len >= 1 && len <= 15) return office2003_vec(salt16, enc36, pws, len, n, hits, maxh);
 #endif
     (void)salt16; (void)enc36; (void)pws; (void)len; (void)n; (void)hits; (void)maxh;
     return -1;
@@ -3019,10 +3301,10 @@ RK_EXPORT int rk_office2003_search(const uint8_t* salt16, const uint8_t* enc36, 
 
 RK_EXPORT int rk_pdf_search(const rk_pdf_params* params, const uint8_t* pws, int len, int n, int* hits, int maxh)
 {
-#if RK_X64
-    if ((features() & RK_FEAT_AVX2) && len >= 1 && len <= 32 && params->keylen >= 5 && params->keylen <= 16 &&
+#if RK_VEC
+    if ((features() & RK_FEAT_VEC) && len >= 1 && len <= 32 && params->keylen >= 5 && params->keylen <= 16 &&
         (params->r != 2 || params->keylen == 5))
-        return pdf_avx2(params, pws, len, n, hits, maxh);
+        return pdf_vec(params, pws, len, n, hits, maxh);
 #endif
     (void)params; (void)pws; (void)len; (void)n; (void)hits; (void)maxh;
     return -1;
@@ -3030,6 +3312,8 @@ RK_EXPORT int rk_pdf_search(const rk_pdf_params* params, const uint8_t* pws, int
 
 #if RK_X64
 static inline uint64_t rk_tsc(void) { unsigned lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return ((uint64_t)hi << 32) | lo; }
+#elif RK_ARM64
+static inline uint64_t rk_tsc(void) { uint64_t t; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t)); return t; }    /* 24 MHz on Apple */
 #else
 static inline uint64_t rk_tsc(void) { return 0; }
 #endif

@@ -1,149 +1,92 @@
-using System.Drawing.Drawing2D;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
+using Avalonia.Media;
 
 namespace RecoverKit.App.Ui;
 
-/// <summary>Toolbar and window icons, drawn at runtime so no binary assets are needed.</summary>
+/// <summary>Toolbar and window icons, drawn as vectors on a 32x32 canvas so they stay sharp at any scale.</summary>
 internal static class Icons
 {
-    private static Bitmap Canvas(int size, out Graphics g)
+    private static Color C(uint argb) => Color.FromUInt32(argb);
+
+    private static Viewbox Box(double size, params Control[] shapes)
     {
-        var b = new Bitmap(size, size);
-        g = Graphics.FromImage(b);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.ScaleTransform(size / 32f, size / 32f);
-        return b;
+        var canvas = new Canvas { Width = 32, Height = 32 };
+        foreach (var s in shapes) canvas.Children.Add(s);
+        return new Viewbox { Width = size, Height = size, Child = canvas };
     }
 
-    public static Bitmap Open(int size)
+    private static LinearGradientBrush Vertical(uint top, uint bottom) => new()
     {
-        var b = Canvas(size, out var g);
-        using (g)
+        StartPoint = new RelativePoint(0.5, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(0.5, 1, RelativeUnit.Relative),
+        GradientStops = { new GradientStop(C(top), 0), new GradientStop(C(bottom), 1) },
+    };
+
+    private static Avalonia.Controls.Shapes.Path P(string data, IBrush? fill, IBrush? stroke = null, double thickness = 1)
+        => new() { Data = Geometry.Parse(data), Fill = fill, Stroke = stroke, StrokeThickness = thickness };
+
+    public static Control Open(double size) => Box(size,
+        P("M2,9 H28 V28 H2 Z M2,6 H13 V11 H2 Z", Vertical(0xFFFFD678, 0xFFE6961E)),
+        P("M4,14 H30 L27,28 H2 Z", new SolidColorBrush(C(0xFFFABE46))),
+        P("M16,2 L24,11 H19.5 V22 H12.5 V11 H8 Z", new SolidColorBrush(C(0xFF28A03C)), new SolidColorBrush(C(0xFF146E28))));
+
+    private static Control Disc(double size, uint light, uint dark, Control glyph)
+    {
+        var fill = new RadialGradientBrush
         {
-            using var back = new LinearGradientBrush(new Rectangle(2, 6, 28, 22), Color.FromArgb(255, 214, 120), Color.FromArgb(230, 150, 30), 90f);
-            g.FillRectangle(back, 2, 9, 26, 19);
-            g.FillRectangle(back, 2, 6, 11, 5);
-            using var front = new SolidBrush(Color.FromArgb(250, 190, 70));
-            g.FillPolygon(front, [new PointF(4, 14), new PointF(30, 14), new PointF(27, 28), new PointF(2, 28)]);
-            using var arrow = new SolidBrush(Color.FromArgb(40, 160, 60));
-            g.FillPolygon(arrow, [new PointF(16, 2), new PointF(24, 11), new PointF(19.5f, 11), new PointF(19.5f, 22), new PointF(12.5f, 22), new PointF(12.5f, 11), new PointF(8, 11)]);
-            using var pen = new Pen(Color.FromArgb(20, 110, 40), 1);
-            g.DrawPolygon(pen, [new PointF(16, 2), new PointF(24, 11), new PointF(19.5f, 11), new PointF(19.5f, 22), new PointF(12.5f, 22), new PointF(12.5f, 11), new PointF(8, 11)]);
-        }
-        return b;
+            Center = new RelativePoint(0.38, 0.3, RelativeUnit.Relative), GradientOrigin = new RelativePoint(0.38, 0.3, RelativeUnit.Relative),
+            RadiusX = new RelativeScalar(0.75, RelativeUnit.Relative), RadiusY = new RelativeScalar(0.75, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(C(light), 0), new GradientStop(C(dark), 1) },
+        };
+        var shadow = new Ellipse { Width = 27, Height = 27, Fill = new SolidColorBrush(C(0x3C000000)) };
+        Canvas.SetLeft(shadow, 3); Canvas.SetTop(shadow, 4);
+        var disc = new Ellipse { Width = 27, Height = 27, Fill = fill, Stroke = new SolidColorBrush(C(0xFF5A5A5A)), StrokeThickness = 1.2 };
+        Canvas.SetLeft(disc, 2); Canvas.SetTop(disc, 2);
+        return Box(size, shadow, disc, glyph);
     }
 
-    private static Bitmap Disc(int size, Color light, Color dark, Action<Graphics> glyph)
+    public static Control Start(double size, bool enabled = true) => Disc(size,
+        enabled ? 0xFF8CE678 : 0xFFDCDCDC, enabled ? 0xFF1E8C28 : 0xFF8C8C8C,
+        P("M12.5,9 L22,15.5 L12.5,22 Z", Brushes.White));
+
+    public static Control Stop(double size, bool enabled = true) => Disc(size,
+        enabled ? 0xFF969696 : 0xFFDCDCDC, enabled ? 0xFF323232 : 0xFF8C8C8C,
+        P("M11,11 H20.5 V20.5 H11 Z", Brushes.White));
+
+    public static Control Gear(double size)
     {
-        var b = Canvas(size, out var g);
-        using (g)
+        const int teeth = 8;
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < teeth * 4; i++)
         {
-            using var shadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0));
-            g.FillEllipse(shadow, 3, 4, 27, 27);
-            using var path = new GraphicsPath();
-            path.AddEllipse(2, 2, 27, 27);
-            using var fill = new PathGradientBrush(path) { CenterColor = light, SurroundColors = [dark], CenterPoint = new PointF(12, 10) };
-            g.FillPath(fill, path);
-            using var rim = new Pen(Color.FromArgb(90, 90, 90), 1.2f);
-            g.DrawEllipse(rim, 2, 2, 27, 27);
-            glyph(g);
+            double a = i * Math.PI * 2 / (teeth * 4);
+            double r = (i % 4) is 0 or 1 ? 14.5 : 11;
+            sb.Append(i == 0 ? 'M' : 'L').Append(FormattableString.Invariant($"{16 + r * Math.Cos(a):0.##},{16 + r * Math.Sin(a):0.##} "));
         }
-        return b;
-    }
-
-    public static Bitmap Start(int size, bool enabled = true) => Disc(size,
-        enabled ? Color.FromArgb(140, 230, 120) : Color.Gainsboro, enabled ? Color.FromArgb(30, 140, 40) : Color.Gray,
-        g => g.FillPolygon(Brushes.White, [new PointF(12.5f, 9), new PointF(22, 15.5f), new PointF(12.5f, 22)]));
-
-    public static Bitmap Stop(int size, bool enabled = true) => Disc(size,
-        enabled ? Color.FromArgb(150, 150, 150) : Color.Gainsboro, enabled ? Color.FromArgb(50, 50, 50) : Color.Gray,
-        g => g.FillRectangle(Brushes.White, 11, 11, 9.5f, 9.5f));
-
-    public static Bitmap Gear(int size)
-    {
-        var b = Canvas(size, out var g);
-        using (g)
+        sb.Append("Z M21,16 A5,5 0 1 0 11,16 A5,5 0 1 0 21,16 Z");
+        var fill = new LinearGradientBrush
         {
-            using var path = new GraphicsPath();
-            const int teeth = 8;
-            var pts = new List<PointF>();
-            for (int i = 0; i < teeth * 4; i++)
-            {
-                double a = i * Math.PI * 2 / (teeth * 4);
-                float r = (i % 4) is 0 or 1 ? 14.5f : 11f;
-                pts.Add(new PointF(16 + r * (float)Math.Cos(a), 16 + r * (float)Math.Sin(a)));
-            }
-            path.AddPolygon(pts.ToArray());
-            path.AddEllipse(11, 11, 10, 10);
-            using var fill = new LinearGradientBrush(new Rectangle(0, 0, 32, 32), Color.FromArgb(255, 180, 60), Color.FromArgb(220, 100, 10), 60f);
-            g.FillPath(fill, path);
-            using var pen = new Pen(Color.FromArgb(160, 70, 0), 1);
-            g.DrawPath(pen, path);
-        }
-        return b;
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(C(0xFFFFB43C), 0), new GradientStop(C(0xFFDC640A), 1) },
+        };
+        var path = P("F0 " + sb, fill, new SolidColorBrush(C(0xFFA04600)));
+        return Box(size, path);
     }
 
-    public static Bitmap Help(int size)
+    public static Control Help(double size)
     {
-        var b = Canvas(size, out var g);
-        using (g)
-        {
-            var page = new[] { new PointF(6, 2), new PointF(20, 2), new PointF(26, 8), new PointF(26, 30), new PointF(6, 30) };
-            using var fill = new LinearGradientBrush(new Rectangle(0, 0, 32, 32), Color.White, Color.FromArgb(220, 230, 245), 90f);
-            g.FillPolygon(fill, page);
-            using var pen = new Pen(Color.FromArgb(90, 110, 140), 1.2f);
-            g.DrawPolygon(pen, page);
-            g.DrawLines(pen, [new PointF(20, 2), new PointF(20, 8), new PointF(26, 8)]);
-            using var font = new Font("Segoe UI", 15f, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var blue = new SolidBrush(Color.FromArgb(30, 90, 200));
-            g.DrawString("?", font, blue, 10, 9);
-        }
-        return b;
+        var page = P("M6,2 H20 L26,8 V30 H6 Z", Vertical(0xFFFFFFFF, 0xFFDCE6F5), new SolidColorBrush(C(0xFF5A6E8C)), 1.2);
+        var fold = P("M20,2 V8 H26", null, new SolidColorBrush(C(0xFF5A6E8C)), 1.2);
+        var q = new TextBlock { Text = "?", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(C(0xFF1E5AC8)) };
+        Canvas.SetLeft(q, 11); Canvas.SetTop(q, 7);
+        return Box(size, page, fold, q);
     }
 
-    private static Icon? _appIcon;
-
-    /// <summary>
-    /// The application icon, loaded from the embedded multi-resolution .ico so window, taskbar and
-    /// Alt-Tab renderings stay crisp at every size. Falls back to a drawn padlock if the resource
-    /// is missing. Cached because it owns an unmanaged handle for the process lifetime.
-    /// </summary>
-    public static Icon AppIcon()
+    /// <summary>The window icon, from the embedded multi-resolution .ico.</summary>
+    public static WindowIcon? AppIcon()
     {
-        if (_appIcon != null) return _appIcon;
-        var asm = typeof(Icons).Assembly;
-        using var s = asm.GetManifestResourceStream("RecoverKit.App.Icon.ico");
-        if (s != null) return _appIcon = new Icon(s);
-        return _appIcon = DrawnAppIcon();
-    }
-
-    private static Icon DrawnAppIcon()
-    {
-        var b = Canvas(32, out var g);
-        using (g)
-        {
-            using var bg = new LinearGradientBrush(new Rectangle(0, 0, 32, 32), Color.FromArgb(40, 120, 220), Color.FromArgb(15, 60, 140), 90f);
-            using var rr = Rounded(new RectangleF(1, 1, 30, 30), 6);
-            g.FillPath(bg, rr);
-            using var white = new Pen(Color.White, 3f);
-            g.DrawArc(white, 10, 5, 12, 14, 180, 180);
-            g.DrawLine(white, 10, 12, 10, 15);
-            g.DrawLine(white, 22, 12, 22, 15);
-            g.FillRectangle(Brushes.White, 7, 14, 18, 13);
-            using var hole = new SolidBrush(Color.FromArgb(20, 70, 160));
-            g.FillEllipse(hole, 14, 17, 4, 4);
-            g.FillRectangle(hole, 15, 20, 2, 4);
-        }
-        return Icon.FromHandle(b.GetHicon());
-    }
-
-    private static GraphicsPath Rounded(RectangleF r, float rad)
-    {
-        var p = new GraphicsPath();
-        p.AddArc(r.X, r.Y, rad * 2, rad * 2, 180, 90);
-        p.AddArc(r.Right - rad * 2, r.Y, rad * 2, rad * 2, 270, 90);
-        p.AddArc(r.Right - rad * 2, r.Bottom - rad * 2, rad * 2, rad * 2, 0, 90);
-        p.AddArc(r.X, r.Bottom - rad * 2, rad * 2, rad * 2, 90, 90);
-        p.CloseFigure();
-        return p;
+        using var s = typeof(Icons).Assembly.GetManifestResourceStream("RecoverKit.App.Icon.ico");
+        return s is null ? null : new WindowIcon(s);
     }
 }

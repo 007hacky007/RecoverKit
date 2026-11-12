@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Forgot the password to your own document, archive or backup? RecoverKit helps you get back in.</b><br>
-  Free, open source, for Windows 10 and 11 (64-bit).
+  Free, open source, for Windows 10 and 11 (64-bit) and Macs with Apple silicon.
 </p>
 
 <p align="center">
@@ -37,8 +37,9 @@ number at the end"), and it tests those combinations until it finds the right on
 - **Long, random passwords** can take far longer than anyone can wait. The program shows an
   estimated time before you start, so you know what to expect.
 - **A graphics card (GPU) helps a lot.** NVIDIA, AMD and Intel Arc cards are supported and can be
-  tens of times faster than the processor. Without a graphics card RecoverKit uses the processor,
-  with its own fast engine for the most common formats.
+  tens of times faster than the processor. On a Mac the Apple silicon GPU is used. Without a graphics
+  card RecoverKit uses the processor, with its own fast engine for the most common formats (on Apple
+  silicon it uses the chip's NEON and crypto instructions).
 
 ## What it can open
 
@@ -120,28 +121,33 @@ All measurements, and how they were made: [docs/benchmarks.md](docs/benchmarks.m
 ## Getting started
 
 1. **Download** from the [Releases page](https://github.com/007hacky007/RecoverKit/releases/latest):
-   - `RecoverKit-x.y.z-x64.msi` is the **installer** (recommended). Double-click it and follow the steps.
-   - `RecoverKit-x.y.z-x64-portable.zip` is the **portable version**. Unzip it anywhere (even a USB
+   - Windows: `RecoverKit-x.y.z-x64.msi` is the **installer** (recommended). Double-click it and follow the steps.
+   - Windows: `RecoverKit-x.y.z-x64-portable.zip` is the **portable version**. Unzip it anywhere (even a USB
      stick) and run `RecoverKit.exe`. Nothing is installed.
-2. **First start:** RecoverKit offers to download the free recovery engine
+   - Mac (Apple silicon, macOS 15 or later): `RecoverKit-x.y.z-macos-arm64.dmg`. Open it and drag
+     RecoverKit to Applications. The disk image shows how to open it the first time (see below).
+2. **First start:** on Windows, RecoverKit offers to download the free recovery engine
    ([hashcat](https://hashcat.net)). If your computer has no graphics card, it also offers Intel's free
    processor driver. Both come from their official sources, are checked, and are stored in your user
-   folder only.
+   folder only. The Mac version already contains hashcat and sets it up by itself.
 3. **Open the protected file** (File > Open, or drag it onto the window) and follow the wizard.
 
 Not sure which method to choose? Keep the suggested plan and click **Finish**. It starts with the
 quickest guesses.
 
 > [!TIP]
-> Start RecoverKit normally, not with "Run as administrator". When it runs as administrator,
+> On Windows, start RecoverKit normally, not with "Run as administrator". When it runs as administrator,
 > Windows does not let it use the processor driver.
 
 ## Good to know
 
 - Windows may show a SmartScreen warning the first time, because the program is not signed by a
   paid certificate. Click **More info > Run anyway**.
+- On a Mac the first start shows "RecoverKit Not Opened", because the app is not notarized by Apple.
+  Click **Done**, then open **System Settings > Privacy & Security**, scroll down and click **Open
+  Anyway**. This is needed only once. The first start can take a minute while macOS checks the app.
 - Your files never leave your computer. RecoverKit only connects to the internet to download the
-  engine and when you click Check for updates.
+  engine (Windows) and when you click Check for updates.
 - If something goes wrong, Help > Open debug log folder has a log you can attach to a bug report.
   Recovered passwords are never written to it.
 - Not supported yet: TrueCrypt/VeraCrypt keyfiles and custom PIM, RAR 3 archives whose file names

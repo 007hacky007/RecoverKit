@@ -1,0 +1,71 @@
+Built-in CPU engine on Apple Silicon: before / after the arm64 NEON + ARMv8 Crypto Extensions paths
+=================================================================================================
+
+Machine:  Apple M1 Pro, 10 cores (8 performance + 2 efficiency), macOS (Darwin 27), .NET 10, arm64
+Features: rknative: Neon, ArmAes, ArmSha1, ArmSha2, ArmSha512, ArmSha3
+          .NET: AdvSimd, Aes, Sha256 supported; Vector128 accelerated, Vector256 NOT accelerated
+Command:  recoverkit-cli bench-native --threads T --seconds 5 --mode M
+          (7-character ?u?d?s mask, RAR 3 4 characters; average after a 1 s warm-up)
+Date:     2026-11-12
+
+Columns
+  before      original code (commit 282ef1e) with its native library built for osx-arm64: every
+              native search returned -1 on arm64 and NativeKernels offered no kernel for these
+              modes (0 = not offered, the job goes to hashcat)
+  managed     the managed Vector256 kernels forced on (bench-native --managed --force-vector):
+              what arm64 would get from simply enabling them; .NET runs Vector256 unaccelerated
+  after       this change (native NEON / Crypto Extensions paths, AdvSimd ZipCrypto)
+
+Caveat: the machine was shared and heavily loaded during the runs (load average 16-95 on 10
+cores), so the 10-thread figures vary by up to 2x between repetitions. Each figure is the best of
+3 (10 threads) or 2 (1 thread) interleaved runs; the 1-thread figures are the more reliable ones.
+
+1 thread (passwords per second)
+
+  mode    format                 before        managed       after         after / best before
+  17210   ZIP stored (ZipCrypto) 25.7 M        -             41.9 M        1.63x
+  -17210  ZIP deflate sample     12.9 M        -             15.9 M        1.23x
+  29331   TrueCrypt Whirlpool    940           -             941           1.00x (unchanged, scalar)
+  9700    Word 97 (MD5 + RC4)    0             482 K         2.39 M        4.96x
+  9800    Word 2003 (SHA-1+RC4)  0             724 K         4.44 M        6.14x
+  10400   PDF R2 (RC4 40-bit)    0             1.58 M        4.22 M        2.67x
+  10500   PDF R3 (RC4 128-bit)   0             64.4 K        245 K         3.81x
+  10700   PDF R6 (AES/SHA-2)     0             -             7,865         new (no managed path)
+  12500   RAR 3 (-hp, 4 chars)   0             41            665           16.2x
+
+10 threads (passwords per second)
+
+  mode    format                 before        managed       after         after / best before
+  17210   ZIP stored (ZipCrypto) 155.8 M       -             229.4 M       1.47x
+  -17210  ZIP deflate sample     79.8 M        -             68.9 M        noise (1-thread: 1.23x)
+  29331   TrueCrypt Whirlpool    5,226         -             5,477         1.00x (unchanged, scalar)
+  9700    Word 97 (MD5 + RC4)    0             2.83 M        14.35 M       5.07x
+  9800    Word 2003 (SHA-1+RC4)  0             5.17 M        30.91 M       5.98x
+  10400   PDF R2 (RC4 40-bit)    0             10.14 M       27.44 M       2.71x
+  10500   PDF R3 (RC4 128-bit)   0             426 K         1.60 M        3.74x
+  10700   PDF R6 (AES/SHA-2)     0             -             43,519        new (no managed path)
+  12500   RAR 3 (-hp, 4 chars)   0             188           4,143         22.0x
+
+Raw runs (10 threads; base / after / managed)
+  17210   155.8M 75.4M 137.3M  /  220.0M 108.9M 229.4M
+  -17210  74.3M 46.6M 79.8M    /  68.9M 48.3M 47.8M
+  29331   4,062 2,087 5,226    /  3,955 3,175 5,477
+  9700    after 14.35M 8.57M 11.59M   managed 2.57M 1.84M 2.83M
+  9800    after 24.82M 15.98M 30.91M  managed 4.02M 2.55M 5.17M
+  10400   after 26.87M 17.48M 27.44M  managed 9.38M 7.86M 10.14M
+  10500   after 1.53M 1.03M 1.60M     managed 407K 281K 426K
+  10700   after 43,519 39,189 43,474
+  12500   after 4,143 3,438 3,469     managed 188 187 168
+
+Implementation notes (single-thread microbenchmarks on a P-core)
+  - RAR 3: the AVX2 16-lane SHA-1 kernel compiled for NEON (clang vector types, two q registers
+    per 8 lanes) runs ~650 candidates/s; a version on the SHA-1 instructions (sha1c/p/m,
+    sha1su0/1, 4 streams interleaved) reached only ~460/s because sha1c issues once per ~4 cycles
+    on the M1, so it was dropped.
+  - PDF R6: AESE/AESMC (8 CBC chains interleaved), SHA256H/H2 (4 streams), SHA512H/H2 (2 streams;
+    1 stream -11 %, 4 streams -2 %, 8 streams -14 %), ~7,800 candidates/s at length 7.
+  - RC4 filters: the RC4 key schedule (8 interleaved streams, C) runs at ~1.66 cycles per byte and
+    dominates PDF R3 (20 schedules per candidate); the x86 build keeps its hand-written assembly.
+  - ZipCrypto: AdvSimd path with 4 x 4 lanes and CRC lookups through tbl (two 16-entry nibble
+    tables) is 1.6x the scalar path; it is the default on arm64 (RECOVERKIT_ZIP_NEON=0 disables).
+  - The managed Vector256 kernels stay disabled on arm64: 2.5-9x slower than the native paths.

@@ -2,24 +2,22 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <AssemblyName>RecoverKit</AssemblyName>
     <RootNamespace>RecoverKit.App</RootNamespace>
     <Version>1.0.0</Version>
     <Product>RecoverKit</Product>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <ApplicationIcon>Resources\recoverkit.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Company>RecoverKit</Company>
     <Authors>RecoverKit</Authors>
     <AssemblyTitle>RecoverKit</AssemblyTitle>
     <FileVersion>1.0.0.0</FileVersion>
+    <AvaloniaVersion>12.1.6</AvaloniaVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,7 +25,19 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Resources\recoverkit.ico" LogicalName="RecoverKit.App.Icon.ico" />
   </ItemGroup>
+
+  <!-- Core copies the native kernels of every platform; a published app keeps only its own. -->
+  <Target Name="DropForeignNativeKernels" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)librknative.dylib" Condition="$(RuntimeIdentifier.StartsWith('win'))" />
+    <Delete Files="$(PublishDir)rknative.dll" Condition="$(RuntimeIdentifier.StartsWith('osx'))" />
+  </Target>
 
 </Project>

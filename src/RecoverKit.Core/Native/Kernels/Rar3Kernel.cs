@@ -85,7 +85,7 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     public override KernelWorker CreateWorker() => new Worker(this);
 
     /// <summary>The native library has a vector path for this kernel on this CPU.</summary>
-    internal static bool NativeFast => RkNative.Available && (RkNative.Features & RkNative.Feature.Avx2) != 0;
+    internal static bool NativeFast => RkNative.HasVectorPath;
 
     /// <summary>Digest + IV of every candidate prefix + last[i] from the native library (36 bytes each).</summary>
     internal byte[] NativeHash(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last) => NativeHash(prefix, 1, last);

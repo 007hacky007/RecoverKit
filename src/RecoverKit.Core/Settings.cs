@@ -62,18 +62,35 @@ public sealed class Settings
     private static string FilePath => Path.Combine(AppDataDir, "settings.json");
 
     /// <summary>
-    /// Settings, potfile and sessions live in %APPDATA%\RecoverKit, unless RECOVERKIT_HOME is set
+    /// True when the data folder was redirected by RECOVERKIT_HOME or the portable marker, so logs
+    /// stay next to the other data instead of the platform's standard log folder.
+    /// </summary>
+    [JsonIgnore] public static bool IsRelocated { get; private set; }
+
+    /// <summary>
+    /// Settings, potfile and sessions live in %APPDATA%\RecoverKit on Windows, ~/.config/RecoverKit
+    /// on Linux and ~/Library/Application Support/RecoverKit on macOS, unless RECOVERKIT_HOME is set
     /// or a file named "portable" exists next to the executable (then .\userdata is used).
     /// </summary>
     private static string InitAppData()
     {
         var env = Environment.GetEnvironmentVariable("RECOVERKIT_HOME");
         var portable = File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+        IsRelocated = !string.IsNullOrWhiteSpace(env) || portable;
         var dir = !string.IsNullOrWhiteSpace(env) ? env
             : portable ? Path.Combine(AppContext.BaseDirectory, "userdata")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RecoverKit");
+            : Path.Combine(DefaultDataRoot(), "RecoverKit");
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    /// <summary>The per-user application data root of this platform.</summary>
+    private static string DefaultDataRoot()
+    {
+        // .NET maps ApplicationData to ~/.config on macOS; Apple's convention is Application Support.
+        if (OperatingSystem.IsMacOS())
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support");
+        return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
     }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
