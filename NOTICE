@@ -28,6 +28,15 @@ Building Blocks (tbb), Windows only, optional, after the user accepts Intel's li
   https://pypi.org/project/intel-opencl-rt/ - Intel End User License Agreement.
   https://pypi.org/project/tbb/ - Apache License 2.0.
 
+Stay's ZipCrypto attack (built in, not bundled)
+  Michael Stay, "ZIP Attacks with Reduced Known Plaintext", Fast Software Encryption 2001,
+  https://www.usenix.org/legacy/events/fse01/stay.html - the divide-and-conquer attack on
+  weak rand()-seeded ZipCrypto encryption headers (WinZip <= 8 / Info-ZIP-derived zippers).
+  The Full Disclosure post "Cracking WinZip archives by exploiting weak random number
+  generation" (2003, http://seclists.org/fulldisclosure/2003/Jul/152) and the reference
+  implementation in Info-ZIP's crypt.c (http://www.infozip.org, the BSD-style Info-ZIP license)
+  were used to reproduce the header generation faithfully.
+
 Built-in word lists
   src/RecoverKit.Core/Attacks/Resources/SmallEnglish.txt and MediumEnglish.txt are a selection
   from the macOS /usr/share/dict/words list (Webster's Second International Dictionary, 1934,

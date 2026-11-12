@@ -49,6 +49,7 @@ public sealed class PreferencesWindow : Window
     private readonly TextBox _decryptSuffix = new() { Margin = new Thickness(28, 0, 0, 0), MaxWidth = 240, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly CheckBox _noCache = Check("Don't use password cache");
     private readonly CheckBox _noKeyCache = Check("Don't use key cache");
+    private readonly CheckBox _tryStay = Check("Try the fast ZIP key search first (WinZip-style archives with 5+ encrypted files)");
     private readonly CheckBox _reduce = Check("Reduce informational output (hide hashcat messages)");
     private readonly CheckBox _logHashes = Check("Include extracted hashes (only needed to debug file parsing)");
     private readonly Button _apply;
@@ -274,6 +275,8 @@ public sealed class PreferencesWindow : Window
             L.Group("Password cache", Line(_noCache, clearPw)),
             L.Group("Key cache", L.Column(4, Line(_noKeyCache, clearKey),
                 L.Text("Keys recovered by key search (40-bit RC4: MS Office 97-2003, PDF 1.1-1.3).", dim: true, wrap: true))),
+            L.Group("Fast ZIP key search", L.Column(4, _tryStay,
+                L.Text("Stay's attack on weak WinZip-style encryption headers recovers the cipher keys in minutes, without a password, and writes a decrypted copy.", dim: true, wrap: true))),
             L.Group("", _reduce),
             L.Group("Interrupted attacks", clearSessions),
             L.Group("Debug log", Line(_logHashes, openLog)));
@@ -304,6 +307,7 @@ public sealed class PreferencesWindow : Window
         _decryptSuffix.Text = string.IsNullOrEmpty(_s.DecryptSuffix) ? "_decrypted" : _s.DecryptSuffix;
         _noCache.IsChecked = _s.DontUsePasswordCache;
         _noKeyCache.IsChecked = _s.DontUseKeyCache;
+        _tryStay.IsChecked = _s.TryStayZipAttack;
         _reduce.IsChecked = _s.ReduceOutput;
         _logHashes.IsChecked = _s.DebugLogIncludeHashes;
         FillDevices();
@@ -359,6 +363,7 @@ public sealed class PreferencesWindow : Window
         _s.DecryptSuffix = string.IsNullOrWhiteSpace(_decryptSuffix.Text) ? "_decrypted" : _decryptSuffix.Text.Trim();
         _s.DontUsePasswordCache = _noCache.IsChecked == true;
         _s.DontUseKeyCache = _noKeyCache.IsChecked == true;
+        _s.TryStayZipAttack = _tryStay.IsChecked == true;
         _s.ReduceOutput = _reduce.IsChecked == true;
         _s.DebugLogIncludeHashes = _logHashes.IsChecked == true;
         DebugLog.IncludeHashes = _s.DebugLogIncludeHashes;

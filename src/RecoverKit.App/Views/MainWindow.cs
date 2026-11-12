@@ -831,8 +831,18 @@ public sealed partial class MainWindow : Window
                 Line();
                 Write("Encryption key recovered: ", Palette.SuccessBrush, true);
                 Write((result.Key ?? "") + "\n", Palette.SuccessBrush, true, log: false);
-                Line("No password of up to 8 printable characters derives this key. The key is kept in the key cache; " +
-                     "a longer equivalent password can be searched by running the key search again with a GPU.", Palette.DimBrush);
+                if (result.DecryptedCopy is { } decrypted)
+                {
+                    Write("Archive decrypted to: ", Palette.DimBrush);
+                    WriteLink(decrypted, () => Platform.Reveal(decrypted));
+                    Line("The fast key search recovered the ZipCrypto cipher keys and wrote a password-free copy of the archive; " +
+                         "the password itself was not found.", Palette.DimBrush);
+                }
+                else
+                {
+                    Line("No password of up to 8 printable characters derives this key. The key is kept in the key cache; " +
+                         "a longer equivalent password can be searched by running the key search again with a GPU.", Palette.DimBrush);
+                }
                 Execute(_settings.ExecuteOnSuccess);
                 break;
             case SessionOutcome.NotFound:

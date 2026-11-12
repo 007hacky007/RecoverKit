@@ -6,6 +6,7 @@ using Avalonia.Media;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
+using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
 
@@ -20,7 +21,7 @@ public enum WizardMode { Recover, DictionaryGenerator, PmkGenerator }
 /// </summary>
 public sealed class WizardWindow : Window
 {
-    private enum Choice { Scenario, Brute, Mask, Dict, Key }
+    private enum Choice { Scenario, Brute, Mask, Dict, Key, Stay }
 
     public WizardMode Mode { get; }
     public string ResultFile { get; private set; } = "";
@@ -184,6 +185,11 @@ public sealed class WizardWindow : Window
                 Steps.Add(new AttackSpec { Kind = AttackKind.KeySearch });
                 Close(true);
                 break;
+            case Choice.Stay:
+                Steps.Clear();
+                Steps.Add(new AttackSpec { Kind = AttackKind.StayZip });
+                Close(true);
+                break;
         }
     }
 
@@ -324,6 +330,10 @@ public sealed class WizardWindow : Window
         // 40-bit RC4 formats: search the whole key space instead of passwords (always succeeds).
         if (Mode == WizardMode.Recover && KeySearch.Supports(_target)) p.Children.Add(R("Key search", Choice.Key));
         else if (_choice == Choice.Key) _choice = Choice.Scenario;
+        // WinZip-style ZipCrypto archives: recover the cipher keys from the weak encryption headers.
+        if (Mode == WizardMode.Recover && _target.StayZip is { } stay && StayAttack.Supports(stay))
+            p.Children.Add(R("Fast key search (recovers the keys without the password — WinZip-style ZIPs)", Choice.Stay));
+        else if (_choice == Choice.Stay) _choice = Choice.Scenario;
         UpdateAttackTypeButtons();
         return p;
     }
@@ -331,7 +341,7 @@ public sealed class WizardWindow : Window
     /// <summary>A scenario starts directly (Finish); a single attack type opens its settings page (Next).</summary>
     private void UpdateAttackTypeButtons()
     {
-        if (!_atFirstPage && _commit is null) SetNext(_choice is Choice.Scenario or Choice.Key ? "Finish" : "Next");
+        if (!_atFirstPage && _commit is null) SetNext(_choice is Choice.Scenario or Choice.Key or Choice.Stay ? "Finish" : "Next");
     }
 
     // ------------------------------------------------------------------ estimates
