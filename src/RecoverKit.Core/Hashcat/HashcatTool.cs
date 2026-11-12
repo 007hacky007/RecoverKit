@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using RecoverKit.Core.Formats;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -304,13 +305,28 @@ public sealed partial class HashcatTool
     }
 
     /// <summary>Returns passwords already recovered for these hashes (hashcat --show against the potfile).</summary>
-    public async Task<List<string>> ShowAsync(int mode, string hashFile, string potfile)
+    public async Task<List<string>> ShowAsync(int mode, string hashFile, string potfile, VolumeCredentials? credentials = null)
     {
-        var (_, o, _) = await RunAsync(["-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet"],
-            TimeSpan.FromSeconds(60));
-        return o.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Where(l => !l.StartsWith("Hash '") && !l.Contains("Token length exception") && !l.StartsWith("No hashes loaded"))
-            .Select(DecodePlain).ToList();
+        var args = new List<string> { "-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet" };
+        // PIM options change salt_iter, so hashcat cannot match its own potfile when --show uses them.
+        var (_, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60));
+        var passwords = new List<string>();
+        using var reader = new StringReader(o);
+        while (reader.ReadLine() is { } line)
+            if (!line.StartsWith("Hash '") && !line.Contains("Token length exception") && !line.StartsWith("No hashes loaded"))
+                passwords.Add(DecodePlain(line, credentials));
+        return passwords;
+    }
+
+    public static string DecodePlain(string s, VolumeCredentials? credentials)
+    {
+        s = DecodePlain(s);
+        if (credentials is { Pim: > 0 })
+        {
+            string suffix = "   (PIM=" + credentials.Pim.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+            if (s.EndsWith(suffix, StringComparison.Ordinal)) s = s[..^suffix.Length];
+        }
+        return s;
     }
 
     public static string DecodePlain(string s)

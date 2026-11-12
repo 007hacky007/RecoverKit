@@ -150,8 +150,11 @@ quickest guesses.
   engine (Windows) and when you click Check for updates.
 - If something goes wrong, Help > Open debug log folder has a log you can attach to a bug report.
   Recovered passwords are never written to it.
-- Not supported yet: TrueCrypt/VeraCrypt keyfiles and custom PIM, RAR 3 archives whose file names
-  are not encrypted, LibreOffice files using the newest Argon2 encryption.
+- For TrueCrypt/VeraCrypt volumes, File > Open As lets you add keyfiles. For VeraCrypt, enter the
+  known PIM or leave it at 0 for the default. All selected keyfiles are required; system encryption
+  does not support keyfiles.
+- Not supported yet: RAR 3 archives whose file names are not encrypted, LibreOffice files using
+  the newest Argon2 encryption.
 
 ## For developers
 

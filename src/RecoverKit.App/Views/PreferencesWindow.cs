@@ -236,7 +236,12 @@ public sealed class PreferencesWindow : Window
         var clearPw = L.Button("Clear", async () =>
         {
             if (!await Msg.Ask(this, "Delete all cached recovered passwords?", Title)) return;
-            try { File.Delete(_s.PotfilePath); await Msg.Info(this, "Done!", Title); }
+            try
+            {
+                File.Delete(_s.PotfilePath);
+                foreach (var file in Directory.EnumerateFiles(_s.VolumePasswordCacheDir, "*.potfile")) File.Delete(file);
+                await Msg.Info(this, "Done!", Title);
+            }
             catch (IOException ex) { await Msg.Warn(this, ex.Message, Title); }
         });
         Button clearKey = null!;

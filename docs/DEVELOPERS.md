@@ -140,11 +140,26 @@ recoverkit-cli crack <file> --dict words.txt --rules advanced
 recoverkit-cli crack <file> --hcmask '?u?l?l?l?d?d'
 recoverkit-cli crack <file> --scenario-file my.txt     # run a scenario file
 recoverkit-cli crack vol.hc --volume vc --kdf sha512,ripemd160 --cascade 1,2,3
+recoverkit-cli crack vol.hc --volume vc --keyfile "first key.bin" --keyfile second.bin --pim 7 --dict words.txt
+recoverkit-cli crack vol.tc --volume tc --keyfile key.bin --dict words.txt
 recoverkit-cli crack hash.txt --hash-mode 13000 --dict words.txt   # any hashcat mode
 recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an MS Office file
 ```
 
 `--new` ignores a saved session and starts over; `--no-potfile` disables the cache.
+
+Repeat `--keyfile <path>` for each required keyfile. Files must be readable and nonempty; paths
+containing commas are rejected because hashcat uses commas to separate keyfiles. Only the first
+1 MiB of each keyfile is used, matching TrueCrypt/VeraCrypt. Keyfiles are unavailable with `--boot`.
+`--pim N` sets a known VeraCrypt PIM: 0 (or omitted) uses the default, positive values test that exact
+PIM. The maximum is 2147468 for normal/hidden volumes and 65535 for system encryption. TrueCrypt
+has no custom PIM. Credential options require `--volume`; `extract --full` outputs only the header
+hash, so the same keyfiles and PIM must also be supplied when using that hash directly with hashcat.
+
+Credential-specific sessions and password caches are separate from other combinations of keyfiles
+and PIM. Reopen a volume after changing its keyfiles. Recovery with keyfiles uses hashcat, including
+on the CPU; the built-in TrueCrypt Whirlpool kernel handles password-only recovery. For a volume
+protected by keyfiles with an empty password, use a dictionary containing an empty line.
 
 ## Scenario file format
 

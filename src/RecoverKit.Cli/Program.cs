@@ -4,7 +4,7 @@ using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
 
 // recoverkit-cli: headless front-end for the same engine the GUI uses.
-//   recoverkit-cli extract <file> [--volume tc|vc --kdf sha512,ripemd160 --cascade 1,2,3 --hidden --boot]
+//   recoverkit-cli extract <file> [--volume tc|vc --kdf sha512,ripemd160 --cascade 1,2,3 --hidden --boot --keyfile path --pim N]
 //   recoverkit-cli crack <file> <attack...> [--hashcat path]
 //     attacks: --scenario "Name" | --brute csde --min 1 --max 6 [--mask "pass????"] |
 //              --hcmask "?u?l?l?d" [-1 chars ..] | --dict file [--rules simple|advanced|complex|two|two-adv|three|file.rule]
@@ -173,7 +173,7 @@ try
             return Usage();
     }
 }
-catch (Exception ex) when (ex is AttackPlanException or InvalidOperationException or FormatException or ArgumentException)
+catch (Exception ex) when (ex is AttackPlanException or InvalidOperationException or FormatException or ArgumentException or IOException or UnauthorizedAccessException or OverflowException)
 {
     Console.Error.WriteLine("Error: " + ex.Message);
     return 3;
@@ -181,8 +181,19 @@ catch (Exception ex) when (ex is AttackPlanException or InvalidOperationExceptio
 
 static Detection Open(string path, List<string> argv)
 {
+    var keyfiles = new List<string>();
+    for (int i = 2; i < argv.Count; i++)
+    {
+        if (argv[i] is not ("--keyfile" or "--pim" or "--volume")) continue;
+        string flag = argv[i];
+        if (i + 1 >= argv.Count || argv[i + 1].StartsWith("--"))
+            throw new ArgumentException($"{flag} requires a value.");
+        if (flag == "--keyfile") keyfiles.Add(argv[i + 1]);
+        i++;
+    }
     if (Opt(argv, "--volume") is { } vol)
     {
+        if (vol is not ("tc" or "vc")) throw new ArgumentException("--volume must be tc or vc.");
         var o = new VolumeOptions
         {
             Kind = vol == "tc" ? VolumeKind.TrueCrypt : VolumeKind.VeraCrypt,
@@ -190,6 +201,8 @@ static Detection Open(string path, List<string> argv)
             BootVolume = argv.Contains("--boot"),
             Kdfs = VolumeKdf.None,
             Ciphers = VolumeCipher.None,
+            Keyfiles = keyfiles,
+            Pim = int.Parse(Opt(argv, "--pim") ?? "0", System.Globalization.CultureInfo.InvariantCulture),
         };
         foreach (var k in (Opt(argv, "--kdf") ?? "sha512").Split(','))
             o.Kdfs |= k switch { "ripemd160" => VolumeKdf.Ripemd160, "sha512" => VolumeKdf.Sha512, "whirlpool" => VolumeKdf.Whirlpool, "sha256" => VolumeKdf.Sha256, "streebog" => VolumeKdf.Streebog, _ => throw new ArgumentException("bad kdf " + k) };
@@ -197,6 +210,8 @@ static Detection Open(string path, List<string> argv)
             o.Ciphers |= c switch { "1" => VolumeCipher.Single, "2" => VolumeCipher.Double, "3" => VolumeCipher.Triple, _ => throw new ArgumentException("bad cascade " + c) };
         return CryptVolume.Open(path, o);
     }
+    if (keyfiles.Count > 0 || argv.Contains("--pim"))
+        throw new ArgumentException("--keyfile and --pim require --volume tc or vc.");
     if (Opt(argv, "--hash-mode") is { } hm) return FormatDetector.FromManualHash(path, int.Parse(hm), File.ReadAllText(path));
     return FormatDetector.Detect(path);
 }
@@ -283,5 +298,6 @@ static void Print(Detection d)
 static int Usage()
 {
     Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
+    Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     return 64;
 }

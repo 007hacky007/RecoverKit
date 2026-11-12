@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Collections.ObjectModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Formats;
@@ -29,6 +31,10 @@ public sealed class OpenAsWindow : Window
     private readonly CheckBox _single = new() { Content = "Single cipher (AES, Serpent, Twofish, Camellia, Kuznyechik)", IsChecked = true };
     private readonly CheckBox _double = new() { Content = "Two-cipher cascades (e.g. AES-Twofish)" };
     private readonly CheckBox _triple = new() { Content = "Three-cipher cascades (e.g. AES-Twofish-Serpent)" };
+    private readonly ObservableCollection<string> _keyfilePaths = new();
+    private readonly ListBox _keyfiles = new() { Height = 90, SelectionMode = SelectionMode.Multiple };
+    private readonly NumericUpDown _pim = L.Number(0, VolumeCredentials.MaxPim, 0, 130);
+    private readonly Control _keyfileBox;
     private readonly NumericUpDown _mode = L.Number(0, 999999, 0, 130);
     private readonly TextBox _hash = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 110, FontFamily = new FontFamily("Menlo, Consolas, monospace") };
     private readonly Control _volBox, _hashBox, _fileRow;
@@ -43,7 +49,8 @@ public sealed class OpenAsWindow : Window
     {
         Title = "Choose file protection";
         Icon = Icons.AppIcon();
-        Width = 600;
+        Width = 720;
+        MaxHeight = 760;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         CanMinimize = false;
@@ -64,11 +71,32 @@ public sealed class OpenAsWindow : Window
         foreach (var c in new Control[] { L.Text("Volume header offset"), _offset, _customOffset, _hex, _dec }) off.Children.Add(c);
         var kdf = new WrapPanel { ItemSpacing = 16, LineSpacing = 4 };
         foreach (var c in new Control[] { _sha512, _ripemd, _whirl, _sha256, _streebog }) kdf.Children.Add(c);
+        _keyfiles.ItemsSource = _keyfilePaths;
+        var keys = L.Grid("*,Auto");
+        keys.Put(_keyfiles, 0, 0);
+        var addKey = L.Button("Add...", async () =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Select keyfiles", AllowMultiple = true, FileTypeFilter = Pick.Filters("All files|*.*"),
+            });
+            var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            foreach (var file in files)
+                if (file.TryGetLocalPath() is { } path && !_keyfilePaths.Contains(path, comparer)) _keyfilePaths.Add(path);
+        });
+        var removeKey = L.Button("Remove", () =>
+        {
+            foreach (var path in _keyfiles.SelectedItems!.Cast<string>().ToArray()) _keyfilePaths.Remove(path);
+        });
+        keys.Put(L.Column(6, addKey, removeKey), 0, 1);
+        _keyfileBox = L.Column(6, L.Text("Keyfiles (all selected files are required)", bold: true), keys);
         _volBox = L.Group("Volume settings", L.Column(8,
             off,
             L.Text("Hash function(s) for key derivation", bold: true), kdf,
             L.Text("Encryption", bold: true), L.Column(2, _single, _double, _triple),
-            L.Text("Only XTS mode is supported. Each extra hash function or cascade adds a full pass, so select only what may have been used. Keyfiles and PIM are not supported.", dim: true, wrap: true)));
+            _keyfileBox,
+            L.Row(L.Text("VeraCrypt PIM"), _pim, L.Text("0 = default", dim: true)),
+            L.Text("Only XTS mode is supported. Each extra hash function or cascade adds a full pass. Keyfiles are not supported for system encryption. PIM applies only to VeraCrypt.", dim: true, wrap: true)));
 
         var link = new HyperlinkButton { Content = "list of modes", NavigateUri = new Uri("https://hashcat.net/wiki/doku.php?id=example_hashes"), VerticalAlignment = VerticalAlignment.Center };
         _hashBox = L.Group("Hash", L.Column(8, L.Row(L.Text("hashcat mode (-m)"), _mode, link), _hash));
@@ -82,7 +110,7 @@ public sealed class OpenAsWindow : Window
         var root = new DockPanel();
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
-        root.Children.Add(body);
+        root.Children.Add(new ScrollViewer { Content = body });
         Content = root;
 
         foreach (var rb in new[] { _tc, _vc, _manual }) rb.IsCheckedChanged += (_, _) => Sync();
@@ -93,8 +121,10 @@ public sealed class OpenAsWindow : Window
     private void Sync()
     {
         bool vol = _manual.IsChecked != true;
-        _volBox.IsEnabled = vol;
-        _hashBox.IsEnabled = !vol;
+        _volBox.IsVisible = vol;
+        _hashBox.IsVisible = !vol;
+        _pim.IsEnabled = vol && _vc.IsChecked == true;
+        _keyfileBox.IsEnabled = vol && _offset.SelectedIndex != 2;
         _fileRow.IsEnabled = vol;
         _sha256.IsEnabled = _streebog.IsEnabled = _vc.IsChecked == true;
         _customOffset.IsEnabled = _hex.IsEnabled = _dec.IsEnabled = _offset.SelectedIndex == 3;
@@ -123,6 +153,8 @@ public sealed class OpenAsWindow : Window
                     _ => VolumeOptions.NormalOffset,
                 };
                 o.BootVolume = _offset.SelectedIndex == 2;
+                o.Keyfiles = o.BootVolume ? [] : _keyfilePaths.ToList();
+                o.Pim = vc ? _pim.IntValue() : 0;
                 if (_ripemd.IsChecked == true) o.Kdfs |= VolumeKdf.Ripemd160;
                 if (_sha512.IsChecked == true) o.Kdfs |= VolumeKdf.Sha512;
                 if (_whirl.IsChecked == true) o.Kdfs |= VolumeKdf.Whirlpool;

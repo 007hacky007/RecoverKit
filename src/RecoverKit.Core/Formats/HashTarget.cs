@@ -28,6 +28,8 @@ public sealed class HashTarget
     /// <summary>True if the format hashes the password as UTF-16 (non-ASCII support is limited in hashcat).</summary>
     public bool Utf16Password { get; init; }
 
+    public VolumeCredentials? VolumeCredentials { get; init; }
+
     public string? Notes { get; init; }
 }
 
