@@ -183,16 +183,24 @@ public sealed class CpuRuntimeDownloadWindow : ProgressDialog
     }
 }
 
-/// <summary>Shows recovered password(s) with a copy button.</summary>
+/// <summary>
+/// Shows recovered password(s): a check mark that draws itself once, the password with Hide/Show and
+/// Copy (confirmed by a small toast), and "Decrypt file..." when the format can be decrypted.
+/// </summary>
 public sealed class PasswordFoundWindow : Window
 {
-    public static Task RunAsync(Window owner, IReadOnlyList<string> passwords) => new PasswordFoundWindow(passwords).ShowDialog(owner);
+    public static Task RunAsync(Window owner, IReadOnlyList<string> passwords, string? fileName = null, TimeSpan? elapsed = null,
+        Func<Window, Task>? decrypt = null) => new PasswordFoundWindow(passwords, fileName, elapsed, decrypt).ShowDialog(owner);
 
-    private PasswordFoundWindow(IReadOnlyList<string> passwords)
+    private readonly CheckMark _check = new();
+    private readonly Border _toast;
+    private int _toastGeneration;
+
+    internal PasswordFoundWindow(IReadOnlyList<string> passwords, string? fileName = null, TimeSpan? elapsed = null, Func<Window, Task>? decrypt = null)
     {
         Title = "Password found";
         Icon = Icons.AppIcon();
-        Width = 460;
+        Width = 440;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         CanMinimize = false;
@@ -200,26 +208,112 @@ public sealed class PasswordFoundWindow : Window
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        var box = new TextBox
+        bool canCopy = passwords.Count > 0 && passwords[0].Length > 0;
+        string Shown(string p, bool hidden) => p.Length == 0 ? "(empty password)" : hidden ? new string('•', Math.Min(p.Length, 24)) : p;
+        bool hidden = false;
+        var pw = new SelectableTextBlock
         {
-            IsReadOnly = true, FontFamily = new FontFamily("Menlo, Consolas, monospace"), FontSize = 20, FontWeight = FontWeight.Bold,
-            Text = string.Join("\n", passwords.Select(p => p.Length == 0 ? "(empty password)" : p)),
-            AcceptsReturn = passwords.Count > 1, MaxHeight = 160, TextWrapping = TextWrapping.Wrap,
+            FontFamily = Ui.Styles.Mono, FontSize = 19, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center, MaxHeight = 160,
+            FontStyle = passwords.Count > 0 && passwords[0].Length == 0 ? FontStyle.Italic : FontStyle.Normal,
         };
-        var copy = L.Button("Copy", async () =>
+        void Render() => pw.Text = string.Join("\n", passwords.Select(p => Shown(p, hidden)));
+        Render();
+
+        var hide = L.Button("Hide", () => { }, 64);
+        hide.Click += (_, _) =>
         {
-            if (passwords.Count > 0 && Clipboard is { } cb) await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(cb, passwords[0]);
-        }, 90);
-        copy.IsEnabled = passwords.Count > 0 && passwords[0].Length > 0;
+            hidden = !hidden;
+            hide.Content = hidden ? "Show" : "Hide";
+            Render();
+        };
+        hide.IsEnabled = canCopy;
+        var copy = L.Button("Copy", () => _ = CopyAsync(passwords), 64);
+        copy.Classes.Add("accent");
+        copy.IsEnabled = canCopy;
+        var pwButtons = L.Row(hide, copy);
+        pwButtons.Spacing = 6;
+        pwButtons.VerticalAlignment = VerticalAlignment.Center;
+        var pwRow = new DockPanel();
+        DockPanel.SetDock(pwButtons, Dock.Right);
+        pwButtons.Margin = new Thickness(8, 0, 0, 0);
+        pwRow.Children.Add(pwButtons);
+        pwRow.Children.Add(pw);
+        var pwBox = new Border
+        {
+            Background = Palette.InsetBrush, BorderBrush = Palette.LineBrush, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12, 8, 8, 8), Child = pwRow, HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+
+        var heading = new TextBlock { Text = passwords.Count > 1 ? "Passwords recovered" : "Password recovered", FontSize = 15, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center };
+        var sub = new TextBlock
+        {
+            Foreground = Palette.DimBrush, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+            Text = string.Join("  ·  ", new[] { fileName, elapsed is { } e ? "found in " + Fmt.Duration(e.TotalSeconds) : null }.Where(x => !string.IsNullOrEmpty(x))),
+        };
+        sub.IsVisible = sub.Text.Length > 0;
+        _check.HorizontalAlignment = HorizontalAlignment.Center;
+        if (!Platform.ReduceMotion) _check.Progress = 0;
+        var body = L.Column(10, _check, heading, sub, pwBox);
+        body.Margin = new Thickness(22, 22, 22, 18);
+
+        var tick = Icons.Check(13);
+        tick.Brush = Palette.GoodBrush;
+        tick.VerticalAlignment = VerticalAlignment.Center;
+        _toast = new Border
+        {
+            Background = Palette.ToastBrush, CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 7),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, 0, 10),
+            BorderBrush = new SolidColorBrush(Color.FromUInt32(0x33FFFFFF)), BorderThickness = new Thickness(1), IsVisible = false, IsHitTestVisible = false,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 8,
+                Children = { tick, new TextBlock { Text = "Password copied to the clipboard", FontSize = 12, Foreground = new SolidColorBrush(Color.FromUInt32(0xFFE9EAED)) } },
+            },
+        };
+        var middle = new Grid { Children = { body, _toast } };
+        // Room for the toast under the password box.
+        body.Margin = new Thickness(22, 22, 22, 52);
+
         var ok = L.Button("OK", () => Close(), 90, isDefault: true, isCancel: true);
-        var footer = L.Footer(Platform.IsMac ? [copy, ok] : [copy, ok]);
-        var body = L.Column(10, L.Text("The password was successfully recovered:"), box);
-        body.Margin = new Thickness(18, 16, 18, 14);
+        Control[] footerButtons = decrypt is null ? [ok] : [L.Button("Decrypt file...", () => _ = decrypt(this), 110), ok];
+        var footer = L.Footer(footerButtons);
         var root = new DockPanel();
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
-        root.Children.Add(body);
+        root.Children.Add(middle);
         Content = root;
-        Opened += (_, _) => box.Focus();
+        Opened += (_, _) => { ok.Focus(); _check.Play(); };
     }
+
+    private async Task CopyAsync(IReadOnlyList<string> passwords)
+    {
+        if (passwords.Count == 0 || passwords[0].Length == 0 || Clipboard is not { } cb) return;
+        try { await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(cb, passwords[0]); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.ExternalException)
+        {
+            RecoverKit.Core.DebugLog.Warn("Clipboard: " + ex.Message);
+            return;
+        }
+        ShowToast();
+    }
+
+    /// <summary>"Password copied to the clipboard" for about two seconds.</summary>
+    internal async void ShowToast()
+    {
+        int gen = ++_toastGeneration;
+        _toast.IsVisible = true;
+        if (!Platform.ReduceMotion) await Views.MainWindow.RiseAsync(_toast);
+        await Task.Delay(2000);
+        if (gen == _toastGeneration) _toast.IsVisible = false;
+    }
+
+#if DEBUG
+    /// <summary>Snapshot mode: the finished check mark and the toast.</summary>
+    internal void DebugFinish(bool toast)
+    {
+        _check.Progress = 1;
+        if (toast) { _toastGeneration++; _toast.IsVisible = true; _toast.Opacity = 1; _toast.RenderTransform = null; }
+    }
+#endif
 }

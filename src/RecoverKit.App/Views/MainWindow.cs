@@ -917,6 +917,14 @@ public sealed partial class MainWindow : Window
     /// <summary>Snapshot mode: show a detection without asking anything or starting the wizard.</summary>
     internal void DebugShowDetection(Detection det) => ShowDetectionInfo(det);
 
+    /// <summary>Snapshot mode: the drop zone as it looks while a file is dragged over the window.</summary>
+    internal void DebugDrag(bool on, string name)
+    {
+        _dragging = on;
+        UpdatePane();
+        if (on) _dropTitle.Text = $"Release to open {name}";
+    }
+
     internal static HashcatStatus DebugStatus(double fraction, double speed, int temp = 71) => new()
     {
         Status = 3, GuessBase = "kaja?1?1?1?1", MaskLength = 8, ProgressDone = (long)(1_679_616 * fraction), ProgressTotal = 1_679_616,
@@ -1080,7 +1088,11 @@ public sealed partial class MainWindow : Window
                 if (result.Passwords.Count > 0)
                 {
                     if (result.Passwords[0].Length > 0 && await CopyAsync(result.Passwords[0])) Line("Password copied to the clipboard.", Palette.DimBrush);
-                    await PasswordFoundWindow.RunAsync(this, result.Passwords);
+                    string pw0 = result.Passwords[0];
+                    Func<Window, Task>? decrypt = OfficeDecryptor.CanDecrypt(target.FormatId) && pw0.Length > 0
+                        ? owner => DecryptWithDialogAsync(det, pw0, owner) : null;
+                    await PasswordFoundWindow.RunAsync(this, result.Passwords, Path.GetFileName(det.FilePath),
+                        result.Outcome == SessionOutcome.Found ? DateTime.Now - _attackStarted : null, decrypt);
                 }
                 if (result.Key is { } k1)
                 {

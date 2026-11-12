@@ -47,7 +47,18 @@ dotnet run --project src/RecoverKit.App          # on any desktop, for developme
 
 Set `AVALONIA_TELEMETRY_OPTOUT=1` to keep Avalonia's build tooling from sending usage data. In
 Debug builds `RECOVERKIT_SNAPSHOTS=<dir>` renders every window and wizard page to PNG and exits,
-which makes layout changes quick to check.
+which makes layout changes quick to check. It also walks the main window through its states with
+made-up data (empty, drag over, file loaded, running, paused by the GPU temperature guard, found),
+and renders the wizard's attack cards and the password found dialog. `RECOVERKIT_SNAPSHOT_THEME=light`
+or `dark` forces a theme, `RECOVERKIT_SNAPSHOT_ONLY=main` skips the other windows, and
+`RECOVERKIT_SNAPSHOT_REAL=<file>` runs a real short attack on a test file and saves the live view.
+
+The GUI draws its few custom pieces itself (`src/RecoverKit.App/Ui`): `ProgressRing`,
+`Sparkline`, `ProgressStrip` (the bar with the moving sheen), `CheckMark`, `DropFrame`, the
+monochrome `LineIcon`s and the wizard's `AttackCard`s. Colours come in light/dark pairs from
+`Palette`. Animations are skipped when `Platform.ReduceMotion` is set (macOS "Reduce motion",
+Windows "Animation effects" off, or `RECOVERKIT_REDUCE_MOTION=1`). The live attack view updates at
+most 8 times a second from the newest hashcat status, whatever rate hashcat reports at.
 
 hashcat is the GPU engine and is fetched on demand: the first time you start RecoverKit
 without it, choose **Tools > Download hashcat** (also on the Preferences "Files and Paths"

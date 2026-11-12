@@ -32,6 +32,19 @@ internal static class Fmt
         return $"{s / (365L * 86400)}y {s % (365L * 86400) / 86400}d";
     }
 
+    /// <summary>A rough, friendly duration for estimates: "under 1 min", "4 min", "3 h", "2 days", "5 years".</summary>
+    public static string Rough(double seconds)
+    {
+        if (double.IsNaN(seconds) || seconds < 0) return "n/a";
+        if (seconds < 60) return "under 1 min";
+        if (seconds < 3600) return $"{Math.Ceiling(seconds / 60):0} min";
+        if (seconds < 86400) return $"{Math.Ceiling(seconds / 3600):0} h";
+        double days = seconds / 86400;
+        if (days < 365) return $"{Math.Ceiling(days):0} day{(Math.Ceiling(days) == 1 ? "" : "s")}";
+        double years = days / 365.25;
+        return years < 1000 ? $"{Math.Ceiling(years):0} years" : "centuries";
+    }
+
     public static string Duration(BigInteger candidates, double speed)
         => speed <= 0 ? "n/a" : candidates > new BigInteger(1e30) ? "practically never" : Duration((double)candidates / speed);
 

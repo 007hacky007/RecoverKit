@@ -42,6 +42,9 @@ internal static class Snapshots
         main.Height = 600;
         await Task.Delay(2500);   // hashcat detection
         await Save(main, Path.Combine(dir, "main-empty.png"));
+        main.DebugDrag(true, "Quarterly-report.docx");
+        await Save(main, Path.Combine(dir, "main-drag.png"));
+        main.DebugDrag(false, "");
         main.DebugShowDetection(FakeDetection());
         await Save(main, Path.Combine(dir, "main-loaded.png"));
         await main.DebugStatesAsync(async name => await Save(main, Path.Combine(dir, $"main-{name}.png")));
@@ -56,6 +59,38 @@ internal static class Snapshots
         }
 
         var settings = Settings.Load();
+
+        // Wizard attack cards with estimates (a made-up measured speed for the fake document).
+        var wizSettings = Settings.Load();
+        wizSettings.SpeedByMode[9400] = 41_800;
+        var office = FakeDetection();
+        var wctx = new PlannerContext { DataPath = wizSettings.DataPath, DefaultDictionary = wizSettings.DefaultDictionary };
+        var owiz = new WizardWindow(office.Target!, office.FilePath, ScenarioParser.LoadDefault(), wizSettings, wctx);
+        owiz.Show(main);
+        owiz.DebugShow(1);
+        await Task.Delay(1500);   // estimates are computed in the background
+        await Save(owiz, Path.Combine(dir, "wizard-cards.png"));
+        owiz.Close();
+        var nospeed = Settings.Load();
+        nospeed.SpeedByMode.Remove(9400);
+        owiz = new WizardWindow(office.Target!, office.FilePath, ScenarioParser.LoadDefault(), nospeed, wctx);
+        owiz.Show(main);
+        owiz.DebugShow(1);
+        await Save(owiz, Path.Combine(dir, "wizard-cards-nospeed.png"));
+        owiz.Close();
+
+        var found = new PasswordFoundWindow(["kaja2019"], "Quarterly-report.docx", TimeSpan.FromSeconds(580), _ => Task.CompletedTask);
+        found.Show(main);
+        await Task.Delay(900);
+        found.DebugFinish(toast: true);
+        await Save(found, Path.Combine(dir, "found-dialog.png"));
+        found.Close();
+        found = new PasswordFoundWindow([""], "archive.zip", null, null);
+        found.Show(main);
+        found.DebugFinish(toast: false);
+        await Save(found, Path.Combine(dir, "found-dialog-empty.png"));
+        found.Close();
+
         if (!OnlyMain)
         {
             var target = new HashTarget

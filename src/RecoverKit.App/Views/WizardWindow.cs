@@ -51,6 +51,8 @@ public sealed class WizardWindow : Window
     private readonly Button _next = new() { Content = "Next", MinWidth = 90, HorizontalContentAlignment = HorizontalAlignment.Center, Classes = { "accent" } };
     private readonly Button _cancel = new() { Content = "Cancel", MinWidth = 90, IsCancel = true, HorizontalContentAlignment = HorizontalAlignment.Center };
     private readonly ContentControl _host = new();
+    private readonly StackPanel _trail = new() { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 0, 8) };
+    private int _slideGeneration;
 
     private readonly Stack<Func<Control>> _history = new();
     private Func<Control>? _currentFactory;
@@ -87,11 +89,12 @@ public sealed class WizardWindow : Window
         _cancel.Click += (_, _) => Close(false);
         ToolTip.SetTip(_back, "Back");
 
-        var header = new DockPanel { Margin = new Thickness(18, 14, 24, 10) };
+        var titleRow = new DockPanel();
         DockPanel.SetDock(_back, Dock.Left);
         _back.Margin = new Thickness(0, 0, 12, 0);
-        header.Children.Add(_back);
-        header.Children.Add(_title);
+        titleRow.Children.Add(_back);
+        titleRow.Children.Add(_title);
+        var header = new StackPanel { Margin = new Thickness(20, 14, 24, 10), Children = { _trail, titleRow } };
 
         Control[] buttons = Platform.IsMac ? [_cancel, _next] : [_next, _cancel];
         var footer = L.Footer(buttons);
@@ -105,6 +108,7 @@ public sealed class WizardWindow : Window
         Content = root;
 
         _scenario = scenarios.FirstOrDefault(s => s.DefaultFor.Contains(target.FormatId)) ?? scenarios.FirstOrDefault();
+        Closed += (_, _) => _estimateCts?.Cancel();
 
         // Enter advances (this replaces IsDefault on Next, so it cannot fire twice). Radio buttons and check
         // boxes derive from Button and would swallow Enter, so they are caught on the way down; fields that
@@ -135,19 +139,73 @@ public sealed class WizardWindow : Window
 
     private void Show(Func<Control> factory, bool push = false)
     {
+        bool first = _currentFactory is null;
         if (push && _currentFactory is not null) _history.Push(_currentFactory);
         _currentFactory = factory;
         _commit = null;
         _atFirstPage = false;
+        _attackCards = null;
         _host.Content = factory();
         _back.IsVisible = _history.Count > 0;
-        _next.Focus();
+        UpdateTrail(_atFirstPage ? 0 : factory.Method.Name == nameof(AttackTypePage) ? 1 : 2);
+        if (_attackCards?.Selected is { } card) card.Focus();
+        else _next.Focus();
+        if (!first) _ = SlideInAsync(push ? 1 : -1);
+    }
+
+    /// <summary>File, Attack, Options, Start: where the wizard is (Start is the Finish button).</summary>
+    private void UpdateTrail(int current)
+    {
+        string[] names = Mode == WizardMode.Recover ? ["File", "Attack", "Options", "Start"] : ["Output", "Attack", "Options", "Start"];
+        _trail.Children.Clear();
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (i > 0) _trail.Children.Add(new Avalonia.Controls.Shapes.Rectangle { Width = 18, Height = 1, Fill = Palette.LineBrush, VerticalAlignment = VerticalAlignment.Center });
+            var t = new TextBlock { Text = names[i], FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center };
+            if (i == current) { t.FontWeight = FontWeight.SemiBold; t.Foreground = Palette.ForegroundBrush; }
+            else t.Foreground = Palette.DimBrush;
+            if (i < current)
+            {
+                var check = Icons.Check(11);
+                check.Brush = Palette.SuccessBrush;
+                check.VerticalAlignment = VerticalAlignment.Center;
+                _trail.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { check, t } });
+            }
+            else _trail.Children.Add(t);
+        }
+    }
+
+    /// <summary>A short slide and fade of the new page (none when the system asks for reduced motion).</summary>
+    private async Task SlideInAsync(int direction)
+    {
+        if (Platform.ReduceMotion) return;
+        int gen = ++_slideGeneration;
+        var shift = new TranslateTransform(14 * direction, 0);
+        _host.RenderTransform = shift;
+        _host.Opacity = 0;
+        var t0 = DateTime.UtcNow;
+        while (gen == _slideGeneration)
+        {
+            double t = Math.Min(1, (DateTime.UtcNow - t0).TotalMilliseconds / 280);
+            double e = 1 - Math.Pow(1 - t, 3);
+            _host.Opacity = e;
+            shift.X = 14 * direction * (1 - e);
+            if (t >= 1) break;
+            await Task.Delay(16);
+        }
+        if (gen == _slideGeneration) { _host.Opacity = 1; _host.RenderTransform = null; }
     }
 
 #if DEBUG
     /// <summary>Snapshot mode: page names and a way to show each one.</summary>
     internal static readonly string[] DebugPageNames = ["file", "attack", "brute", "mask", "dict"];
-    internal void DebugShow(int i) => Show(i switch { 0 => FileInfoPage, 1 => AttackTypePage, 2 => BrutePage, 3 => MaskPage, _ => DictPage }, i > 0);
+    internal void DebugShow(int i)
+    {
+        Show(i switch { 0 => FileInfoPage, 1 => AttackTypePage, 2 => BrutePage, 3 => MaskPage, _ => DictPage }, i > 0);
+        _slideGeneration++;
+        _host.Opacity = 1;
+        _host.RenderTransform = null;
+    }
 #endif
 
     private static bool IsPlainEnter(Avalonia.Input.KeyEventArgs e) => e.Key == Avalonia.Input.Key.Enter && e.KeyModifiers == Avalonia.Input.KeyModifiers.None;
@@ -307,29 +365,111 @@ public sealed class WizardWindow : Window
 
     // ------------------------------------------------------------------ attack type page
 
+    private AttackCardGroup? _attackCards;
+    private CancellationTokenSource? _estimateCts;
+
     private Control AttackTypePage()
     {
-        _title.Text = "Select attack type";
-        RadioButton R(string text, Choice c)
+        _title.Text = "How should RecoverKit search?";
+        var group = _attackCards = new AttackCardGroup(2);
+        var scenario = new ComboBox { ItemsSource = _scenarios, SelectedItem = _scenario, HorizontalAlignment = HorizontalAlignment.Stretch };
+        Avalonia.Automation.AutomationProperties.SetName(scenario, "Attack scenario");
+        var cards = new List<AttackCard>
         {
-            var rb = new RadioButton { GroupName = "attack", Content = text, IsChecked = _choice == c };
-            rb.IsCheckedChanged += (_, _) => { if (rb.IsChecked == true) { _choice = c; UpdateAttackTypeButtons(); } };
-            return rb;
-        }
-        var scenario = new ComboBox { ItemsSource = _scenarios, SelectedItem = _scenario, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = _choice == Choice.Scenario };
-        scenario.SelectionChanged += (_, _) => _scenario = scenario.SelectedItem as Scenario;
-        var rbScenario = R("Use attack scenario:", Choice.Scenario);
-        rbScenario.IsCheckedChanged += (_, _) => scenario.IsEnabled = rbScenario.IsChecked == true;
-
-        var scenarioRow = L.Grid("Auto,*", columnSpacing: 10);
-        scenarioRow.Put(rbScenario, 0, 0);
-        scenarioRow.Put(scenario, 0, 1);
-        var p = L.Column(10, scenarioRow, R("Brute-force", Choice.Brute), R("Brute-force with extended mask", Choice.Mask), R("Dictionary based", Choice.Dict));
+            new(group, Choice.Scenario, "Attack scenario", "Runs a list of attacks, from quick guesses to slower ones.", scenario),
+            new(group, Choice.Brute, "Brute-force", "Every combination of the characters and lengths you choose."),
+            new(group, Choice.Mask, "Extended mask", "You know part of it, for example \"Kaja\" + 4 digits."),
+            new(group, Choice.Dict, "Dictionary", "Words from a list, with rules like Capitals and 123 endings."),
+        };
         // 40-bit RC4 formats: search the whole key space instead of passwords (always succeeds).
-        if (Mode == WizardMode.Recover && KeySearch.Supports(_target)) p.Children.Add(R("Key search", Choice.Key));
+        if (Mode == WizardMode.Recover && KeySearch.Supports(_target))
+            cards.Add(new AttackCard(group, Choice.Key, "Key search", "Tries every 40-bit RC4 key. Always succeeds, and opens the file without the password."));
         else if (_choice == Choice.Key) _choice = Choice.Scenario;
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 10, RowSpacing = 10 };
+        for (int i = 0; i < cards.Count; i++)
+        {
+            bool wide = i == 4;
+            grid.Put(cards[i], i / 2, wide ? 0 : i % 2, wide ? 2 : 1);
+        }
+        group.Select(cards.FirstOrDefault(c => (Choice)c.Value == _choice) ?? cards[0]);
+        group.SelectionChanged += c => { _choice = (Choice)c.Value; UpdateAttackTypeButtons(); };
+        scenario.SelectionChanged += (_, _) =>
+        {
+            _scenario = scenario.SelectedItem as Scenario;
+            _ = EstimateCardsAsync(cards, scenarioOnly: true);
+        };
+
+        var note = L.Text("", dim: true, wrap: true);
+        note.FontSize = 12;
+        double? speed = MeasuredSpeed();
+        note.Text = speed is { } sp
+            ? $"Estimates are for the whole search at your last measured speed: {sp:N0} passwords per second for {_target.FormatName}."
+            : "Run Tools > Benchmark (or one attack) on this computer to see time estimates here.";
+        if (Mode != WizardMode.Recover) note.IsVisible = false;
+        _ = EstimateCardsAsync(cards, scenarioOnly: false);
         UpdateAttackTypeButtons();
-        return p;
+        return L.Column(12, grid, note);
+    }
+
+    /// <summary>The speed RecoverKit measured for this hash mode (benchmark or an earlier attack), if any.</summary>
+    private double? MeasuredSpeed()
+        => Mode == WizardMode.Recover && _target.Modes.Count > 0 && _settings.SpeedByMode.TryGetValue(_target.Modes[0], out var s) && s > 0 ? s : null;
+
+    /// <summary>
+    /// Time badges on the attack cards: the full keyspace of the scenario, or of the last brute-force,
+    /// mask and dictionary settings, at the measured speed. A card without a computable estimate has none.
+    /// </summary>
+    private async Task EstimateCardsAsync(List<AttackCard> cards, bool scenarioOnly)
+    {
+        if (MeasuredSpeed() is not { } speed) return;
+        _estimateCts?.Cancel();
+        var cts = _estimateCts = new CancellationTokenSource();
+        var scenarioSteps = _scenario?.Steps.Select(x => x.Clone()).ToList();
+        var brute = _lastBrute.Clone();
+        var mask = _lastMask.Clone();
+        var dict = _lastDict.Clone();
+        if (string.IsNullOrEmpty(dict.Dictionaries[0]) && !string.IsNullOrEmpty(_settings.DefaultDictionary)) dict.Dictionaries[0] = _settings.DefaultDictionary;
+        var target = _target;
+        var ctx = _ctx;
+
+        System.Numerics.BigInteger? Keyspace(AttackSpec a)
+        {
+            try { return AttackPlanner.Prepare(a, target, ctx, path => Wordlists.CountLines(path, cts.Token)).Keyspace; }
+            catch (Exception ex) when (ex is AttackPlanException or IOException or UnauthorizedAccessException) { return null; }
+        }
+        void Show(Choice c, System.Numerics.BigInteger? ks, string? tip)
+        {
+            var card = cards.FirstOrDefault(x => (Choice)x.Value == c);
+            if (card is null) return;
+            if (ks is not { } k || k <= 0) { card.SetBadge(null); return; }
+            double secs = (double)k / speed;
+            card.SetBadge("up to " + Fmt.Rough(secs), secs, tip is null ? $"{Fmt.Count(k)} passwords" : $"{tip}: {Fmt.Count(k)} passwords");
+        }
+
+        try
+        {
+            if (!scenarioOnly)
+            {
+                Show(Choice.Brute, Keyspace(brute), "With the last settings, " + brute.Describe().Replace("Brute-force: ", ""));
+                Show(Choice.Mask, Keyspace(mask), "With the last mask, " + mask.HashcatMask);
+            }
+            var cardScenario = cards.First(x => (Choice)x.Value == Choice.Scenario);
+            cardScenario.SetBadge(null);
+            var sc = await Task.Run(() =>
+            {
+                if (scenarioSteps is null || scenarioSteps.Count == 0 || scenarioSteps.Any(x => x.Kind == AttackKind.KeySearch)) return (System.Numerics.BigInteger?)null;
+                System.Numerics.BigInteger sum = 0;
+                foreach (var st in scenarioSteps) { cts.Token.ThrowIfCancellationRequested(); sum += Keyspace(st) ?? 0; }
+                return sum;
+            }, cts.Token);
+            if (cts.IsCancellationRequested) return;
+            Show(Choice.Scenario, sc, $"All {scenarioSteps?.Count} steps of the scenario");
+            if (scenarioOnly) return;
+            var dk = await Task.Run(() => dict.Dictionaries[0] is null ? null : Keyspace(dict), cts.Token);
+            if (!cts.IsCancellationRequested) Show(Choice.Dict, dk, "With the last dictionary settings");
+        }
+        catch (OperationCanceledException) { }
     }
 
     /// <summary>A scenario starts directly (Finish); a single attack type opens its settings page (Next).</summary>
