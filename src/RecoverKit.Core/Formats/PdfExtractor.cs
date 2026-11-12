@@ -25,6 +25,8 @@ public static partial class PdfExtractor
         var ver = PdfVersion().Match(t);
         d.TypeName = ver.Success ? $"Adobe PDF {ver.Groups[1].Value} document" : "Adobe PDF document";
 
+        if (s.Length <= PdfDocument.MaxBytes && PdfDecryptor.TryAddUnlock(bytes, d)) return;
+
         var refs = EncryptRef().Matches(t);
         string? dict = null;
         if (refs.Count > 0)
