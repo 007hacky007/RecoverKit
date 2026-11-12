@@ -116,7 +116,10 @@ public sealed class HashcatRunner(HashcatTool tool)
         switch (s.Strategy)
         {
             case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", "1,2"]); break;
-            case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1"]); break;
+            // hashcat reaches the processor only through OpenCL; skipping the GPU-only CUDA and HIP
+            // interfaces keeps a half-installed GPU runtime (for example AMD HIP without its compiler
+            // library) from aborting a CPU-only run.
+            case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"]); break;
             case DeviceStrategy.FastGpu: a.AddRange(["-D", noGpu ? "1" : "2"]); break;
             default: if (noGpu) a.AddRange(["-D", "1"]); break;
         }
@@ -132,6 +135,12 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
     /// (Apple Silicon: Apple's OpenCL and Metal expose only the GPU), so -D 1 finds nothing.
     /// </summary>
+    /// <summary>Start of the error text when "CPU only" is chosen but hashcat sees no processor device (Windows, Linux).</summary>
+    public const string NoCpuDeviceMessage =
+        "\"CPU only\" is selected, but hashcat has no processor (CPU) device: it needs a CPU OpenCL runtime for that. " +
+        "Install it with Tools > Download CPU runtime, or choose a GPU strategy in Preferences. " +
+        "The built-in CPU engine still runs ZIP, Office 97-2003, PDF and RAR 3.x without it.";
+
     public static bool NoCpuDevice(Settings s, IReadOnlyList<BackendDevice>? known)
         => s.Strategy == DeviceStrategy.CpuOnly && known is { Count: > 0 } &&
            !known.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
@@ -244,9 +253,11 @@ public sealed class HashcatRunner(HashcatTool tool)
             ? string.Join(Environment.NewLine, tail.Where(l => !l.StartsWith('{')).TakeLast(12))
             : null;
         if (outcome == RunOutcome.Error && string.IsNullOrWhiteSpace(error)) error = $"hashcat exited with code {code}.";
-        if (outcome == RunOutcome.Error && NoCpuDevice(r.Settings, KnownDevices) && error!.Contains("No devices found", StringComparison.OrdinalIgnoreCase))
-            error = "hashcat has no processor (CPU) device on this computer: Apple Silicon Macs expose only the GPU to hashcat. " +
-                    "Choose a GPU strategy in Preferences (the built-in CPU engine still runs the formats it supports).\n" + error;
+        if (outcome == RunOutcome.Error && NoCpuDevice(r.Settings, KnownDevices))
+            error = (OperatingSystem.IsMacOS()
+                ? "hashcat has no processor (CPU) device on this computer: Apple Silicon Macs expose only the GPU to hashcat. " +
+                  "Choose a GPU strategy in Preferences (the built-in CPU engine still runs the formats it supports).\n"
+                : NoCpuDeviceMessage + "\n") + error;
         // hashcat refuses some modes on Apple GPUs (e.g. 17200 PKZIP: no 'goto' in Metal, OpenCL compiler hang).
         else if (outcome == RunOutcome.Error && IsGpuRefusal(error, r.Mode))
             error = $"hashcat cannot run hash mode {r.Mode} on the Apple GPU (a known Metal/OpenCL runtime limitation). " +

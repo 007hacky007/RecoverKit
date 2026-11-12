@@ -32,7 +32,7 @@ public class DeviceStrategyTests
     public void MaximumCpuUsesBothAndNoGpuUsesTheProcessor()
     {
         Assert.Equal(["-D", "1,2"], Args(DeviceStrategy.GpuAndCpu, Gpu, Cpu));
-        Assert.Equal(["-D", "1"], Args(DeviceStrategy.CpuOnly, Gpu, Cpu));
+        Assert.Equal(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], Args(DeviceStrategy.CpuOnly, Gpu, Cpu));
     }
 
     [Fact]

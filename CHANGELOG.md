@@ -25,6 +25,11 @@ All notable changes to RecoverKit. Downloads are on the
   - A file with several restrictions can be saved once without all of them.
 - PDF files encrypted with 40-bit RC4 at revision 3 get their own, faster password search.
 
+### Fixed
+- "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP
+  RTC library" (or no devices). hashcat now skips the GPU-only CUDA and HIP interfaces in that mode,
+  and RecoverKit explains the missing CPU runtime and offers to download it.
+
 ## [1.3.0] - 2026-11-12
 
 ### Added

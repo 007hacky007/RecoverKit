@@ -174,7 +174,10 @@ public sealed class PreferencesWindow : Window
     /// <summary>The strategy list, with a note where hashcat has no CPU device (Apple silicon).</summary>
     private Control StrategyBox()
     {
-        var note = L.Text("On this computer hashcat sees no processor device: \"CPU only\" runs the built-in CPU engine, which covers ZIP, Office 97-2003, PDF and RAR 3.x.", dim: true, wrap: true);
+        var note = L.Text(Platform.IsMac
+            ? "On this computer hashcat sees no processor device: \"CPU only\" runs the built-in CPU engine, which covers ZIP, Office 97-2003, PDF and RAR 3.x."
+            : "hashcat sees no processor device yet: \"CPU only\" runs the built-in CPU engine for ZIP, Office 97-2003, PDF and RAR 3.x. " +
+              "Other formats need a CPU runtime: Tools > Download CPU runtime.", dim: true, wrap: true);
         note.FontSize = 12;
         void Sync() => note.IsVisible = _strategy.SelectedIndex == (int)DeviceStrategy.CpuOnly
             && HashcatRunner.NoCpuDevice(new Settings { Strategy = DeviceStrategy.CpuOnly }, _devices);

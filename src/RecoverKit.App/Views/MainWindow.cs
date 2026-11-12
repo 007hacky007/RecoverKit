@@ -703,12 +703,14 @@ public sealed partial class MainWindow : Window
 
     private bool _offeredCpuRuntime;
 
-    private async Task OfferCpuRuntimeAsync(bool force)
+    private async Task OfferCpuRuntimeAsync(bool force, bool cpuOnly = false)
     {
         if (!CpuRuntime.IsSupportedPlatform || CpuRuntime.Locate() is not null || (_offeredCpuRuntime && !force) || _busyDialog) return;
         _offeredCpuRuntime = true;
-        if (await Msg.Ask(this, "No GPU driver was found, so hashcat has no device to run on.\n\n" +
-                                "Download Intel's CPU runtime to recover passwords on the processor?"))
+        string reason = cpuOnly
+            ? "\"CPU only\" is selected in Preferences, but hashcat cannot use the processor without a CPU runtime."
+            : "No GPU driver was found, so hashcat has no device to run on.";
+        if (await Msg.Ask(this, reason + "\n\nDownload Intel's CPU runtime to recover passwords on the processor?"))
             await DownloadCpuRuntimeAsync();
     }
 
@@ -1170,7 +1172,9 @@ public sealed partial class MainWindow : Window
                 Line();
                 Log(LogKind.Error, "Attack was interrupted because of an error: " + result.Error);
                 Execute(_settings.ExecuteOnFail);
-                if (result.Error?.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.OrdinalIgnoreCase) == true)
+                if (result.Error?.StartsWith(HashcatRunner.NoCpuDeviceMessage, StringComparison.Ordinal) == true)
+                    Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: true, cpuOnly: true));
+                else if (result.Error?.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.OrdinalIgnoreCase) == true)
                     Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: true));
                 break;
         }
