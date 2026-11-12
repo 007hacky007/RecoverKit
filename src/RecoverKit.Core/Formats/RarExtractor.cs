@@ -1,8 +1,8 @@
 namespace RecoverKit.Core.Formats;
 
 /// <summary>
-/// RAR5 (mode 13000, password check value) and RAR 3.x/4.x with encrypted
-/// headers (mode 12500). Also handles self-extracting archives by locating
+/// RAR5 (mode 13000) and RAR 3.x/4.x with encrypted headers (mode 12500)
+/// or encrypted file data (modes 23700/23800). Handles self-extracting archives by locating
 /// the signature inside the first few megabytes.
 /// </summary>
 public static class RarExtractor
@@ -122,8 +122,10 @@ public static class RarExtractor
     {
         d.TypeName = "RAR 3.x archive";
         var mh = Bin.ReadAt(s, pos, 7);
+        Bin.Need(mh, 0, 7);
         if (mh[2] != 0x73) throw new FormatException("RAR main header not found.");
         int flags = Bin.U16(mh, 3), size = Bin.U16(mh, 5);
+        if (size < 13 || size > s.Length - pos) throw new FormatException("Bad RAR main header size.");
         if ((flags & 0x0080) != 0)
         {
             var tail = Bin.ReadAt(s, pos + size, 8 + 16);
@@ -142,25 +144,90 @@ public static class RarExtractor
             return;
         }
 
-        // Unencrypted headers: look for a password-protected file block.
+        Rar3Entry? best = null;
+        bool encrypted = false;
         long p = pos + size;
-        for (int guard = 0; guard < 100000 && p + 7 <= s.Length; guard++)
+        for (int guard = 0; p < s.Length; guard++)
         {
-            var bh = Bin.ReadAt(s, p, 11);
+            if (guard == 100000) throw new FormatException("Too many RAR blocks.");
+            var bh = Bin.ReadAt(s, p, 7);
+            Bin.Need(bh, 0, 7);
             int type = bh[2], bflags = Bin.U16(bh, 3), bsize = Bin.U16(bh, 5);
-            if (bsize < 7) break;
-            long add = (bflags & 0x8000) != 0 && bh.Length >= 11 ? Bin.U32(bh, 7) : 0;
-            if (type == 0x74 && (bflags & 0x04) != 0)
+            if (bsize < 7 || bsize > s.Length - p) throw new FormatException("Bad RAR block size.");
+            bh = Bin.ReadAt(s, p, bsize);
+            if (type == 0x7b) break;
+            ulong packed = 0;
+            if ((bflags & 0x8000) != 0)
             {
-                d.Add("Encrypted file names", "no");
-                d.Message = "RAR 3.x archive with encrypted file data only (no -hp). This version supports RAR 3.x " +
-                            "archives with encrypted file names; for this case extract a $RAR3$*1* hash with an external tool " +
-                            "and use File > Open As > Enter hash manually (hashcat mode 23700/23800).";
-                return;
+                Bin.Need(bh, 7, 4);
+                packed = Bin.U32(bh, 7);
             }
-            if (type == 0x7B) break;
-            p += bsize + add;
+            if (type == 0x74)
+            {
+                Bin.Need(bh, 0, 32);
+                if ((bflags & 0x8000) == 0) throw new FormatException("RAR file block has no data size.");
+                ulong unpacked = Bin.U32(bh, 11);
+                int nameOffset = 32;
+                if ((bflags & 0x100) != 0)
+                {
+                    Bin.Need(bh, 32, 8);
+                    packed |= (ulong)Bin.U32(bh, 32) << 32;
+                    unpacked |= (ulong)Bin.U32(bh, 36) << 32;
+                    nameOffset = 40;
+                }
+                int saltOffset = nameOffset + Bin.U16(bh, 26);
+                Bin.Need(bh, nameOffset, saltOffset - nameOffset);
+                if ((bflags & 0x400) != 0) Bin.Need(bh, saltOffset, 8);
+                if ((bflags & 4) != 0)
+                {
+                    encrypted = true;
+                    int method = bh[25];
+                    // hashcat 7.1.2 limits the ciphertext hex token to 655056 characters.
+                    bool usable = (bflags & 0x13) == 0 && (bflags & 0xe0) != 0xe0 &&
+                        (bflags & 0x400) != 0 && bh[24] is >= 29 and <= 36 &&
+                        method is >= 0x30 and <= 0x35 &&
+                        packed is > 0 and <= 327528 && packed % 16 == 0 &&
+                        unpacked is > 0 and <= 655360 &&
+                        (method != 0x30 || packed == ((unpacked + 15) & ~15UL));
+                    // Tiny entries provide weak CRC checks; prefer enough data to reject false passwords.
+                    if (usable && (best is null ||
+                        (unpacked >= 8 && best.Unpacked < 8) ||
+                        (unpacked >= 8) == (best.Unpacked >= 8) &&
+                        ((method == 0x30 && best.Method != 0x30) ||
+                         (method == 0x30) == (best.Method == 0x30) && packed < (ulong)best.Packed)))
+                    {
+                        best = new Rar3Entry(p + bsize, (int)packed, (int)unpacked, method,
+                            Bin.Slice(bh, saltOffset, 8), Bin.Slice(bh, 16, 4));
+                    }
+                }
+            }
+            if (packed > (ulong)(s.Length - p - bsize)) throw new FormatException("Truncated RAR file data.");
+            p += bsize + (long)packed;
         }
-        d.Message = "Archive is not password protected.";
+        if (encrypted) d.Add("Encrypted file names", "no");
+        if (best is not null)
+        {
+            var data = Bin.ReadAt(s, best.Offset, best.Packed);
+            d.Target = new HashTarget
+            {
+                FormatId = "RAR3",
+                FormatName = "RAR 3.x archive",
+                Protection = "AES-128, SHA-1 x 262144",
+                Modes = [best.Method == 0x30 ? 23700 : 23800],
+                HashLines = $"$RAR3$*1*{Bin.Hex(best.Salt)}*{Bin.Hex(best.Crc)}*{best.Packed}*{best.Unpacked}*1*{Bin.Hex(data)}*{best.Method:x2}",
+                Speed = SpeedClass.VerySlow,
+                MaxPasswordLength = 128,
+                Utf16Password = true,
+                Notes = "Recovers the password for one encrypted file. Other files in the archive may use different passwords." +
+                    (best.Unpacked < 8 ? " The selected file is very short: a reported password may be a false positive. Verify it by opening the archive." : ""),
+            };
+            return;
+        }
+        d.Message = encrypted
+            ? "No usable encrypted RAR 3.x file found. Recovery needs a complete, salted RAR 3.x entry " +
+              "that does not depend on earlier solid files, with at most 327,520 encrypted bytes and 655,360 unpacked bytes."
+            : "Archive is not password protected.";
     }
+
+    private sealed record Rar3Entry(long Offset, int Packed, int Unpacked, int Method, byte[] Salt, byte[] Crc);
 }
