@@ -182,14 +182,18 @@ public class ThermalGuardTests
         p.BeginOutputReadLine();
         try
         {
-            Thread.Sleep(400);
+            // Wait until output flows (slow CI runners start the shell late).
+            var sw = Stopwatch.StartNew();
+            while (Volatile.Read(ref lines) < 3 && sw.ElapsedMilliseconds < 10_000) Thread.Sleep(20);
+            Assert.True(Volatile.Read(ref lines) >= 3);
             Assert.True(ProcessSuspend.Suspend(p));
-            Thread.Sleep(300);
+            Thread.Sleep(500);   // let lines already in the pipe drain
             int frozen = Volatile.Read(ref lines);
-            Thread.Sleep(600);
+            Thread.Sleep(800);
             Assert.Equal(frozen, Volatile.Read(ref lines));
             Assert.True(ProcessSuspend.Resume(p));
-            Thread.Sleep(600);
+            sw.Restart();
+            while (Volatile.Read(ref lines) <= frozen && sw.ElapsedMilliseconds < 10_000) Thread.Sleep(20);
             Assert.True(Volatile.Read(ref lines) > frozen);
         }
         finally { p.Kill(true); }
