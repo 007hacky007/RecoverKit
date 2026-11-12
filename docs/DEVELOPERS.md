@@ -296,3 +296,26 @@ that version.
 - Apple iOS backup extraction follows the documented keybag format and reproduces hashcat's example
   hashes, but has not been verified against a real backup. Automatic decryption is implemented for MS
   Office OOXML only.
+
+### Wallet fixtures and extraction
+
+`WalletExtractor` bounds JSON/database inputs to 32 MiB and never derives keys during detection.
+Format IDs are ETH3 (Ethereum v3), ELCT (Electrum), MTMK (MetaMask) and BLCH (Blockchain.com).
+Hash syntax and limits follow hashcat 7.1.2 modules 12700, 15200, 15600, 15700, 16600, 21700,
+21800, 26600 and 26610. The reference *2john tools were read for field selection; their code
+is not embedded. SECO is recognized only because module 28200 does not specify container offsets.
+
+The tiny `Fixtures/Wallets` corpus uses the synthetic password `wallet-test-42`. Ethereum files
+were generated with eth-keyfile 0.10.0 (PBKDF2 and scrypt N=1024). Python cryptography 50.0.2
+produced AES-GCM MetaMask vaults and AES-CBC Blockchain.com backups, plus Electrum encryption
+reproduced from Electrum 4.5.8 crypto/storage/ecc sources (double SHA256 for individual keys;
+PBKDF2-SHA512, secp256k1 ECIES, zlib, AES-CBC and HMAC-SHA256 for full files). Fixtures include
+expected hash lines and are parsed without KDF work in the default test suite.
+
+Full Electrum hashes authenticate `BIE1 || ephemeral public key || ciphertext`, including the
+header. Above hashcat's 16384-byte authenticated-data limit, mode 21800 instead takes the first
+1024 ciphertext bytes. MetaMask mode 26600 checks the GCM tag for ciphertext sizes 30-3136;
+larger vaults use mode 26610 with exactly 64 ciphertext bytes and a printable-text check.
+Neither truncated mode verifies the MAC, so their Notes tell users to verify recovered passwords.
+Blockchain.com modes inspect the initial JSON blocks; backups larger than 32768 bytes use only
+the first 80 bytes (IV and four ciphertext blocks). Legacy base64 has no identifying magic.

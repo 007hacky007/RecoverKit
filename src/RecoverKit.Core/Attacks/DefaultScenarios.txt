@@ -85,3 +85,12 @@ WPAH
 /a:b /c:d /min:8 /max:10
 /a:r /r:*1s /d:*default
 /a:b /c:s /min:8 /max:8
+
+Cryptocurrency wallets
+ETH3 ELCT MTMK BLCH
+/a:d /d:*default
+/a:b /c:d /min:1 /max:6
+/a:b /c:s /min:1 /max:4
+/a:r /r:*1s /d:*default
+/a:b /c:a /min:1 /max:3
+/a:r /r:*2s /d:*default
