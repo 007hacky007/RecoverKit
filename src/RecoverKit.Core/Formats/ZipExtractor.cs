@@ -11,10 +11,10 @@ namespace RecoverKit.Core.Formats;
 /// </summary>
 public static class ZipExtractor
 {
-    private sealed class ZipEntry
+    internal sealed class ZipEntry
     {
         public string Name = "";
-        public ushort Flags, Method, ModTime;
+        public ushort Flags, Method, ModTime, ModDate;
         public uint Crc;
         public long CompSize, UncompSize, LocalOffset;
         public int AesStrength;     // 0 = not AES
@@ -26,7 +26,7 @@ public static class ZipExtractor
 
     public static void Extract(Stream s, Detection d)
     {
-        var entries = ReadCentralDirectory(s, out long delta);
+        var entries = ReadCentralDirectory(s, out long delta, out _, out _);
         d.TypeName = "ZIP archive";
         d.Add("Entries", entries.Count.ToString());
 
@@ -231,7 +231,7 @@ public static class ZipExtractor
         return -1;
     }
 
-    private static List<ZipEntry> ReadCentralDirectory(Stream s, out long delta)
+    internal static List<ZipEntry> ReadCentralDirectory(Stream s, out long delta, out long cdStart, out byte[] cd)
     {
         long eocd = FindEocd(s);
         if (eocd < 0) throw new FormatException("ZIP end of central directory not found.");
@@ -255,27 +255,30 @@ public static class ZipExtractor
         }
         delta = expectedEnd - (cdOffset + cdSize); // non-zero for self-extracting archives with a prefix
         if (delta < 0) delta = 0;
+        cdStart = cdOffset + delta;
         if (cdSize > 256L * 1024 * 1024) throw new FormatException("ZIP central directory is too large.");
 
-        var cd = Bin.ReadAt(s, cdOffset + delta, (int)cdSize);
+        var cdBytes = Bin.ReadAt(s, cdOffset + delta, (int)cdSize);
+        cd = cdBytes;
         var list = new List<ZipEntry>();
         int p = 0;
-        while (p + 46 <= cd.Length && Bin.U32(cd, p) == 0x02014b50)
+        while (p + 46 <= cdBytes.Length && Bin.U32(cdBytes, p) == 0x02014b50)
         {
             var ze = new ZipEntry
             {
                 Flags = Bin.U16(cd, p + 8),
                 Method = Bin.U16(cd, p + 10),
                 ModTime = Bin.U16(cd, p + 12),
+                ModDate = Bin.U16(cd, p + 14),
                 Crc = Bin.U32(cd, p + 16),
                 CompSize = Bin.U32(cd, p + 20),
                 UncompSize = Bin.U32(cd, p + 24),
                 LocalOffset = Bin.U32(cd, p + 42),
             };
             int nameLen = Bin.U16(cd, p + 28), extraLen = Bin.U16(cd, p + 30), commentLen = Bin.U16(cd, p + 32);
-            Bin.Need(cd, p + 46, nameLen + extraLen);
-            ze.Name = ((ze.Flags & 0x800) != 0 ? Encoding.UTF8 : Encoding.Latin1).GetString(cd, p + 46, nameLen);
-            ParseExtra(cd, p + 46 + nameLen, extraLen, ze);
+            Bin.Need(cdBytes, p + 46, nameLen + extraLen);
+            ze.Name = ((ze.Flags & 0x800) != 0 ? Encoding.UTF8 : Encoding.Latin1).GetString(cdBytes, p + 46, nameLen);
+            ParseExtra(cdBytes, p + 46 + nameLen, extraLen, ze);
             list.Add(ze);
             p += 46 + nameLen + extraLen + commentLen;
         }

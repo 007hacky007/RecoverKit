@@ -186,7 +186,7 @@ public static class ZipStayArchive
             bw.Write((ushort)name.Length);
             bw.Write((ushort)(extra?.Length ?? 0));       // extra len
             bw.Write(name);
-            if (extras[i] is { } ex) bw.Write(ex);
+            if (extra is { } ex) bw.Write(ex);
             bw.Write(body);
             if (spec.DataDescriptor)
             {
