@@ -272,7 +272,8 @@ RecoverKit must not run elevated (elevation breaks the Intel CPU OpenCL runtime)
 The `macos` job (`macos-15`, Apple Silicon) runs the tests on arm64, builds hashcat (cached by
 the build script's hash) and the disk image. Both upload their files as workflow artifacts. Pushing
 a tag such as `v1.2.0` makes the `release` job publish all three files as a GitHub release with
-that version.
+that version. Before tagging, add a `## [x.y.z] - date` section to `CHANGELOG.md`: the release
+notes are taken from it, and the release job fails if the section is missing.
 
 ## Technical notes
 

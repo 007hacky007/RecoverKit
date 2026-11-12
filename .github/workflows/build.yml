@@ -117,10 +117,33 @@ jobs:
     permissions:
       contents: write   # only this job publishes
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true
+
+      # Release notes: this version's section of CHANGELOG.md, with wrapped lines joined (release
+      # pages keep line breaks), plus a compare link to the previous tag.
+      - name: Release notes
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" '
+            /^## \[/ { on = index($0, "## [" v "]") == 1; next }
+            /^\[[0-9]/ { on = 0 }
+            on { print }
+          ' CHANGELOG.md | perl -0pe 's/\n  (?=\S)/ /g; s/^\s+|\s+$//g' > notes.md
+          if [ ! -s notes.md ]; then echo "CHANGELOG.md has no section for $ver" >&2; exit 1; fi
+          prev=$(git ls-remote --tags --refs "https://github.com/$GITHUB_REPOSITORY" 'v*' | sed 's#.*refs/tags/##' \
+            | sort -V | awk -v t="$GITHUB_REF_NAME" '$0 == t { print p; exit } { p = $0 }')
+          if [ -n "$prev" ]; then
+            printf '\n\n**Full changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$prev" "$GITHUB_REF_NAME" >> notes.md
+          fi
 
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -130,4 +153,4 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.dmg.sha256
-          generate_release_notes: true
+          body_path: notes.md
