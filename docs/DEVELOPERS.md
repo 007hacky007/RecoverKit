@@ -377,7 +377,8 @@ unverified on a compatible device. No live funds or personal wallets were used.
 ### PDF permission removal
 
 PDFs with an empty document-open password use `Detection.Unlocks` instead of starting an
-attack. `PdfDecryptor` reuses the full R2-R4 and R6 password checks (R5 uses SHA-256), derives
+attack. Nonempty-password detection keeps the existing hash extraction path; the stricter
+rewrite parser runs only after an empty-password check. `PdfDecryptor` reuses the full R2-R4 and R6 password checks (R5 uses SHA-256), derives
 the file key and authenticates AES-256 `/Perms`. `PdfSyntax` and `PdfDocument` read the active
 classic, stream or hybrid xrefs, follow incremental updates, resolve indirect stream lengths,
 and decode each object stream once. Compressed-object strings are not decrypted twice.
@@ -402,3 +403,7 @@ paper. Source PDFs and tooling remain in the task scratch directory. pypdf curre
 read explicit named Crypt filters and mishandles cleartext encrypted-document metadata;
 qpdf supplies the source-side oracle for those cases. Every saved copy is read by pypdf and
 passes `qpdf --check`.
+
+Validation recovered the synthetic user password with bundled hashcat 7.1.2 in modes 10400,
+10500 (RC4 and AES), 10600 and 10700. The independent permission-removal matrix contains
+36 files, including six encrypted copies of the three public source PDFs.

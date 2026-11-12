@@ -9,3 +9,4 @@ identity-*: separate Identity string/stream crypt filters.
 crypt-*: explicit Identity or StdCF stream filters before FlateDecode.
 metadata-*: qpdf AES-128/256 with EncryptMetadata false and cleartext XMP.
 eff: clear content with an independently AES-encrypted attachment selected by EFF.
+v4-rc4-40: R4/V4 with a 40-bit global key and a V2 crypt filter.

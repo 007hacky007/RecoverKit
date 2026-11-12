@@ -25,8 +25,6 @@ public static partial class PdfExtractor
         var ver = PdfVersion().Match(t);
         d.TypeName = ver.Success ? $"Adobe PDF {ver.Groups[1].Value} document" : "Adobe PDF document";
 
-        if (s.Length <= PdfDocument.MaxBytes && PdfDecryptor.TryAddUnlock(bytes, d)) return;
-
         var refs = EncryptRef().Matches(t);
         string? dict = null;
         if (refs.Count > 0)
@@ -105,6 +103,7 @@ public static partial class PdfExtractor
             Notes = "The attack searches for the document open (user) password. If the document opens without a password, " +
                     "only an owner (permissions) password is set and it can be removed without recovery.",
         };
+        if (bytes.Length <= PdfDocument.MaxBytes) PdfDecryptor.TryAddUnlock(bytes, d, hash, r, dict);
     }
 
     // -------------------------------------------------------------- tiny parser

@@ -25,22 +25,42 @@ internal sealed class PdfDecryptor
         encryptMetadata = security.Get("EncryptMetadata") is not PdfKeyword { Text: "false" };
         key = EmptyPasswordKey(security, document.Resolve(document.Trailer.Get("ID")) as PdfArray)
             ?? throw new FormatException("The PDF no longer opens with an empty user password.");
-        _ = Method(security.Name("StrF") ?? "Identity");
-        _ = Method(security.Name("StmF") ?? "Identity");
-        if (security.Get("EFF") is not null) _ = Method(security.Name("EFF") ?? throw new FormatException("Invalid PDF EFF filter."));
+        _ = Method(ReadName(security, "StrF", "Identity"));
+        _ = Method(ReadName(security, "StmF", "Identity"));
+        if (security.Get("EFF") is not null) _ = Method(ReadName(security, "EFF", "Identity"));
         document.Decrypt = DecryptObject;
     }
 
-    internal static bool TryAddUnlock(byte[] bytes, Detection detection)
+    internal static void TryAddUnlock(byte[] bytes, Detection detection, string hash, int revision, string securityText)
     {
+        if (revision == 4)
+        {
+            // The legacy hashcat extractor fixes V4 at 128 bits; permission removal also accepts shorter RC4 keys.
+            var parsed = (PdfDictionary)new PdfSyntax(System.Text.Encoding.Latin1.GetBytes(securityText)).Read();
+            int bits = parsed.Get("Length") is PdfNumber length ? length.Integer : 128;
+            var fields = hash.Split('*'); fields[2] = bits.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            hash = string.Join('*', fields);
+        }
+        bool empty = revision switch
+        {
+            <= 4 => PdfRc4Kernel.TryParse(hash)?.Verify([]) == true,
+            5 => EmptyR5(hash),
+            6 => PdfR6Kernel.TryParse(hash)?.Verify([]) == true,
+            _ => false,
+        };
+        if (!empty) return; // Password attacks do not require the stricter rewrite parser.
         var document = new PdfDocument(bytes);
-        if (document.Resolve(document.Trailer.Get("Encrypt")) is not PdfDictionary s || s.Name("Filter") != "Standard") return false;
-        int revision = s.Int("R");
-        if (revision is < 2 or > 6 || EmptyPasswordKey(s, document.Resolve(document.Trailer.Get("ID")) as PdfArray) is null) return false;
-        detection.Add("Security handler", $"Standard, V={s.Int("V")}, R={revision}");
-        detection.Add("Permissions (P)", s.Int("P").ToString(System.Globalization.CultureInfo.InvariantCulture));
-        AddUnlock(detection, revision, s.Int("P"));
-        return true;
+        if (document.Resolve(document.Trailer.Get("Encrypt")) is not PdfDictionary s || s.Name("Filter") != "Standard")
+            throw new FormatException("PDF trailer does not reference the detected security handler.");
+        if (EmptyPasswordKey(s, document.Resolve(document.Trailer.Get("ID")) as PdfArray) is null)
+            throw new FormatException("PDF security dictionary does not match the detected empty password.");
+        AddUnlock(detection, s.Int("R"), s.Int("P"));
+    }
+
+    private static bool EmptyR5(string hash)
+    {
+        var u = Convert.FromHexString(hash.Split('*')[8]);
+        return u.Length >= 48 && SHA256.HashData(u.AsSpan(32, 8)).AsSpan().SequenceEqual(u.AsSpan(0, 32));
     }
 
     private static byte[]? EmptyPasswordKey(PdfDictionary s, PdfArray? ids)
@@ -95,13 +115,20 @@ internal sealed class PdfDecryptor
         });
     }
 
+    private string ReadName(PdfDictionary dictionary, string name, string fallback) => document.Resolve(dictionary.Get(name)) switch
+    {
+        null or PdfKeyword { Text: "null" } => fallback,
+        PdfName value => value.Text,
+        _ => throw new FormatException($"PDF /{name} must be a name."),
+    };
+
     private string Method(string filter)
     {
         if (version < 4) return "V2";
         if (filter == "Identity") return "None";
         var cf = document.Resolve(security.Get("CF")) as PdfDictionary;
         var definition = document.Resolve(cf?.Get(filter)) as PdfDictionary ?? throw new FormatException($"Missing PDF crypt filter /{filter}.");
-        string method = definition.Name("CFM") ?? "None";
+        string method = ReadName(definition, "CFM", "None");
         if (method is not ("None" or "V2" or "AESV2" or "AESV3") || method == "AESV3" && revision < 5 || revision >= 5 && method is not ("None" or "AESV3"))
             throw new UnsupportedFormatException($"Unsupported PDF crypt filter method /{method}.");
         if (method == "AESV2" && key.Length != 16) throw new FormatException("AESV2 requires a 128-bit PDF key.");
@@ -132,7 +159,7 @@ internal sealed class PdfDecryptor
     private PdfObject DecryptObject(PdfObject obj)
     {
         if (obj.Number == encryptObject || obj.Value is PdfDictionary x && x.Name("Type") == "XRef") return obj;
-        string strings = Method(security.Name("StrF") ?? "Identity");
+        string strings = Method(ReadName(security, "StrF", "Identity"));
         PdfValue Walk(PdfValue value) => value switch
         {
             PdfString s => new PdfString(DecryptBytes(s.Bytes, obj.Number, obj.Generation, strings)),
@@ -144,7 +171,7 @@ internal sealed class PdfDecryptor
         if (obj.Stream is null) return obj with { Value = value };
         var dict = (PdfDictionary)value;
         if (dict.Get("F") is not null) throw new UnsupportedFormatException("PDF external streams cannot be copied safely.");
-        string streamFilter = dict.Name("Type") == "EmbeddedFile" ? security.Name("EFF") ?? security.Name("StmF") ?? "Identity" : security.Name("StmF") ?? "Identity";
+        string streamFilter = ReadName(dict, "Type", "") == "EmbeddedFile" ? ReadName(security, "EFF", ReadName(security, "StmF", "Identity")) : ReadName(security, "StmF", "Identity");
         var filter = document.Resolve(dict.Get("Filter"));
         var filters = filter is PdfArray array ? array.Items.ToList() : filter is null ? [] : new List<PdfValue> { filter };
         var parms = document.Resolve(dict.Get("DecodeParms"));
@@ -153,8 +180,9 @@ internal sealed class PdfDecryptor
         if (explicitCrypt)
         {
             if (crypt != 0 || filters.Skip(1).Any(f => document.Resolve(f) is PdfName { Text: "Crypt" })) throw new UnsupportedFormatException("PDF Crypt filter must appear once, first in the filter chain.");
-            var param = document.Resolve(parms is PdfArray pa ? pa.Items.FirstOrDefault() : parms) as PdfDictionary;
-            streamFilter = param?.Name("Name") ?? "Identity";
+            var param = document.Resolve(parms is PdfArray pa ? pa.Items.FirstOrDefault() : parms);
+            if (param is not (null or PdfDictionary or PdfKeyword { Text: "null" })) throw new FormatException("Invalid PDF Crypt filter parameters.");
+            streamFilter = param is PdfDictionary settings ? ReadName(settings, "Name", "Identity") : "Identity";
             filters.RemoveAt(0);
             dict.Items.Remove("Filter"); dict.Items.Remove("DecodeParms");
             if (filters.Count > 0)
@@ -163,7 +191,7 @@ internal sealed class PdfDecryptor
                 if (parms is PdfArray parameters) dict.Items["DecodeParms"] = new PdfArray(parameters.Items.Skip(1).ToList());
             }
         }
-        string method = !explicitCrypt && !encryptMetadata && dict.Name("Type") == "Metadata" ? "None" : Method(streamFilter);
+        string method = !explicitCrypt && !encryptMetadata && ReadName(dict, "Type", "") == "Metadata" ? "None" : Method(streamFilter);
         var stream = DecryptBytes(obj.Stream, obj.Number, obj.Generation, method);
         dict.Items["Length"] = new PdfNumber(stream.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return obj with { Value = dict, Stream = stream };

@@ -32,6 +32,7 @@ public class PdfOwnerTests
     [InlineData("crypt-identity")]
     [InlineData("crypt-stdcf")]
     [InlineData("eff")]
+    [InlineData("v4-rc4-40")]
     [InlineData("objstm")]
     [InlineData("identity-strings")]
     [InlineData("identity-streams")]
@@ -75,6 +76,7 @@ public class PdfOwnerTests
     [InlineData("length")]
     [InlineData("offset")]
     [InlineData("aes")]
+    [InlineData("filter")]
     public async Task MalformedSaveKeepsSourceAndExistingOutput(string kind)
     {
         byte[] bytes = Fixture("AES-128");
@@ -82,6 +84,7 @@ public class PdfOwnerTests
         string text = Encoding.Latin1.GetString(bytes);
         if (kind == "truncated") bytes = bytes[..^15];
         else if (kind == "length") bytes = Encoding.Latin1.GetBytes(text.Replace("/Length 80", "/Length 01"));
+        else if (kind == "filter") bytes = Encoding.Latin1.GetBytes(text.Replace("/StrF /StdCF", "/StrF 123456"));
         else if (kind == "offset") bytes = Encoding.Latin1.GetBytes(text.Replace("startxref\n", "startxref\n999999999"));
         else
         {
@@ -168,6 +171,15 @@ public class PdfOwnerTests
             Assert.StartsWith("%PDF-2.0", Encoding.Latin1.GetString(await File.ReadAllBytesAsync(dst)));
         }
         finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void PasswordAttackExtractionDoesNotRequireRewritableXrefs()
+    {
+        // Existing extraction can recover the security dictionary from a damaged final xref.
+        var d = Extract(Fixture("AES-256-user")[..^15]);
+        Assert.Empty(d.Unlocks);
+        Assert.Equal([10700], d.Target!.Modes);
     }
 
     [Theory]

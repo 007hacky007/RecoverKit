@@ -35,7 +35,7 @@ internal sealed class PdfDocument
         int sections = 0;
         while (true)
         {
-            if (++sections > 128 || !xrefs.Add(offset)) throw new FormatException("PDF cross-reference chain is cyclic or too long.");
+            if (++sections > 128 || xrefs.Count >= 128 || !xrefs.Add(offset)) throw new FormatException("PDF cross-reference chain is cyclic or too long.");
             var section = new Dictionary<int, Entry>();
             var trailer = ReadXref(offset, section, false);
             foreach (var pair in section) entries.TryAdd(pair.Key, pair.Value);
