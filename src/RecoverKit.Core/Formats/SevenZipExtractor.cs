@@ -18,7 +18,20 @@ public static class SevenZipExtractor
     public static bool IsSevenZip(ReadOnlySpan<byte> head) => head.StartsWith(Signature);
 
     public static long FindSignature(Stream s)
-        => Bin.IndexOf(Bin.ReadAt(s, 0, (int)Math.Min(s.Length, 4 * 1024 * 1024)), Signature);
+    {
+        const int limit = 4 * 1024 * 1024;
+        var bytes = Bin.ReadAt(s, 0, (int)Math.Min(s.Length, limit + 32));
+        for (int position = 0; position < limit;)
+        {
+            int found = Bin.IndexOf(bytes, Signature, position);
+            if (found < 0 || found >= limit) return -1;
+            // Keep direct damaged archives recognizable, but skip signature constants in SFX stubs.
+            if (found == 0 || (found + 32 <= bytes.Length && bytes[found + 6] == 0 &&
+                Crc32(bytes.AsSpan(found + 12, 20)) == Bin.U32(bytes, found + 8))) return found;
+            position = found + Signature.Length;
+        }
+        return -1;
+    }
 
     public static void Extract(Stream s, Detection d)
     {
@@ -118,11 +131,31 @@ public static class SevenZipExtractor
             if (packed > DataLimit) { reasons.Add("encrypted streams larger than hashcat's 8 MiB limit"); continue; }
             ulong crcLength = f.FinalSize;
             uint? crc = f.Crc;
-            if (f.SubSizes.Count > 0 && f.SubCrcs[0].HasValue && f.SubSizes[0] > 0 &&
-                (!crc.HasValue || f.SubSizes[0] < crcLength))
-            { crc = f.SubCrcs[0]; crcLength = f.SubSizes[0]; }
+            if (f.SubSizes.Count > 0 && f.SubCrcs[0].HasValue)
+            {
+                ulong prefixSize = f.SubSizes[0];
+                uint prefixCrc = f.SubCrcs[0]!.Value;
+                // Hashcat estimates LZMA input from CRC length. Cover the packed size so
+                // it decrypts the whole stream instead of under-reading a solid prefix.
+                for (int i = 1; type is 1 or 2 && prefixSize < packed && i < f.SubSizes.Count; i++)
+                {
+                    if (!f.SubCrcs[i].HasValue || f.SubSizes[i] > CrcLimit - Math.Min(prefixSize, CrcLimit)) break;
+                    prefixCrc = CombineCrc(prefixCrc, f.SubCrcs[i]!.Value, f.SubSizes[i]);
+                    prefixSize += f.SubSizes[i];
+                }
+                if (prefixSize > 0 && (!crc.HasValue || prefixSize < crcLength))
+                { crc = prefixCrc; crcLength = prefixSize; }
+            }
             if (!crc.HasValue || crcLength == 0) { reasons.Add("streams without a usable CRC"); continue; }
             if (type != 0 && crcLength > CrcLimit) { reasons.Add("CRC data larger than hashcat's 9,999,999-byte limit"); continue; }
+            ulong estimatedInput = type switch
+            {
+                1 => (ulong)(32.5 + crcLength * 1.05),
+                2 => (ulong)(4.5 + crcLength * 1.01),
+                _ => packed,
+            };
+            if (crcLength != f.FinalSize && ((Math.Min(packed, estimatedInput) + 15) / 16 * 16) < packed)
+            { reasons.Add("solid prefixes too short for hashcat's LZMA input estimate"); continue; }
             // The tokenizer includes the CRC-length/properties suffix in its 16 MiB hex-data field.
             if (type != 0 && packed == DataLimit)
             { reasons.Add("compressed data at hashcat's 8 MiB token limit (no room for compression properties)"); continue; }
@@ -208,9 +241,16 @@ public static class SevenZipExtractor
         if (r.Peek() == 7)
         {
             r.Byte(); r.Expect(11);
-            int n = r.Count();
+            int n = r.Count(10000);
             if (r.Byte() != 0) throw new UnsupportedFormatException("External 7z folder metadata is unsupported.");
-            for (int i = 0; i < n; i++) info.Folders.Add(ReadFolder(r));
+            int totalCoders = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var folder = ReadFolder(r);
+                totalCoders += folder.Coders.Count;
+                if (totalCoders > 100000) throw new FormatException("Too many 7z coders.");
+                info.Folders.Add(folder);
+            }
             r.Expect(12);
             foreach (var f in info.Folders)
                 for (int i = 0; i < f.Outputs; i++) f.UnpackSizes.Add(r.Number());
@@ -340,9 +380,39 @@ public static class SevenZipExtractor
 
     private static void CheckCrc(ReadOnlySpan<byte> bytes, uint expected)
     {
+        if (Crc32(bytes) != expected) throw new FormatException("7z header CRC mismatch.");
+    }
+
+    private static uint Crc32(ReadOnlySpan<byte> bytes)
+    {
         uint crc = uint.MaxValue;
         foreach (byte b in bytes) crc = (crc >> 8) ^ CrcTable[(crc ^ b) & 255];
-        if (~crc != expected) throw new FormatException("7z header CRC mismatch.");
+        return ~crc;
+    }
+
+    private static uint CombineCrc(uint left, uint right, ulong rightLength)
+    {
+        // Advance a CRC by rightLength zero bytes in GF(2), then add the next stream's CRC.
+        uint[] matrix = Enumerable.Range(0, 32).Select(i =>
+        {
+            uint c = 1u << i;
+            return (c >> 8) ^ CrcTable[c & 255];
+        }).ToArray();
+        while (rightLength != 0)
+        {
+            if ((rightLength & 1) != 0) left = Times(matrix, left);
+            rightLength >>= 1;
+            if (rightLength != 0) matrix = matrix.Select(c => Times(matrix, c)).ToArray();
+        }
+        return left ^ right;
+
+        static uint Times(uint[] matrix, uint vector)
+        {
+            uint sum = 0;
+            for (int i = 0; vector != 0; i++, vector >>= 1)
+                if ((vector & 1) != 0) sum ^= matrix[i];
+            return sum;
+        }
     }
 
     private sealed class Reader(byte[] bytes)

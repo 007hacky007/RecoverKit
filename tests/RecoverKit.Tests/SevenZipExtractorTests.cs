@@ -66,6 +66,17 @@ public class SevenZipExtractorTests
     }
 
     [Fact]
+    public void CombinesSolidSubstreamsForFullHashcatInput()
+    {
+        var t = FormatDetector.Detect(Fixture("many-off")).Target!;
+        byte[] prefix = System.Text.Encoding.UTF8.GetBytes(string.Concat(
+            Enumerable.Range(0, 13).Select(i => $"data for file {i}\n")));
+        var fields = t.HashLines.Split('$');
+        Assert.Equal(prefix.Length.ToString(), fields[12]);
+        Assert.Equal(Crc(prefix).ToString(), fields[8]);
+    }
+
+    [Fact]
     public void DetectsContentAndSelfExtractingPrefix()
     {
         byte[] archive = File.ReadAllBytes(Fixture("7zz-copy-on"));
@@ -79,6 +90,10 @@ public class SevenZipExtractorTests
             var d = FormatDetector.Detect(path);
             Assert.Equal(expected, d.Target!.HashLines);
             Assert.Contains(d.Info, pair => pair.Key == "Self-extracting prefix");
+            // SFX stubs can contain the signature constant before the actual archive.
+            archive.AsSpan(0, 6).CopyTo(prefix.AsSpan(128));
+            File.WriteAllBytes(path, [.. prefix, .. archive]);
+            Assert.Equal(expected, FormatDetector.Detect(path).Target!.HashLines);
         }
         finally { File.Delete(path); }
     }

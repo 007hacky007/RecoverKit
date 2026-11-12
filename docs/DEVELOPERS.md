@@ -281,7 +281,10 @@ that version.
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
   a 16 MiB output limit and a bounded decoder adapted from the public-domain LZMA SDK 23.01.
   No installed 7-Zip or new package is needed. Folder bindings and substream CRCs select the
-  smallest compatible encrypted stream (or the first substream of a solid folder). Hashcat
+  smallest compatible encrypted stream (or a prefix of a solid folder). LZMA solid prefixes
+  combine adjacent substream CRCs until hashcat's CRC-length-based estimate decrypts the full
+  encrypted stream, avoiding silent verification failures from under-reading compressed input.
+  Prefixes that cannot meet that condition are skipped. Hashcat
   accepts Copy, LZMA1, LZMA2 and Deflate without filters, with an empty AES salt. Encrypted data
   is limited to 8 MiB and decompressed CRC input to 9,999,999 bytes; compressed hashes also need
   space for their suffix within the module's input limit. NumCyclesPower above 24 is refused,
