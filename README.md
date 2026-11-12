@@ -48,7 +48,7 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
-| PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
+| PDF documents | Standard PDF passwords, including R3 RC4-40 (password search only) and current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
 | Encrypted disks | TrueCrypt and VeraCrypt volumes |
@@ -105,9 +105,10 @@ More things it does:
   `Password1`, `PASSWORD` or `drowssap`. A rules editor shows a preview of the variations.
 - **Ready-made plans** that run several methods in a row, from quick guesses to longer searches.
 - **Works with any language.** Passwords with accents and non-Latin letters are supported.
-- **Unlocks very old Office and PDF files for certain.** Files from Office 97-2003 and early PDF
-  versions use weak 40-bit encryption, so RecoverKit can search every possible key and always
-  succeed (fast with a graphics card).
+- **Unlocks very old Office and PDF R2 files for certain.** Files from Office 97-2003 and PDF
+  security handler revision 2 use weak 40-bit encryption, so RecoverKit can search every possible
+  key and always succeed (fast with a graphics card). R3 RC4-40 files support password search;
+  hashcat 7.1.2 has no guaranteed key-search mode for them.
 - **Extra tools:** create your own word lists from any search, and prepare Wi-Fi lookup tables.
 - **Check for updates** from the Help menu (only when you click it).
 

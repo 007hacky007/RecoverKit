@@ -278,6 +278,30 @@ notes are taken from it, and the release job fails if the section is missing.
 
 ## Technical notes
 
+- PDF revision 3 with a 40-bit RC4 key has format ID `P340` and uses hashcat 7.1.2
+  [module 10510](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_10510.c).
+  It accepts V=1/2, 40 bits, 16/32-byte IDs and 32-byte /U and /O entries, with a
+  32-byte password limit. Missing /Length defaults to 40; /EncryptMetadata is ignored
+  before R4. Mode 10500 accepts only 128 bits, so R3 lengths other than 40/128 are
+  rejected instead of producing an unusable hash. The existing PDF CPU kernel also
+  handles 10510. The PDF filter, content detector and UI format listing already cover it.
+  There is no guaranteed R3 key search in this hashcat release:
+  [10410](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_10410.c) and
+  [10420](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_10420.c)
+  require R=2. Their kernels implement one RC4 pass over fixed padding and the R2 MD5
+  derivation, respectively. The [10510 kernel](https://github.com/hashcat/hashcat/blob/v7.1.2/OpenCL/m10510-pure.cl)
+  derives keys from candidate passwords with 50 extra MD5 rounds over five bytes, then
+  checks 20 RC4 passes over MD5(padding + ID). Mode 25400 is a 128-bit owner/user
+  password mode, not an R3 key enumerator. P340 therefore uses password attacks only;
+  no key recovery or equivalent-password stage is offered. The embedded one-page V=1/2
+  fixtures in `PdfExtractorTests` were created with pypdf 7.0.1's encryption constructor
+  using explicit (V, R=3, Length=40) options, then reopened with pypdf and pikepdf 10.18.0.
+  Hash fields match John's pdf2john.py after normalizing unsigned permissions to signed
+  32-bit values; no extractor code was copied. The public pypdf `RC4-40` option selects
+  R2, so it is insufficient by itself for creating these R3 fixtures.
+  End-to-end checks used the CLI and bundled hashcat 7.1.2 mode 10510 with a three-word
+  dictionary on an Apple M1 Pro. Both fixtures recovered `r3-test-42` and reopened with
+  pikepdf; V=1/32-byte ID took 14.74 s and V=2/16-byte ID took 4.42 s including startup.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
