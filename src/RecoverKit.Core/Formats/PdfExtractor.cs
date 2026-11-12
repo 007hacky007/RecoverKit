@@ -6,7 +6,7 @@ namespace RecoverKit.Core.Formats;
 /// <summary>
 /// Finds the standard security handler dictionary of a PDF and produces
 /// hashcat hashes for the document open (user) password:
-/// R2 (10400), R3/R4 (10500), R5 (10600) and R6 (10700).
+/// R2 (10400), R3 RC4-40 (10510), R3/R4 128-bit (10500), R5 (10600) and R6 (10700).
 /// The encryption dictionary may be referenced from a classic trailer or from
 /// a cross-reference stream dictionary; both are uncompressed by specification.
 /// </summary>
@@ -52,12 +52,20 @@ public static partial class PdfExtractor
 
         int v = Int(dict, "V") ?? 0, r = Int(dict, "R") ?? 0, p = Int(dict, "P") ?? 0;
         int length = Int(dict, "Length") ?? 40;
-        bool encMeta = !Regex.IsMatch(dict, @"/EncryptMetadata\s+false");
+        bool encMeta = r < 4 || !Regex.IsMatch(dict, @"/EncryptMetadata\s+false");
         var o = Str(dict, "O") ?? throw new FormatException("Missing /O entry.");
         var u = Str(dict, "U") ?? throw new FormatException("Missing /U entry.");
 
         var idMatches = IdArray().Matches(t);
         byte[] id = idMatches.Count > 0 ? ParseString(idMatches[^1].Groups[1].Value) : [];
+
+        if (r == 3)
+        {
+            if (o.Length != 32 || u.Length != 32) throw new FormatException("Revision 3 requires 32-byte /O and /U entries.");
+            if (id.Length is not (16 or 32)) throw new FormatException("Revision 3 requires a 16-byte or 32-byte document ID for hashcat.");
+            if (v is not (1 or 2) || (v == 1 && length != 40) || length is not (40 or 128))
+                throw new UnsupportedFormatException("PDF revision 3 recovery supports RC4 with 40-bit or 128-bit keys only (V=1/2).");
+        }
 
         d.Add("Security handler", $"Standard, V={v}, R={r}");
         d.Add("Permissions (P)", p.ToString());
@@ -74,10 +82,10 @@ public static partial class PdfExtractor
                 break;
             case 3:
             case 4:
-                mode = 10500; speed = SpeedClass.Fast;
+                mode = r == 3 && length == 40 ? 10510 : 10500; speed = SpeedClass.Fast;
                 if (v == 4) length = 128;
                 protection = v == 4 && Regex.IsMatch(dict, @"/CFM\s*/AESV2") ? "AES-128, MD5" : $"RC4 {length}-bit, MD5";
-                hash = $"$pdf${(v == 4 ? 4 : 2)}*{r}*{length}*{p}*{(encMeta ? 1 : 0)}*{id.Length}*{Bin.Hex(id)}*32*{Bin.Hex(Pad(u, 32))}*32*{Bin.Hex(Pad(o, 32))}";
+                hash = $"$pdf${v}*{r}*{length}*{p}*{(encMeta ? 1 : 0)}*{id.Length}*{Bin.Hex(id)}*32*{Bin.Hex(Pad(u, 32))}*32*{Bin.Hex(Pad(o, 32))}";
                 break;
             case 5:
             case 6:
@@ -93,7 +101,7 @@ public static partial class PdfExtractor
 
         d.Target = new HashTarget
         {
-            FormatId = r == 2 ? "PDF2" : r <= 4 ? "PDF3" : r == 5 ? "PDF5" : "PDF6",
+            FormatId = r == 2 ? "PDF2" : mode == 10510 ? "P340" : r <= 4 ? "PDF3" : r == 5 ? "PDF5" : "PDF6",
             FormatName = d.TypeName,
             Protection = protection,
             Modes = [mode],
@@ -101,7 +109,8 @@ public static partial class PdfExtractor
             Speed = speed,
             MaxPasswordLength = r >= 5 ? 127 : 32,
             Notes = "The attack searches for the document open (user) password. If the document opens without a password, " +
-                    "only an owner (permissions) password is set and it can be removed without recovery.",
+                    "only an owner (permissions) password is set and it can be removed without recovery." +
+                    (mode == 10510 ? " Hashcat 7.1.2 supports password recovery only for R3 RC4-40; no guaranteed key search is available." : ""),
         };
     }
 
@@ -131,7 +140,7 @@ public static partial class PdfExtractor
             if (c == '(') depth++;
             else if (c == ')' && --depth == 0) return i;
         }
-        return i;
+        throw new FormatException("Unterminated literal string.");
     }
 
     private static string? Name(string dict, string key)
@@ -143,7 +152,10 @@ public static partial class PdfExtractor
     private static int? Int(string dict, string key)
     {
         var m = Regex.Match(dict, $@"/{key}\s+(-?\d+)(?!\s+\d+\s+R)");
-        return m.Success ? (int)long.Parse(m.Groups[1].Value) : null;
+        if (!m.Success) return null;
+        if (!long.TryParse(m.Groups[1].Value, out long n) || n < int.MinValue || n > (key == "P" ? uint.MaxValue : int.MaxValue))
+            throw new FormatException($"Invalid /{key} integer.");
+        return unchecked((int)n);
     }
 
     private static byte[]? Str(string dict, string key)
@@ -154,6 +166,7 @@ public static partial class PdfExtractor
         if (dict[i] == '<')
         {
             int end = dict.IndexOf('>', i);
+            if (end < 0) throw new FormatException("Unterminated hex string.");
             return ParseString(dict.Substring(i, end - i + 1));
         }
         int close = SkipLiteral(dict, i);
@@ -164,10 +177,17 @@ public static partial class PdfExtractor
     public static byte[] ParseString(string s)
     {
         s = s.Trim();
+        if (s.Length < 2 || (s[0] == '<' ? s[^1] != '>' : s[0] != '(' || s[^1] != ')'))
+            throw new FormatException("Invalid PDF string.");
         if (s.StartsWith('<'))
         {
             var hex = new StringBuilder();
-            foreach (char c in s.AsSpan(1, s.Length - 2)) if (Uri.IsHexDigit(c)) hex.Append(c);
+            foreach (char c in s.AsSpan(1, s.Length - 2))
+            {
+                if (Uri.IsHexDigit(c)) hex.Append(c);
+                else if (c is not ('\0' or '\t' or '\n' or '\f' or '\r' or ' '))
+                    throw new FormatException("Invalid hex digit in PDF string.");
+            }
             if (hex.Length % 2 == 1) hex.Append('0');
             return Convert.FromHexString(hex.ToString());
         }

@@ -16,14 +16,14 @@ public static class NativeKernels
         10700 => PdfR6Kernel.NativeFast ? PdfR6Kernel.TryParse(hashLine) : null,
         9700 when RkNative.HasVectorPath => Office97Kernel.TryParse(hashLine),
         9800 when RkNative.HasVectorPath => Office2003Kernel.TryParse(hashLine),
-        10400 or 10500 when RkNative.HasVectorPath => PdfRc4Kernel.TryParse(hashLine),
+        10400 or 10500 or 10510 when RkNative.HasVectorPath => PdfRc4Kernel.TryParse(hashLine),
         // Without the library the managed Vector256 kernels need hardware AVX2. On arm64 .NET does not
         // accelerate Vector256: they run 2.5-9x slower than the native NEON paths there
         // (docs/benchmarks/apple-m1-pro-native.txt), so they stay off and hashcat is used instead.
         _ when !System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated && !ForceVectorKernels => null,
         9700 => Office97Kernel.TryParse(hashLine),
         9800 => Office2003Kernel.TryParse(hashLine),
-        10400 or 10500 => PdfRc4Kernel.TryParse(hashLine),
+        10400 or 10500 or 10510 => PdfRc4Kernel.TryParse(hashLine),
         12500 => Rar3Kernel.TryParse(hashLine),
         _ => null,
     };
@@ -57,6 +57,7 @@ public static class NativeKernels
         [9800] = "$oldoffice$3*83328705222323020515404251156288*2855956a165ff6511bc7f4cd77b9e101*941861655e73a09c40f7b1e9dfd0c256ed285acd",
         [10400] = "$pdf$1*2*40*-1*0*16*01221086741440841668371056103222*32*27c3fecef6d46a78eb61b8b4dbc690f5f8a2912bbb9afc842c12d79481568b74*32*0000000000000000000000000000000000000000000000000000000000000000",
         [10500] = "$pdf$2*3*128*-4*1*16*62888255846156252261477183186121*32*6879919b1afd520bd3b7dbcc0868a0a500000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000",
+        [10510] = "$pdf$1*3*40*-4*1*16*5e1f73575e1f73575e1f73575e1f7357*32*c0be424bef466277092f2a1ba0fbe506ebabe5c01db100dedc0ffeebabe5c01d*32*0ff1cedeadce110ff1cedeadce110ff1cedeadce110ff1cedeadce11babebabe",
         // A test document made for RecoverKit (password "Qz7#Kp2", outside the benchmark mask).
         [10700] = "$pdf$5*6*256*-3904*1*16*503b00505721f20ef74f37a47b7b93ea*127*5b152edd133e7a6af935153d535b08b0e4b26cd44ef0d51c06496d0943d7afd969b113434acc604df4c060075d1fe9ee00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000*127*98880d8ec9a744cb9530953a94625bc48bc32556ac2ff265caf6bbd467fce4c88500976327697a668dc920cabb78cec600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000",
         [12500] = "$RAR3$*0*45109af8ab5f297a*adbf6c5385d7a40373e8f77d7b89d317",

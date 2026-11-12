@@ -7,7 +7,7 @@ using RecoverKit.Core.Native.Simd;
 namespace RecoverKit.Core.Native.Kernels;
 
 /// <summary>
-/// PDF standard security handler revisions 2-4 (hashcat 10400 and 10500): MD5 key derivation (50
+/// PDF standard security handler revisions 2-4 (hashcat 10400, 10500 and 10510): MD5 key derivation (50
 /// extra MD5 rounds for R3/R4) and RC4 checks of the /U entry (1 pass for R2, 20 for R3/R4). MD5 runs
 /// on 16 candidates per step (two interleaved AVX2 groups). RC4 is an XOR stream, so byte k of the
 /// result depends only on byte k of each keystream: the fast path computes just 4 bytes per pass.

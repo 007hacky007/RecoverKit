@@ -41,6 +41,7 @@ public sealed class BenchmarkWindow : Window
         new(9700, "Microsoft® Word 97", "MS Office 97-2000, MD5, 40-bit RC4"),
         new(9800, "Microsoft® Word 2003", "MS Office XP-2003, SHA1, 128-bit RC4"),
         new(10500, "Adobe® PDF", "PDF /R 3, MD5, 128-bit RC4/AES"),
+        new(10510, "Adobe® PDF", "PDF /R 3, MD5, 40-bit RC4 (password search)"),
         new(10700, "Adobe® PDF", "PDF /R 6, SHA-256/384/512, 256-bit AES"),
         new(15600, "Ethereum keystore v3", "PBKDF2-SHA256, Keccak MAC"),
         new(15700, "Ethereum keystore v3", "scrypt, Keccak MAC"),
