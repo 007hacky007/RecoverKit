@@ -5,6 +5,7 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
+[Trait("Category", "Stay")]
 public class ZipStayTargetTests
 {
     private const string Password = "&THPOL101%ISLAME@|1";
@@ -143,6 +144,7 @@ public class ZipStayTargetTests
 }
 
 
+[Trait("Category", "Stay")]
 public class ZipStayCorruptEntryTests
 {
     [Fact]

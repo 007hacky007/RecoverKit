@@ -4,6 +4,7 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
+[Trait("Category", "Stay")]
 public class StayStage2Tests
 {
     [Fact]
@@ -87,6 +88,7 @@ public class StayStage2Tests
 }
 
 
+[Trait("Category", "Stay")]
 public class StayYConstraintTests
 {
     [Fact]

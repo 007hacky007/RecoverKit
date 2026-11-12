@@ -4,6 +4,7 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
+[Trait("Category", "Stay")]
 public class ZipRngTests
 {
     private const string Password = "&THPOL101%ISLAME@|1";

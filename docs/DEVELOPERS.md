@@ -38,6 +38,10 @@ dotnet build RecoverKit.sln -c Release
 dotnet test tests/RecoverKit.Tests
 ```
 
+The Stay ZIP attack tests (`Category=Stay`) run full key searches and take many minutes, so
+`dotnet test` skips them. Run them with `dotnet test tests/RecoverKit.Tests -p:RunStayTests=true`.
+CI runs them in a separate workflow (`stay-tests.yml`) only when the attack's code or tests change.
+
 The GUI:
 
 ```

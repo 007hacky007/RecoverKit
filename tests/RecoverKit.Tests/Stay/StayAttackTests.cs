@@ -5,6 +5,7 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
+[Trait("Category", "Stay")]
 public class StayAttackTests
 {
     [Fact]

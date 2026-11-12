@@ -7,6 +7,7 @@ using Xunit;
 
 namespace RecoverKit.Tests;
 
+[Trait("Category", "Stay")]
 public class StayZipFeatureTests
 {
     private static (string Path, HashTarget Target) ZipTarget(int files, uint seed = 0x3f5a7c11)

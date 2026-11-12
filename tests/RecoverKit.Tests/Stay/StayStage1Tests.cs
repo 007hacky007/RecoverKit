@@ -17,6 +17,7 @@ internal static class StayTruth
     public static byte By2(uint y) => (byte)((y * unchecked(M * M)) >> 24);
 }
 
+[Trait("Category", "Stay")]
 public class StayStage1Tests
 {
     [Fact]

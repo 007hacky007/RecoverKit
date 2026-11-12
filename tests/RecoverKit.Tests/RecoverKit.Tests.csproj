@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- The Stay ZIP attack tests take many minutes. They run only with -p:RunStayTests=true
+         (CI does that when the attack's code changes, see .github/workflows/stay-tests.yml). -->
+    <VSTestTestCaseFilter Condition="'$(RunStayTests)' != 'true'">Category!=Stay</VSTestTestCaseFilter>
   </PropertyGroup>
 
   <ItemGroup>
