@@ -922,9 +922,11 @@ public sealed partial class MainWindow : Window
         }
         foreach (var kv in det.Info) Row(kv.Key + ":", kv.Value);
         Line();
+        foreach (var u in det.Unlocks) ShowUnlock(det, u);
         if (det.Target is null)
         {
-            Line(det.Message ?? "Nothing to attack.", Palette.WarningBrush, true);
+            if (det.Unlocks.Count == 0) Line(det.Message ?? "Nothing to attack.", Palette.WarningBrush, true);
+            else if (det.Message is { } m) Line(m, Palette.DimBrush);
             SetRunning(false);
             return false;
         }
@@ -1167,6 +1169,44 @@ public sealed partial class MainWindow : Window
                 if (result.Error?.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.OrdinalIgnoreCase) == true)
                     Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: true));
                 break;
+        }
+    }
+
+    /// <summary>Shows a weak protection that can be undone right away: its password and a save link.</summary>
+    private void ShowUnlock(Detection det, InstantUnlock u)
+    {
+        Line(u.Title, Palette.SuccessBrush, true);
+        Line(u.Description, Palette.DimBrush);
+        if (u.Password is { } pw)
+        {
+            Write("Password: ", Palette.DimBrush);
+            Write((pw.Length == 0 ? "(empty password)" : pw) + "\n", Palette.SuccessBrush, true, log: false);
+            DebugLog.Info($"Instant unlock: password of {pw.Length} character(s) shown");
+            if (pw.Length > 0) WriteLink("Copy password", () => _ = CopyAsync(pw));
+        }
+        if (u.SaveLabel is { } label && u.SaveCopyAsync is not null) WriteLink(label, () => _ = SaveUnlockAsync(det, u));
+        Line();
+    }
+
+    private async Task SaveUnlockAsync(Detection det, InstantUnlock u)
+    {
+        var ext = Path.GetExtension(det.FilePath);
+        var filter = ext.Length > 1 ? $"Same type (*{ext})|*{ext}|All files|*.*" : "All files|*.*";
+        var outPath = await Pick.Save(this, filter, Path.GetFileName(u.SuggestedPath(det.FilePath)), Path.GetDirectoryName(det.FilePath),
+            ext.Length > 1 ? ext.TrimStart('.') : null);
+        if (outPath is null) return;
+        try
+        {
+            await u.SaveAsync(det.FilePath, outPath);
+            DebugLog.Info($"Instant unlock saved: {u.Title}");
+            Write("Saved: ", Palette.DimBrush);
+            WriteLink(outPath, () => Platform.Reveal(outPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidDataException
+                                       or UnsupportedFormatException or InvalidOperationException)
+        {
+            DebugLog.Error("Instant unlock", ex);
+            await Msg.Error(this, ex.Message, u.Title);
         }
     }
 

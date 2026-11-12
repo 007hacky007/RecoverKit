@@ -3,6 +3,16 @@
 All notable changes to RecoverKit. Downloads are on the
 [releases page](https://github.com/007hacky007/RecoverKit/releases).
 
+## [Unreleased]
+
+### Added
+- 7-Zip archives (.7z), with visible or encrypted file names, solid or not, and self-extracting.
+- KeePass databases: KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx, including KDBX 4 with
+  Argon2), with an optional keyfile.
+- Cryptocurrency wallets: Ethereum keystore files, Electrum, MetaMask vaults and Blockchain.com
+  wallet backups.
+- Encrypted Android backups (.ab) made with adb or Helium.
+
 ## [1.3.0] - 2026-11-12
 
 ### Added

@@ -47,6 +47,9 @@ public sealed class Detection
     /// <summary>Human-readable explanation when no target was produced (not encrypted, unsupported...).</summary>
     public string? Message { get; set; }
 
+    /// <summary>Weak protections that can be undone right away, without an attack (see <see cref="InstantUnlock"/>).</summary>
+    public List<InstantUnlock> Unlocks { get; } = new();
+
     public void Add(string key, string value) => Info.Add(new(key, value));
 
     public static Detection Fail(string path, string type, string message)
