@@ -63,7 +63,7 @@ public static class ZipExtractor
 
     /// <summary>
     /// Gathers every classic ZipCrypto entry (any compression method, header at least 12 bytes) in
-    /// archive order, with its stored 12-byte encryption header — the payload for Stay's attack.
+    /// archive order, with its stored 12-byte encryption header - the payload for Stay's attack.
     /// </summary>
     private static ZipStayTarget? CollectStayTarget(Stream s, List<ZipEntry> enc, long delta)
     {

@@ -20,7 +20,7 @@ public sealed class ZipStayEntry
 }
 
 /// <summary>
-/// Every classic ZipCrypto entry of a ZIP archive in central-directory (archive) order —
+/// Every classic ZipCrypto entry of a ZIP archive in central-directory (archive) order -
 /// the payload for Stay's attack on the weak rand()-seeded encryption headers.
 /// </summary>
 public sealed class ZipStayTarget

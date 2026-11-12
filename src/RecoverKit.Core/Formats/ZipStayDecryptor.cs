@@ -8,8 +8,8 @@ namespace RecoverKit.Core.Formats;
 /// Writes a password-free copy of a classic ZipCrypto archive once Stay's attack has recovered
 /// the internal keys: every entry the keys verifiably decrypt is re-emitted unencrypted (12-byte
 /// header removed, encryption and data-descriptor flags cleared, data descriptor dropped), with
-/// its compression method and bytes preserved. Entries the keys do not verifiably decrypt — a
-/// different password, WinZip AES, PKWARE strong encryption, or anything corrupt — are copied
+/// its compression method and bytes preserved. Entries the keys do not verifiably decrypt - a
+/// different password, WinZip AES, PKWARE strong encryption, or anything corrupt - are copied
 /// through untouched, still encrypted.
 /// </summary>
 public static class ZipStayDecryptor
@@ -37,7 +37,7 @@ public static class ZipStayDecryptor
 
     /// <summary>
     /// Writes the decrypted copy. <paramref name="target"/> is the Stay payload of the archive
-    /// (its entries drive nothing here — the per-entry decrypt-or-passthrough decision is made by
+    /// (its entries drive nothing here - the per-entry decrypt-or-passthrough decision is made by
     /// re-parsing the archive and verifying each entry against the keys). Returns
     /// <paramref name="outputPath"/>; an existing file at that path is overwritten.
     /// </summary>
@@ -145,7 +145,7 @@ public static class ZipStayDecryptor
             }
 
             // data-descriptor + exotic method: the check bytes are time-based and the CRC cannot be
-            // checked, so nothing about this entry is verifiable — leave it encrypted
+            // checked, so nothing about this entry is verifiable - leave it encrypted
             if ((e.Flags & 8) != 0 && e.Method is not (0 or 8)) return null;
 
             // check bytes: the high CRC word, except for data-descriptor entries (time-based there)

@@ -396,7 +396,7 @@ public sealed class WizardWindow : Window
         // WinZip-style ZipCrypto archives: recover the cipher keys from the weak encryption headers.
         if (Mode == WizardMode.Recover && _target.StayZip is { } stay && StayAttack.Supports(stay))
             cards.Add(new AttackCard(group, Choice.Stay, "Fast key search",
-                "Recovers the ZIP cipher keys from the weak encryption headers in minutes — no password needed."));
+                "Recovers the ZIP cipher keys from the weak encryption headers in minutes - no password needed."));
         else if (_choice == Choice.Stay) _choice = Choice.Scenario;
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 10, RowSpacing = 10 };

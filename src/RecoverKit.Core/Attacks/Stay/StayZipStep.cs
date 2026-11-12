@@ -7,7 +7,7 @@ public sealed record StayStepOutcome(ZipStayKeys? Keys, string? DecryptedCopy, b
 
 /// <summary>
 /// The Stay attack as a recovery step: key-cache lookup, the staged search itself, the key-cache
-/// store, and the password-free decrypted copy. Runs entirely in-process — hashcat is not involved.
+/// store, and the password-free decrypted copy. Runs entirely in-process - hashcat is not involved.
 /// The recovered key values never appear in the logs; they travel in the step outcome and the
 /// session result only.
 /// </summary>
