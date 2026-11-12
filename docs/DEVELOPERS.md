@@ -316,6 +316,25 @@ notes are taken from it, and the release job fails if the section is missing.
   byte-to-char checksum conversion followed by UTF-8 encoding for v2+. Both were cracked through
   the CLI; a physical Android device and Helium were not available. Legacy v1 non-ASCII passwords
   can require an 8-bit encoded dictionary. Only password recovery is implemented, not unpacking.
+- JSON wallets (implementation limits):
+  - Wallet recovery needs the wallet file from your own device, not a wallet address or public key.
+    Wallets are identified by content, including extensionless `UTC--*` and `default_wallet` files.
+    Ethereum v3 supports PBKDF2-SHA256 and scrypt (32-byte salt; N must be a power of two, at least 1024).
+    scrypt and MetaMask's newer 600,000-iteration vaults can be very slow.
+  - MetaMask accepts extracted vault JSON, nested/escaped vault strings, or a chosen `.ldb`/`.log`
+    file up to 32 MiB containing a complete vault record. Compressed, split or deleted LevelDB
+    records require extracting the vault first. If several vaults exist, the first complete
+    supported record is selected; it may be an older vault with a different password.
+  - Electrum supports encrypted seeds, BIP32/private keys and BIE1 full-file encryption. Large
+    Electrum wallets and MetaMask vaults use partial plaintext checks; verify found passwords in
+    the original wallet. Large Electrum wallets (mode 21800) need a compatible GPU or OpenCL CPU
+    runtime; hashcat disables this mode on Apple GPUs. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
+    Python dictionaries support string keys, strings, numbers, booleans and null values.
+  - Blockchain.com recovery handles the main password (legacy base64 with 10 PBKDF2 iterations,
+    or version 2-4 JSON backups with explicit iterations), not the second spending password.
+    Legacy base64 has no unique signature; confirm the backup's origin before recovery.
+  - Exodus `seed.seco` files are recognized but not extracted: the SECO binary layout has not
+    been verified against mode 28200. Use an independently verified extractor and Open As for hashes.
 - RAR 3.x recovery covers encrypted file names (`-hp`, hashcat 12500) and visible file names
   (`-p`, hashcat 23700 for stored files or 23800 for compressed files). Data-only extraction
   prefers entries with at least eight unpacked bytes, then stored entries, then smaller entries.

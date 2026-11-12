@@ -58,12 +58,11 @@ number at the end"), and it tests those combinations until it finds the right on
 | Password managers | KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx) databases, with an optional keyfile |
 | Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
 
-Classic ZIP archives made by WinZip 8 and older (and other Info-ZIP-based zippers on Windows)
-with five or more encrypted files are opened in minutes without any password guessing: RecoverKit
-recovers the archive's internal cipher keys from the weak, rand()-seeded encryption headers
-(Stay's attack, FSE 2001), writes a password-free decrypted copy, and then still tries the
-normal password attacks. The step runs automatically for compatible archives and can be turned
-off in Preferences > Key search.
+Some older ZIP archives open in minutes whatever the password: those made by WinZip 8 or older,
+or by the Windows `zip.exe` that many scripts and tools still use, with five or more encrypted
+files. Their encryption has a known weakness (Stay's attack, 2001) that lets RecoverKit recover
+the archive's keys directly. It then saves a copy without a password and keeps looking for the
+password itself. This runs automatically and can be turned off in Preferences > Key search.
 
 Just open the file (or drag it onto the window). RecoverKit recognizes the format by itself.
 
@@ -163,55 +162,37 @@ quickest guesses.
   engine (Windows) and when you click Check for updates.
 - If something goes wrong, Help > Open debug log folder has a log you can attach to a bug report.
   Recovered passwords are never written to it.
-- For TrueCrypt/VeraCrypt volumes, File > Open As lets you add keyfiles. For VeraCrypt, enter the
+- **TrueCrypt and VeraCrypt:** File > Open As lets you add keyfiles. For VeraCrypt, enter the
   known PIM or leave it at 0 for the default. All selected keyfiles are required; system encryption
   does not support keyfiles.
-- For KeePass databases, opening the file offers an optional keyfile. The CLI accepts
-  `extract database.kdbx --keyfile database.key` and the same option for `crack`. XML v1/v2,
-  32-byte binary, 64-character hex and arbitrary keyfiles are supported. KeePass 1 hashes XML
-  keyfiles as arbitrary files. The keyfile must be available when recovering its password.
-  KDBX 4 Argon2 recovery is memory-hard and very slow. Hashcat 7.1.2 requires exactly 253 header
-  bytes; standard AES/Twofish Argon2 headers fit, while standard ChaCha20 headers and custom
-  headers usually do not. KDBX 4 AES-KDF, KDBX 2/3 non-AES ciphers, Windows account keys and
-  external key providers are unsupported. KDB contents over 8 MiB, and password-only KDB files
-  with exactly 32 encrypted bytes, exceed hashcat's limits.
-- For RAR 3 archives whose file names are visible, RecoverKit recovers the password of one encrypted
+- **KeePass:** when you open a database, RecoverKit asks whether it also needs a keyfile, and the
+  keyfile must be available. Databases from KeePass 2 and KeePassXC that use Argon2 are built to be
+  slow to crack, so only short or guessable passwords are realistic. KDBX 4 databases that use
+  ChaCha20 or the older AES-KDF cannot be recovered yet (a hashcat limitation).
+- **RAR 3 with visible file names:** RecoverKit recovers the password of one encrypted
   file (it picks the most reliable one). Other files in the same archive may use a different
   password. Split (multi-volume) archives and files that need earlier files of a solid archive
   cannot be used.
-- 7-Zip recovery supports visible and encrypted file names, solid and non-solid archives, and
-  self-extracting executables. Hashcat verifies Copy, LZMA1, LZMA2 and Deflate streams without
-  filters or AES salts. PPMd and BZip2 data can be recovered when the archive has compatible
-  encrypted headers. Selected encrypted streams must fit within 8 MiB, with at most 9,999,999
-  bytes for a decompressed CRC check. Split volumes must be joined first. The default SHA-256
-  key derivation uses 524,288 iterations, so recovery is very slow.
-- Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
+- **7-Zip:** archives with encrypted or visible file names, solid or not, and self-extracting .exe
+  archives work. Split archives (.7z.001, .7z.002, ...) must be joined into one file first. 7-Zip's
+  encryption is deliberately slow, so only short or guessable passwords are realistic.
+- **GPU temperature and load:** Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
   cooled by the amount you choose) and can let the GPU work only part of the time to cut heat and
   noise. Both are off by default. Paused attacks continue exactly where they stopped.
-- With an NVIDIA GPU on Windows or Linux you can also set a real power limit in watts. Only an
+- **NVIDIA power limit:** with an NVIDIA GPU on Windows or Linux you can also set a real power limit in watts. Only an
   administrator may change it, so at the start of each attack RecoverKit explains this and then the
   system asks for permission. A small helper changes only the power limit and puts the previous
   value back when the attack ends (also if RecoverKit crashes); RecoverKit itself never runs as
   administrator. If you decline, the attack runs without the limit. Not available on Macs and for
   AMD or Intel GPUs.
-- Wallet recovery needs the wallet file from your own device, not a wallet address or public key.
-  Wallets are identified by content, including extensionless `UTC--*` and `default_wallet` files.
-  Ethereum v3 supports PBKDF2-SHA256 and scrypt (32-byte salt; N must be a power of two, at least 1024).
-  scrypt and MetaMask's newer 600,000-iteration vaults can be very slow.
-- MetaMask accepts extracted vault JSON, nested/escaped vault strings, or a chosen `.ldb`/`.log`
-  file up to 32 MiB containing a complete vault record. Compressed, split or deleted LevelDB
-  records require extracting the vault first. If several vaults exist, the first complete
-  supported record is selected; it may be an older vault with a different password.
-- Electrum supports encrypted seeds, BIP32/private keys and BIE1 full-file encryption. Large
-  Electrum wallets and MetaMask vaults use partial plaintext checks; verify found passwords in
-  the original wallet. Large Electrum wallets (mode 21800) need a compatible GPU or OpenCL CPU
-  runtime; hashcat disables this mode on Apple GPUs. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
-  Python dictionaries support string keys, strings, numbers, booleans and null values.
-- Blockchain.com recovery handles the main password (legacy base64 with 10 PBKDF2 iterations,
-  or version 2-4 JSON backups with explicit iterations), not the second spending password.
-  Legacy base64 has no unique signature; confirm the backup's origin before recovery.
-- Exodus `seed.seco` files are recognized but not extracted: the SECO binary layout has not
-  been verified against mode 28200. Use an independently verified extractor and Open As for hashes.
+- **Crypto wallets:** you need the wallet file from your own device; an address or public key is
+  not enough. For MetaMask, choose the vault text or the browser's extension storage file
+  (`.ldb` or `.log`); if it holds several vaults, the first complete one is used. Electrum 2.8+
+  wallets with full-file encryption cannot be cracked on a Mac (hashcat does not run that mode on
+  Apple GPUs) but work with Windows and Linux GPUs. Blockchain.com: the main password only, not the
+  second password. Exodus wallets are recognized but not supported yet. Always confirm a found
+  password in the wallet itself.
+- **Android backups:** RecoverKit finds the backup password; it does not unpack the backup.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
