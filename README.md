@@ -153,6 +153,10 @@ quickest guesses.
 - For TrueCrypt/VeraCrypt volumes, File > Open As lets you add keyfiles. For VeraCrypt, enter the
   known PIM or leave it at 0 for the default. All selected keyfiles are required; system encryption
   does not support keyfiles.
+- For RAR 3 archives whose file names are visible, RecoverKit recovers the password of one encrypted
+  file (it picks the most reliable one). Other files in the same archive may use a different
+  password. Split (multi-volume) archives and files that need earlier files of a solid archive
+  cannot be used.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
