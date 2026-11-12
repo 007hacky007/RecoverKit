@@ -49,11 +49,13 @@ public static class OfficeExtractor
         if (vMajor == 4 && vMinor == 4)
         {
             ExtractAgile(info, d);
+            OfficeKnownPasswords.CheckOoxml(info, d);
             return;
         }
         if (vMinor == 2 && vMajor is 2 or 3 or 4)
         {
             ExtractStandard(info, d);
+            OfficeKnownPasswords.CheckOoxml(info, d);
             return;
         }
         d.Message = $"Unsupported EncryptionInfo version {vMajor}.{vMinor}.";
@@ -144,6 +146,7 @@ public static class OfficeExtractor
         var table = cf.ReadStream(table1 ? "1Table" : "0Table", 4096)
                     ?? throw new FormatException("Word table stream is missing.");
         d.Target = Rc4Header(table, 0, "Word 97-2003", isWord: true);
+        OfficeKnownPasswords.CheckRc4(table, 0, d, excel: false);
     }
 
     private static void ExtractExcel(CompoundFile cf, Detection d)
@@ -159,6 +162,7 @@ public static class OfficeExtractor
                 int encType = Bin.U16(wb, pos + 4);
                 if (encType == 0) { d.Message = "Workbook uses XOR obfuscation (weak protection, instant removal is not implemented)."; return; }
                 d.Target = Rc4Header(wb, pos + 6, "Excel 97-2003", isWord: false);
+                OfficeKnownPasswords.CheckRc4(wb, pos + 6, d, excel: true);
                 return;
             }
             if (type == 0x000A) break; // EOF
@@ -202,7 +206,7 @@ public static class OfficeExtractor
                 FormatName = $"MS {app} document",
                 Protection = $"RC4 {keySize}-bit, SHA-1 (CryptoAPI)",
                 Modes = [9800],
-                HashLines = $"$oldoffice$3*{Bin.Hex(b, v + 4, 16)}*{Bin.Hex(b, v + 20, 16)}*{Bin.Hex(b, v + 40, 20)}",
+                HashLines = $"$oldoffice${(keySize == 40 ? 3 : 4)}*{Bin.Hex(b, v + 4, 16)}*{Bin.Hex(b, v + 20, 16)}*{Bin.Hex(b, v + 40, 20)}",
                 Speed = SpeedClass.Fast,
                 Utf16Password = true,
                 MaxPasswordLength = 15,
