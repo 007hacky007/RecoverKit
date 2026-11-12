@@ -128,6 +128,10 @@ try
             settings.HashcatPath = Opt(argv, "--hashcat") ?? settings.HashcatPath;
             if (Opt(argv, "--workload") is { } w) settings.Workload = int.Parse(w);
             if (argv.Contains("--no-potfile")) settings.DontUsePasswordCache = true;
+            // GPU temperature guard and load limit, e.g. --temp-limit 85 --temp-hysteresis 10 --gpu-duty 50
+            if (Opt(argv, "--temp-limit") is { } tl) { settings.GpuTempGuard = true; settings.GpuTempLimit = int.Parse(tl); }
+            if (Opt(argv, "--temp-hysteresis") is { } th) settings.GpuTempHysteresis = int.Parse(th);
+            if (Opt(argv, "--gpu-duty") is { } gd) settings.GpuDutyPercent = int.Parse(gd);
             if (Opt(argv, "--strategy") is { } strat) settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true);
             // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
             if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
@@ -147,12 +151,15 @@ try
                 Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.IsSkippedAlias ? ", skipped by hashcat" : "")})");
             var session = new RecoverySession(tool, settings) { Devices = devices };
             session.Log += (k, m) => Console.WriteLine($"[{k}] {m}");
+            session.Thermal += e => Console.WriteLine($"[Thermal] {e.State} at {e.Temperature} °C (limit {e.Limit} °C, resume at {e.ResumeBelow} °C)");
             DateTime lastPrint = DateTime.MinValue;
             session.Status += s =>
             {
                 if ((DateTime.Now - lastPrint).TotalSeconds < 5 && s.Status == 3) return;
                 lastPrint = DateTime.Now;
-                Console.WriteLine($"  {s.StatusText}: {s.ProgressDone:N0}/{s.ProgressTotal:N0} ({s.Fraction:P1}) {s.TotalSpeed:N0} H/s, base {s.GuessBase}");
+                int temp = ThermalGuard.Hottest(s.Devices);
+                Console.WriteLine($"  {s.StatusText}: {s.ProgressDone:N0}/{s.ProgressTotal:N0} ({s.Fraction:P1}) {s.TotalSpeed:N0} H/s, base {s.GuessBase}" +
+                                  (temp >= 0 ? $", GPU {temp} °C" : ""));
             };
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -299,5 +306,6 @@ static int Usage()
 {
     Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
+    Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works");
     return 64;
 }
