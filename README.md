@@ -184,7 +184,8 @@ quickest guesses.
   supported record is selected; it may be an older vault with a different password.
 - Electrum supports encrypted seeds, BIP32/private keys and BIE1 full-file encryption. Large
   Electrum wallets and MetaMask vaults use partial plaintext checks; verify found passwords in
-  the original wallet. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
+  the original wallet. Large Electrum wallets (mode 21800) need a compatible GPU or OpenCL CPU
+  runtime; hashcat disables this mode on Apple GPUs. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
   Python dictionaries support string keys, strings, numbers, booleans and null values.
 - Blockchain.com recovery handles the main password (legacy base64 with 10 PBKDF2 iterations,
   or version 2-4 JSON backups with explicit iterations), not the second spending password.

@@ -306,7 +306,7 @@ Hash syntax and limits follow hashcat 7.1.2 modules 12700, 15200, 15600, 15700, 
 is not embedded. SECO is recognized only because module 28200 does not specify container offsets.
 
 The tiny `Fixtures/Wallets` corpus uses the synthetic password `wallet-test-42`. Ethereum files
-were generated with eth-keyfile 0.10.0 (PBKDF2 and scrypt N=1024). Python cryptography 50.0.2
+were generated with eth-keyfile 0.10.0 (PBKDF2 with a 16-byte salt and scrypt N=1024 with a 32-byte salt). Python cryptography 50.0.2
 produced AES-GCM MetaMask vaults and AES-CBC Blockchain.com backups, plus Electrum encryption
 reproduced from Electrum 4.5.8 crypto/storage/ecc sources (double SHA256 for individual keys;
 PBKDF2-SHA512, secp256k1 ECIES, zlib, AES-CBC and HMAC-SHA256 for full files). Fixtures include
@@ -319,3 +319,17 @@ larger vaults use mode 26610 with exactly 64 ciphertext bytes and a printable-te
 Neither truncated mode verifies the MAC, so their Notes tell users to verify recovered passwords.
 Blockchain.com modes inspect the initial JSON blocks; backups larger than 32768 bytes use only
 the first 80 bytes (IV and four ciphertext blocks). Legacy base64 has no identifying magic.
+
+The corpus also roundtrips six published `hashcat -m MODE --example-hashes --machine-readable`
+hashes (12700, 15200, 15600, 15700, 16600, 26600). The Electrum mode-21700 example authenticates
+synthetic ciphertext without a BIE1 header; actual wallet extraction follows Electrum's complete
+container MAC instead. Low-N scrypt fixtures require `--self-test-disable` during attacks because
+hashcat's fixed scrypt self-test uses N=262144; normal Ethereum parameters keep self-tests enabled.
+
+End-to-end validation used the CLI and bundled hashcat 7.1.2 on an Apple M1 Pro, with a
+three-word dictionary recovering `wallet-test-42` for all generated wallets except mode 21800:
+Ethereum 15600/15700, Electrum salt types 1-3 (16600) and full HMAC (21700), MetaMask
+10000/600000 iterations (26600) and large vaults (26610), Blockchain.com v1/v2 (12700/15200).
+Mode 21800 extraction matches the reference electrum2john output, but hashcat disables this
+mode on Apple GPUs because of Metal/OpenCL runtime limitations. Its cracking check remains
+unverified on a compatible device. No live funds or personal wallets were used.

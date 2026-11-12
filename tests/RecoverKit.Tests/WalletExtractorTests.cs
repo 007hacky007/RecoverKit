@@ -122,6 +122,70 @@ public class WalletExtractorTests
     }
 
     [Fact]
+    public void RejectsInvalidElectrumCurvePoint()
+    {
+        byte[] data = Convert.FromBase64String(Fixture("electrum-full"));
+        data.AsSpan(5, 32).Fill(255);
+        Assert.Throws<FormatException>(() => Extract(Convert.ToBase64String(data)));
+    }
+
+    [Fact]
+    public void BoundsDatabaseSizeBeforeReadingIt()
+    {
+        string path = Path.GetTempFileName();
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite);
+            stream.Write("{\"data\":"u8);
+            stream.SetLength(32L * 1024 * 1024 + 1);
+            Assert.Throws<UnsupportedFormatException>(() => WalletExtractor.TryExtract(stream, new Detection { FilePath = path }));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void BoundsNestedVaultsAndDatabaseCandidates()
+    {
+        string vault = Fixture("metamask");
+        for (int i = 0; i < 17; i++) vault = "{\"nested\":" + vault + "}";
+        Assert.Throws<FormatException>(() => Extract(vault));
+        string candidates = "\0" + string.Concat(Enumerable.Repeat("{\"data\":0}\0", 257));
+        Assert.Throws<FormatException>(() => Extract(candidates));
+    }
+
+    [Fact]
+    public void SupportsOlderAndMultisigElectrumLayouts()
+    {
+        var wallet = JsonNode.Parse(Fixture("electrum-2"))!;
+        var store = wallet["keystore"]!.DeepClone();
+        wallet.AsObject().Remove("keystore");
+        wallet["master_private_keys"] = new JsonObject { ["x/"] = store["xprv"]!.DeepClone() };
+        string expected = Extract(Fixture("electrum-2")).Target!.HashLines;
+        Assert.Equal(expected, Extract(wallet.ToJsonString()).Target!.HashLines);
+        wallet.AsObject().Remove("master_private_keys");
+        wallet["x1/"] = store;
+        Assert.Equal(expected, Extract(wallet.ToJsonString()).Target!.HashLines);
+        var old = JsonNode.Parse(JsonSerializer.Serialize(new { wallet_type = "old", keystore = new { type = "old", seed = "" } }))!;
+        string literal = Fixture("electrum-1");
+        string seed = System.Text.RegularExpressions.Regex.Match(literal, "'seed': '([^']+)'").Groups[1].Value;
+        old["keystore"]!["seed"] = seed;
+        Assert.Equal(Extract(literal).Target!.HashLines, Extract(old.ToJsonString()).Target!.HashLines);
+    }
+
+    [Fact]
+    public void ProvidesScenarioAndSpeedMetadata()
+    {
+        Assert.Equal(SpeedClass.VerySlow, Extract(Fixture("eth-scrypt")).Target!.Speed);
+        Assert.Equal(SpeedClass.Slow, Extract(Fixture("metamask")).Target!.Speed);
+        Assert.Equal(SpeedClass.VerySlow, Extract(Fixture("metamask-new")).Target!.Speed);
+        Assert.Contains("without the GCM tag", Extract(Fixture("metamask-large")).Target!.Notes!);
+        Assert.Contains("without the MAC", Extract(Fixture("electrum-large")).Target!.Notes!);
+        var scenarios = RecoverKit.Core.Attacks.ScenarioParser.LoadDefault();
+        foreach (string id in new[] { "ETH3", "ELCT", "MTMK", "BLCH" })
+            Assert.Contains(scenarios, s => s.DefaultFor.Contains(id));
+    }
+
+    [Fact]
     public void ReportsExodusLimitation()
     {
         var d = Extract("SECO" + new string('\0', 100));

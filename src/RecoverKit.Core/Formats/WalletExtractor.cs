@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -96,7 +97,8 @@ public static class WalletExtractor
             if (n < 1024 || (n & (n - 1)) != 0 || n % 1024 != 0 || (long)r * p >= 1L << 30)
                 throw new UnsupportedFormatException("Ethereum scrypt needs a power-of-two N of at least 1024 and valid r/p parameters.");
             Set(d, "ETH3", "Ethereum keystore v3", $"scrypt N={n}, r={r}, p={p}, Keccak MAC", 15700,
-                $"$ethereum$s*{n}*{r}*{p}*{salt}*{ct}*{mac}", SpeedClass.VerySlow, "scrypt recovery is very slow and needs substantial memory.");
+                $"$ethereum$s*{n}*{r}*{p}*{salt}*{ct}*{mac}", SpeedClass.VerySlow, "scrypt recovery is very slow and needs substantial memory." +
+                (n != 262144 || r != 8 || p != 1 ? " These scrypt parameters differ from hashcat's self-test. Add --self-test-disable in Preferences > Extra arguments if hashcat refuses the configuration." : ""));
         }
         else throw new UnsupportedFormatException("Unsupported Ethereum KDF.");
     }
@@ -248,11 +250,16 @@ public static class WalletExtractor
             throw new UnsupportedFormatException("Only password-encrypted Electrum BIE1 files are supported.");
         if (data.Length < 101 || (data.Length - 69) % 16 != 0 || data[4] is not (2 or 3))
             throw new FormatException("Invalid Electrum BIE1 container.");
+        var prime = (BigInteger.One << 256) - (BigInteger.One << 32) - 977;
+        var x = new BigInteger(data.AsSpan(5, 32), isUnsigned: true, isBigEndian: true);
+        var square = (BigInteger.ModPow(x, 3, prime) + 7) % prime;
+        var y = BigInteger.ModPow(square, (prime + 1) / 4, prime);
+        if (x >= prime || y * y % prime != square) throw new FormatException("Invalid Electrum secp256k1 public key.");
         bool truncated = data.Length - 32 > 16384;
         byte[] body = truncated ? data[37..1061] : data[..^32];
         Set(d, "ELCT", "Electrum encrypted wallet (2.8+)", "PBKDF2-SHA512, 1024 iterations, secp256k1, AES-128-CBC", truncated ? 21800 : 21700,
             $"$electrum${(truncated ? 5 : 4)}*{Bin.Hex(data[4..37])}*{Bin.Hex(body)}*{Bin.Hex(data[^32..])}", SpeedClass.Slow,
-            truncated ? "Large wallet: truncated zlib/plaintext verification without the MAC. Verify the recovered password in Electrum." : "Verifies the complete wallet HMAC-SHA256.");
+            truncated ? "Large wallet: truncated zlib/plaintext verification without the MAC. Verify the recovered password in Electrum. Hashcat mode 21800 is unavailable on Apple GPUs; use a compatible GPU or OpenCL CPU runtime." : "Verifies the complete wallet HMAC-SHA256.");
         return true;
     }
 
