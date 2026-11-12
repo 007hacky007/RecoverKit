@@ -1,0 +1,90 @@
+%PDF-1.3
+%‚„œ”
+1 0 obj
+<<
+/Type /Catalog
+/Pages 2 0 R
+>>
+endobj
+2 0 obj
+<<
+/Type /Pages
+/Count 1
+/Kids [ 3 0 R ]
+>>
+endobj
+3 0 obj
+<<
+/Type /Page
+/Resources <<
+/Font <<
+/F1 4 0 R
+>>
+>>
+/MediaBox [ 0.0 0.0 300 200 ]
+/Parent 2 0 R
+/Contents 5 0 R
+>>
+endobj
+4 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+5 0 obj
+<<
+/Length 63
+>>
+stream
+BT /F1 12 Tf 20 100 Td (RecoverKit owner permission test) Tj ET
+endstream
+endobj
+6 0 obj
+<<
+/Producer <515d3a061791042f925cc76e42b4ab36612d6f603e839bc3718adac935f49a00>
+/Title <53c28738129c649abd2f1399fb503c364d855a9d9654853043248693186fef7614a2798803da46d560a4bf6ec85525a2>
+>>
+endobj
+7 0 obj
+<<
+/V 4
+/R 4
+/Length 128
+/P 0
+/Filter /Standard
+/O <913b073f5b65954c8b6da22169971a177b7e6d94a106ff75c0c16296bc15412e>
+/U <0662fa6fab3f4e1f26f0d3b5f697b2d528bf4e5e4e758a4164004e56fffa0108>
+/CF <<
+/StdCF <<
+/AuthEvent /DocOpen
+/CFM /AESV2
+/Length 16
+>>
+>>
+/StmF /Identity
+/StrF /StdCF
+>>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000123 00000 n 
+0000000255 00000 n 
+0000000325 00000 n 
+0000000438 00000 n 
+0000000642 00000 n 
+trailer
+<<
+/Size 8
+/Root 1 0 R
+/Info 6 0 R
+/ID [ <d0de3594cbda2e8caa1d1b1e5d6fa2f4> <594f9ad5e447e401af5f4f47ff123dc9> ]
+/Encrypt 7 0 R
+>>
+startxref
+943
+%%EOF

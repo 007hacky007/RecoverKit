@@ -72,7 +72,7 @@ public sealed unsafe class PdfRc4Kernel : NativeKernel, INativeFilter
         catch (Exception ex) when (ex is FormatException or IndexOutOfRangeException or OverflowException) { return null; }
     }
 
-    private byte[] Key(ReadOnlySpan<byte> password)
+    internal byte[] Key(ReadOnlySpan<byte> password)
     {
         var input = new List<byte>(100);
         for (int i = 0; i < 32; i++) input.Add(i < password.Length ? password[i] : Pad[i - password.Length]);

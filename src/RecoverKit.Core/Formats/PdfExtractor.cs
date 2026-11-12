@@ -112,6 +112,7 @@ public static partial class PdfExtractor
                     "only an owner (permissions) password is set and it can be removed without recovery." +
                     (mode == 10510 ? " Hashcat 7.1.2 supports password recovery only for R3 RC4-40; no guaranteed key search is available." : ""),
         };
+        if (bytes.Length <= PdfDocument.MaxBytes) PdfDecryptor.TryAddUnlock(bytes, d, hash, r, dict);
     }
 
     // -------------------------------------------------------------- tiny parser

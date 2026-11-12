@@ -486,3 +486,37 @@ Ethereum 15600/15700, Electrum salt types 1-3 (16600) and full HMAC (21700), Met
 Mode 21800 extraction matches the reference electrum2john output, but hashcat disables this
 mode on Apple GPUs because of Metal/OpenCL runtime limitations. Its cracking check remains
 unverified on a compatible device. No live funds or personal wallets were used.
+
+### PDF permission removal
+
+PDFs with an empty document-open password use `Detection.Unlocks` instead of starting an
+attack. Nonempty-password detection keeps the existing hash extraction path; the stricter
+rewrite parser runs only after an empty-password check. `PdfDecryptor` reuses the full R2-R4 and R6 password checks (R5 uses SHA-256), derives
+the file key and authenticates AES-256 `/Perms`. `PdfSyntax` and `PdfDocument` read the active
+classic, stream or hybrid xrefs, follow incremental updates, resolve indirect stream lengths,
+and decode each object stream once. Compressed-object strings are not decrypted twice.
+`PdfWriter` expands compressed objects and emits a new classic xref table, preserving the PDF
+version, catalog, document information and file IDs. Saving uses a temporary file beside the
+output and an atomic move, with source path and symlink-alias checks.
+
+RC4 40-128, AES-128 and AES-256 are supported, including separate string/stream/embedded-file
+crypt filters, `/Identity`, explicit `/Crypt` filters and cleartext metadata. Structural streams
+support Flate and ASCIIHex with 8-bit TIFF/PNG predictors; other content filters are preserved
+without decoding. Signed/certified PDFs, external streams, other structural codecs, mismatched
+crypt-filter key lengths, cyclic or invalid structures are refused with an explanation.
+Limits are 256 MiB for input, decoded structural data and output, one million object numbers,
+64 levels of nesting/dependencies and 128 xref revisions. These bounds keep malformed input
+from exhausting the parser. Larger encrypted files retain the existing password-attack path.
+
+The small `Fixtures/Pdf` files were generated with pypdf and qpdf, without external content.
+They cover R2-R6, object streams, cleartext metadata, selective and explicit Identity filters,
+and an embedded-file filter. Independent validation used pypdf and qpdf 12.4.2, including
+qpdf-encrypted copies of the W3C dummy PDF, PDFObject sample and Mozilla pdf.js TraceMonkey
+paper. Source PDFs and tooling remain in the task scratch directory. pypdf currently cannot
+read explicit named Crypt filters and mishandles cleartext encrypted-document metadata;
+qpdf supplies the source-side oracle for those cases. Every saved copy is read by pypdf and
+passes `qpdf --check`.
+
+Validation recovered the synthetic user password with bundled hashcat 7.1.2 in modes 10400,
+10500 (RC4 and AES), 10600 and 10700. The independent permission-removal matrix contains
+36 files, including six encrypted copies of the three public source PDFs.
