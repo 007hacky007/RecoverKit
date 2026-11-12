@@ -56,6 +56,7 @@ public sealed class Settings
     [JsonIgnore] public static string AppDataDir { get; } = InitAppData();
 
     [JsonIgnore] public string PotfilePath => Path.Combine(AppDataDir, "recovered.potfile");
+    [JsonIgnore] public string VolumePasswordCacheDir => Directory.CreateDirectory(Path.Combine(AppDataDir, "volume-passwords")).FullName;
     [JsonIgnore] public string KeyCachePath => Path.Combine(AppDataDir, "keys.cache");
     [JsonIgnore] public string SessionsDir => Directory.CreateDirectory(Path.Combine(AppDataDir, "sessions")).FullName;
 

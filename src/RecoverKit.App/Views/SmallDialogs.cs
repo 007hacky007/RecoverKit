@@ -210,6 +210,7 @@ public sealed class PasswordFoundWindow : Window
         {
             if (passwords.Count > 0 && Clipboard is { } cb) await Avalonia.Input.Platform.ClipboardExtensions.SetTextAsync(cb, passwords[0]);
         }, 90);
+        copy.IsEnabled = passwords.Count > 0 && passwords[0].Length > 0;
         var ok = L.Button("OK", () => Close(), 90, isDefault: true, isCancel: true);
         var footer = L.Footer(Platform.IsMac ? [copy, ok] : [copy, ok]);
         var body = L.Column(10, L.Text("The password was successfully recovered:"), box);

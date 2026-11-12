@@ -31,6 +31,9 @@ public sealed class VolumeOptions
     public VolumeKdf Kdfs { get; set; } = VolumeKdf.Sha512;
     public VolumeCipher Ciphers { get; set; } = VolumeCipher.Single;
 
+    public List<string> Keyfiles { get; set; } = new();
+    public int Pim { get; set; }
+
     public const long NormalOffset = 0;
     public const long HiddenOffset = 65536;
     public const long BootOffset = 31744; // sector 62, system encryption header
@@ -45,10 +48,11 @@ public static class CryptVolume
 {
     public static Detection Open(string path, VolumeOptions opt)
     {
+        var credentials = new VolumeCredentials(opt);
         var d = new Detection { FilePath = path, TypeName = opt.Kind == VolumeKind.TrueCrypt ? "TrueCrypt volume" : "VeraCrypt volume" };
         using var s = File.OpenRead(path);
         long off = opt.BootVolume && opt.HeaderOffset == 0 ? VolumeOptions.BootOffset : opt.HeaderOffset;
-        if (off + 512 > s.Length) throw new FormatException("File is too small for a volume header at this offset.");
+        if (off < 0 || off > s.Length - 512) throw new FormatException("File is too small for a volume header at this offset.");
         var h = Bin.ReadAt(s, off, 512);
         var modes = Modes(opt);
         if (modes.Count == 0) throw new ArgumentException("Select at least one hash algorithm and one encryption type.");
@@ -56,6 +60,8 @@ public static class CryptVolume
         string prefix = opt.Kind == VolumeKind.TrueCrypt ? "$truecrypt$" : "$veracrypt$";
         d.Add("Header offset", $"{off:N0}");
         d.Add("Combinations to test", $"{modes.Count} hashcat mode(s): {string.Join(", ", modes)}");
+        if (opt.Keyfiles.Count > 0) d.Add("Keyfiles", opt.Keyfiles.Count.ToString());
+        if (opt.Kind == VolumeKind.VeraCrypt) d.Add("PIM", opt.Pim == 0 ? "Default" : opt.Pim.ToString());
         d.Target = new HashTarget
         {
             FormatId = opt.Kind == VolumeKind.TrueCrypt ? "TRUE" : "VERA",
@@ -63,9 +69,10 @@ public static class CryptVolume
             Protection = $"{opt.Kdfs} / {opt.Ciphers} cipher(s), XTS",
             Modes = modes,
             HashLines = prefix + Bin.Hex(h, 0, 64) + "$" + Bin.Hex(h, 64, 448),
+            VolumeCredentials = credentials.Arguments.Count > 0 ? credentials : null,
             Speed = SpeedClass.VerySlow,
             MaxPasswordLength = 64,
-            Notes = "Every additional hash algorithm or cascade multiplies the work. Keyfiles and PIM values are not supported.",
+            Notes = "Every additional hash algorithm or cascade multiplies the work.",
         };
         return d;
     }

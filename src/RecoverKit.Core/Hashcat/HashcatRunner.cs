@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using RecoverKit.Core.Attacks;
+using RecoverKit.Core.Formats;
 
 namespace RecoverKit.Core.Hashcat;
 
@@ -16,6 +17,8 @@ public sealed record RunRequest
     public bool Restore { get; init; }
     public Settings Settings { get; init; } = new();
     public bool UseOptimizedKernel { get; init; }
+    public VolumeCredentials? VolumeCredentials { get; init; }
+    public string? PasswordCachePath { get; init; }
 }
 
 public sealed class RunResult
@@ -51,11 +54,12 @@ public sealed class HashcatRunner(HashcatTool tool)
         var s = r.Settings;
         var a = new List<string> { "-m", r.Mode.ToString(), r.HashFile };
         a.AddRange(r.Attack.Args);
+        if (r.VolumeCredentials is { } credentials) a.AddRange(credentials.Arguments);
         a.AddRange(["--session", r.SessionName, "--restore-file-path", restore]);
         a.AddRange(["--status", "--status-json", "--status-timer", "2", "--quiet"]);
         a.AddRange(["-o", OutFile(r.SessionDir, r.SessionName), "--outfile-format", "2"]);
         if (s.DontUsePasswordCache) a.Add("--potfile-disable");
-        else a.AddRange(["--potfile-path", s.PotfilePath]);
+        else a.AddRange(["--potfile-path", r.PasswordCachePath ?? s.PotfilePath]);
         a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
         a.AddRange(DeviceArguments(s, KnownDevices));
         if (r.UseOptimizedKernel) a.Add("-O");
@@ -104,6 +108,7 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
+        r.VolumeCredentials?.ValidateUnchanged();
         var args = BuildArguments(r);
         string outFile = OutFile(r.SessionDir, r.SessionName);
         if (!r.Restore && File.Exists(outFile)) File.Delete(outFile);
@@ -169,9 +174,9 @@ public sealed class HashcatRunner(HashcatTool tool)
         DebugLog.ProcessExit(logId, code, sw.Elapsed);
         if (stopped) DebugLog.Info($"#{logId} was stopped by the user");
         var raw = File.Exists(outFile)
-            ? File.ReadAllLines(outFile).Where(l => l.Length > 0).Distinct().ToList()
+            ? File.ReadAllLines(outFile).Distinct().ToList()
             : new List<string>();
-        var passwords = raw.Select(HashcatTool.DecodePlain).Distinct().ToList();
+        var passwords = raw.Select(p => HashcatTool.DecodePlain(p, r.VolumeCredentials)).Distinct().ToList();
 
         RunOutcome outcome = code switch
         {
@@ -181,7 +186,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             _ => stopped ? RunOutcome.Aborted : RunOutcome.Error,
         };
         if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
-            passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.Settings.PotfilePath);
+            passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);
         if (stopped && outcome != RunOutcome.Cracked) outcome = RunOutcome.Aborted;
 
         string? error = outcome == RunOutcome.Error

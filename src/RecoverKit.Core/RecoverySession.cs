@@ -37,7 +37,14 @@ public sealed class SessionState
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
 
     public static string KeyFor(HashTarget t)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(',', t.Modes) + "|" + t.HashLines)))[..16].ToLowerInvariant();
+    {
+        string identity = string.Join(',', t.Modes) + "|" + t.HashLines;
+        if (t.VolumeCredentials is { } credentials) identity += "|" + credentials.Identity;
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..16].ToLowerInvariant();
+    }
+
+    public static string PasswordCacheFor(Settings s, HashTarget t)
+        => t.VolumeCredentials is null ? s.PotfilePath : Path.Combine(s.VolumePasswordCacheDir, KeyFor(t) + ".potfile");
 
     public static string PathFor(Settings s, string key) => Path.Combine(s.SessionsDir, key + ".session.json");
 
@@ -81,7 +88,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
+        target.VolumeCredentials?.ValidateUnchanged();
         string key = SessionState.KeyFor(target);
+        string potfile = SessionState.PasswordCacheFor(settings, target);
         string hashFile = Path.Combine(settings.SessionsDir, key + ".hash");
         await File.WriteAllTextAsync(hashFile, target.HashLines.Replace("\r\n", "\n").TrimEnd() + "\n", new UTF8Encoding(false), ct);
 
@@ -89,7 +98,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         {
             foreach (var mode in target.Modes)
             {
-                var cached = await tool.ShowAsync(mode, hashFile, settings.PotfilePath);
+                var cached = await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
                 if (cached.Count > 0) return new SessionResult { Outcome = SessionOutcome.FoundInCache, Passwords = cached };
             }
         }
@@ -144,7 +153,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             for (int mi = startMode; mi < state.Modes.Count; mi++)
             {
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
-                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices);
+                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, credentials: target.VolumeCredentials);
                 string restoreFile = nativePlan is not null
                     ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
                     : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
@@ -177,6 +186,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     Restore = restore,
                     Settings = settings,
                     UseOptimizedKernel = optimized && !restore,
+                    VolumeCredentials = target.VolumeCredentials,
+                    PasswordCachePath = potfile,
                 };
                 var result = nativePlan is { } np
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
@@ -184,7 +195,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
 
                 // hashcat refuses some modes on Apple GPUs (e.g. PKZIP 17200 family): run the built-in CPU engine instead.
                 if (nativePlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
-                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true) is { } fallback)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is { } fallback)
                 {
                     Log?.Invoke(LogKind.Warning, $"hashcat cannot run hash mode {mode} on this GPU; using the built-in CPU engine instead.");
                     request = request with { Restore = false };

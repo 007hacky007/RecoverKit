@@ -813,7 +813,7 @@ public sealed partial class MainWindow : Window
                 DebugLog.Info($"Outcome {result.Outcome}: {result.Passwords.Count} password(s), lengths " + string.Join(",", result.Passwords.Select(x => x.Length)));
                 if (result.Passwords.Count > 0)
                 {
-                    if (await CopyAsync(result.Passwords[0])) Line("Password copied to the clipboard.", Palette.DimBrush);
+                    if (result.Passwords[0].Length > 0 && await CopyAsync(result.Passwords[0])) Line("Password copied to the clipboard.", Palette.DimBrush);
                     await PasswordFoundWindow.RunAsync(this, result.Passwords);
                 }
                 if (result.Key is { } k1)
@@ -959,13 +959,15 @@ public sealed partial class MainWindow : Window
     /// <summary>Removes this file's entries from the password cache (hashcat potfile).</summary>
     private async void ClearPasswordCacheForCurrent()
     {
-        if (_current?.Target is not { } t || !File.Exists(_settings.PotfilePath)) return;
+        if (_current?.Target is not { } t) return;
+        string potfile = SessionState.PasswordCacheFor(_settings, t);
+        if (!File.Exists(potfile)) return;
         var hashes = t.HashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(h => h.Trim() + ":").ToList();
         try
         {
-            var lines = File.ReadAllLines(_settings.PotfilePath);
+            var lines = File.ReadAllLines(potfile);
             var keep = lines.Where(l => !hashes.Any(h => l.StartsWith(h, StringComparison.OrdinalIgnoreCase))).ToArray();
-            File.WriteAllLines(_settings.PotfilePath, keep);
+            File.WriteAllLines(potfile, keep);
             DebugLog.Info($"Password cache: removed {lines.Length - keep.Length} entr(ies) for {t.FormatId}");
             Line($"Password cache cleared for this file ({lines.Length - keep.Length} entr{(lines.Length - keep.Length == 1 ? "y" : "ies")}).", Palette.DimBrush);
         }
