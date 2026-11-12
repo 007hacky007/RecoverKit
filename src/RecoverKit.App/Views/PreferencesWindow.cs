@@ -50,6 +50,10 @@ public sealed class PreferencesWindow : Window
     private readonly TextBlock _tempNow = L.Text("", dim: true, wrap: true);
     private readonly TextBlock _tempResume = L.Text("", dim: true);
     private Control? _tempRows;
+    private readonly CheckBox _powerLimit = Check("Limit GPU power (needs administrator rights)");
+    private readonly StackPanel _powerRows = new() { Spacing = 6 };
+    private readonly List<(NumericUpDown Box, int Index)> _powerBoxes = new();
+    private Control? _powerGroup;
     private readonly CheckBox _screensaver = Check("Keep the display and system awake while an attack runs");
     private readonly CheckBox _useScenario = Check("Use external scenario file");
     private readonly TextBox _scenarioFile = new();
@@ -87,6 +91,7 @@ public sealed class PreferencesWindow : Window
         var tabs = new TabControl { Margin = new Thickness(12, 8, 12, 0) };
         tabs.Items.Add(Tab("Performance", PerformanceTab()));
         tabs.Items.Add(Tab("GPU", GpuTab()));
+        if (_powerGroup is not null) _powerGroup.IsVisible = false;   // until nvidia-smi reports an adjustable limit
         tabs.Items.Add(Tab("Files and Paths", PathsTab()));
         tabs.Items.Add(Tab("Key search", KeySearchTab()));
         tabs.Items.Add(Tab("Other", OtherTab()));
@@ -203,6 +208,7 @@ public sealed class PreferencesWindow : Window
             L.Group("Devices", list),
             L.Group("GPU load", LoadBox(labels)),
             L.Group("GPU temperature", TemperatureBox()),
+            _powerGroup = L.Group("GPU power limit (NVIDIA)", PowerBox()),
             detectRow,
             _screensaver);
     }
@@ -244,6 +250,40 @@ public sealed class PreferencesWindow : Window
                           "As a safety net hashcat also aborts on its own 10 °C above the limit.", dim: true, wrap: true);
         note.FontSize = 12;
         return L.Column(8, _tempGuard, g, _tempNow, note);
+    }
+
+    /// <summary>NVIDIA power limit: shown only when nvidia-smi reports an adjustable limit.</summary>
+    private Control PowerBox()
+    {
+        var note = L.Text((OperatingSystem.IsWindows() ? "Windows asks" : "Your system asks") +
+                          " for administrator rights at the start of each attack, because only an administrator may change a GPU's " +
+                          "power limit. A small helper sets the limit and restores the previous one when the attack ends; " +
+                          "RecoverKit itself keeps running without administrator rights.", dim: true, wrap: true);
+        note.FontSize = 12;
+        _powerLimit.IsCheckedChanged += (_, _) => _powerRows.IsEnabled = _powerLimit.IsChecked == true;
+        Opened += async (_, _) => await LoadPowerLimitsAsync();
+        return L.Column(8, _powerLimit, _powerRows, note);
+    }
+
+    private async Task LoadPowerLimitsAsync()
+    {
+        var gpus = await PowerLimiter.QueryAsync();
+        if (_powerGroup is not null) _powerGroup.IsVisible = gpus.Count > 0;
+        _powerRows.Children.Clear();
+        _powerBoxes.Clear();
+        foreach (var g in gpus)
+        {
+            int value = _s.GpuPowerWatts.TryGetValue(g.Index, out var w) && g.Allows(w) ? w : (int)Math.Round(Math.Clamp(g.DefaultWatts, g.MinAllowed, g.MaxAllowed));
+            var box = L.Number(g.MinAllowed, g.MaxAllowed, value, 110);
+            box.ValueChanged += (_, _) => _gpuChanged?.Invoke();
+            var row = L.Grid("Auto,Auto,*", columnSpacing: 10);
+            row.Put(L.Text($"GPU {g.Index}: {g.Name}"), 0, 0);
+            row.Put(box, 0, 1);
+            row.Put(L.Text($"W (allowed {g.MinAllowed}-{g.MaxAllowed} W, default {PowerLimitRequest.Watts(g.DefaultWatts)}, now {PowerLimitRequest.Watts(g.CurrentWatts)})", dim: true, wrap: true), 0, 2);
+            _powerRows.Children.Add(row);
+            _powerBoxes.Add((box, g.Index));
+        }
+        _powerRows.IsEnabled = _powerLimit.IsChecked == true;
     }
 
     /// <summary>Shows the current temperature, or why the guard is unavailable.</summary>
@@ -367,6 +407,7 @@ public sealed class PreferencesWindow : Window
         int duty = Array.FindIndex(Duties, d => d.Percent >= _s.GpuDutyPercent && d.Percent - 25 < _s.GpuDutyPercent);
         _duty.SelectedIndex = duty < 0 ? 0 : duty;
         _tempGuard.IsChecked = _s.GpuTempGuard;
+        _powerLimit.IsChecked = _s.GpuPowerLimit;
         _tempLimit.Value = Math.Clamp(_s.GpuTempLimit, ThermalGuard.MinLimit, ThermalGuard.MaxLimit);
         _tempHysteresis.Value = Math.Clamp(_s.GpuTempHysteresis, ThermalGuard.MinHysteresis, ThermalGuard.MaxHysteresis);
         _screensaver.IsChecked = _s.PreventScreensaver;
@@ -423,6 +464,11 @@ public sealed class PreferencesWindow : Window
         _s.Workload = (int)Math.Round(_workload.Value);
         _s.GpuDutyPercent = Duties[Math.Max(0, _duty.SelectedIndex)].Percent;
         _s.GpuTempGuard = _tempGuard.IsChecked == true;
+        if (_powerBoxes.Count > 0)
+        {
+            _s.GpuPowerLimit = _powerLimit.IsChecked == true;
+            foreach (var (box, index) in _powerBoxes) _s.GpuPowerWatts[index] = box.IntValue();
+        }
         _s.GpuTempLimit = _tempLimit.IntValue();
         _s.GpuTempHysteresis = _tempHysteresis.IntValue();
         _s.PreventScreensaver = _screensaver.IsChecked == true;
