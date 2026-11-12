@@ -309,8 +309,10 @@ public sealed partial class HashcatTool
     {
         var args = new List<string> { "-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet" };
         // PIM options change salt_iter, so hashcat cannot match its own potfile when --show uses them.
-        var (_, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60));
+        var (code, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60));
         var passwords = new List<string>();
+        // A failed --show prints its error to stdout (for example a missing hash-mode module).
+        if (code != 0) return passwords;
         using var reader = new StringReader(o);
         while (reader.ReadLine() is { } line)
             if (!line.StartsWith("Hash '") && !line.Contains("Token length exception") && !line.StartsWith("No hashes loaded"))
