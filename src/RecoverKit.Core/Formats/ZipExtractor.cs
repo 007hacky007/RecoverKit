@@ -83,6 +83,7 @@ public static class ZipExtractor
                     CompSize = e.CompSize,
                     UncompSize = e.UncompSize,
                     LocalOffset = e.LocalOffset,
+                    DataOffset = EntryDataOffset(s, e, delta),
                 }).ToList(),
             };
         }
@@ -303,6 +304,15 @@ public static class ZipExtractor
             }
             o = d + size;
         }
+    }
+
+    /// <summary>Absolute offset of an entry's stored body (encryption header + data).</summary>
+    private static long EntryDataOffset(Stream s, ZipEntry e, long delta)
+    {
+        long lh = e.LocalOffset + delta;
+        var h = Bin.ReadAt(s, lh, 30);
+        if (Bin.U32(h, 0) != 0x04034b50) throw new FormatException("Bad ZIP local header.");
+        return lh + 30 + Bin.U16(h, 26) + Bin.U16(h, 28);
     }
 
     private static byte[] ReadEntryData(Stream s, ZipEntry e, long delta)

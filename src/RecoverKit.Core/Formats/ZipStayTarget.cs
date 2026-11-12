@@ -12,6 +12,8 @@ public sealed class ZipStayEntry
     public long CompSize { get; init; }
     public long UncompSize { get; init; }
     public long LocalOffset { get; init; }
+    /// <summary>Absolute offset of the encrypted body (12-byte header + data) in the archive file.</summary>
+    public long DataOffset { get; init; }
 
     /// <summary>False for data-descriptor entries (flag bit 3): their check bytes may be time-based, not CRC-based.</summary>
     public bool HasCrcCheckBytes => (Flags & 8) == 0;

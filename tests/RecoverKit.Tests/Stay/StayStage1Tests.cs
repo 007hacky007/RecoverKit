@@ -19,36 +19,11 @@ internal static class StayTruth
 
 public class StayStage1Tests
 {
-    private const string Password = "&THPOL101%ISLAME@|1";
-
-    internal static GeneratedZip MakeZip(int files, uint seed = 0x12345678, int sharedFirstByteFiles = 0)
-    {
-        // sharedFirstByteFiles: rescan seeds until that many leading files share r[0]
-        uint s = seed;
-        while (true)
-        {
-            var specs = Enumerable.Range(0, files).Select(i => new GeneratedEntry
-            {
-                Name = $"file{i:D2}.txt",
-                Content = Encoding.ASCII.GetBytes($"stage one file {i} {new string('s', 50 + i * 9)}"),
-                Method = i % 2 == 0 ? 0 : 8,
-            }).ToList();
-            var zip = ZipStayArchive.Generate(specs, Password, ZipRngVariant.Msvc, s);
-            if (sharedFirstByteFiles <= 1) return zip;
-            var distinct = zip.R.Take(sharedFirstByteFiles).Select(r => r[0]).Distinct().Count();
-            if (distinct == 1) return zip;
-            s += 0x9e37;
-        }
-    }
-
-    internal static List<StayFileData> FileData(GeneratedZip zip)
-        => zip.R.Zip(zip.StoredHeaders, (r, st) => new StayFileData { R = r, Stored = st }).ToList();
-
     [Fact]
     public void Filter_accepts_true_guess_all_files()
     {
-        var zip = MakeZip(5);
-        var files = FileData(zip);
+        var zip = StayTestZip.MakeZip(5);
+        var files = StayTestZip.FileData(zip);
         var cv = (StayTruth.Crc(zip.Z) >> 2) & 0x3fff;
         byte k = StayTruth.Ks(zip.Z);
         byte a0 = (byte)StayTruth.A0(zip.X);
@@ -65,8 +40,8 @@ public class StayStage1Tests
     [Fact]
     public void Filter_rejects_random_guesses()
     {
-        var zip = MakeZip(5);
-        var files = FileData(zip);
+        var zip = StayTestZip.MakeZip(5);
+        var files = StayTestZip.FileData(zip);
         var rng = new Random(99);
 
         int file0Pass = 0, allPass = 0;
@@ -87,10 +62,10 @@ public class StayStage1Tests
     [Fact]
     public void Filter_accepts_true_guess_when_files_share_first_byte()
     {
-        var zip = MakeZip(5, sharedFirstByteFiles: 2);
+        var zip = StayTestZip.MakeZip(5, sharedFirstByteFiles: 2);
         Assert.Equal(zip.R[0][0], zip.R[1][0]);   // correlated filters, as promised
 
-        var files = FileData(zip);
+        var files = StayTestZip.FileData(zip);
         var cv = (StayTruth.Crc(zip.Z) >> 2) & 0x3fff;
         byte k = StayTruth.Ks(zip.Z);
         byte a0 = (byte)StayTruth.A0(zip.X);
@@ -102,8 +77,8 @@ public class StayStage1Tests
     [Fact]
     public void Scalar_and_avx2_agree_on_subrange()
     {
-        var zip = MakeZip(5);
-        var files = FileData(zip);
+        var zip = StayTestZip.MakeZip(5);
+        var files = StayTestZip.FileData(zip);
         var cv = (int)((StayTruth.Crc(zip.Z) >> 2) & 0x3fff);
         byte k = StayTruth.Ks(zip.Z);
         byte a0 = (byte)StayTruth.A0(zip.X);
@@ -137,8 +112,8 @@ public class StayStage1Tests
     [Fact]
     public void Search_finds_true_guess_in_full_keyspace()
     {
-        var zip = MakeZip(5);
-        var files = FileData(zip);
+        var zip = StayTestZip.MakeZip(5);
+        var files = StayTestZip.FileData(zip);
         var cv = (StayTruth.Crc(zip.Z) >> 2) & 0x3fff;
         byte k = StayTruth.Ks(zip.Z);
         byte a0 = (byte)StayTruth.A0(zip.X);

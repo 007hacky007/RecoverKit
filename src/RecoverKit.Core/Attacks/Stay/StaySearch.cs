@@ -1,5 +1,6 @@
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.Arm;
+using System.Numerics;
 using System.Runtime.Intrinsics.X86;
 
 namespace RecoverKit.Core.Attacks.Stay;
@@ -497,4 +498,220 @@ internal static class StayStage2
     }
 
     private static uint Threshold(uint blo) => (1u << 24) - blo & 0xffffff;
+}
+
+// ---------------------------------------------------------------- stage 3
+
+/// <summary>
+/// Stage 3 of Stay's attack: recovers (X, Y, Z) from a stage-2 survivor. Z from C bits 0..23
+/// plus the position-0 keystream; Y from the carry constraints (a bitset over Y mod 2^24,
+/// intersecting per file the union over options) plus the high byte via bY; a2 by exact
+/// position-3 filtering; a1/a2/a3 then give A0, inverted to X. Candidates are yielded for
+/// exact verification by the caller.
+/// </summary>
+internal static class StayStage3
+{
+    private const int N24 = 1 << 24;
+
+    public static IEnumerable<ZipStayKeys> RecoverKeys(Stage2Survivor s, IReadOnlyList<StayFileData> files, CancellationToken ct)
+    {
+        // constraint intersection does not depend on Z: compute Y candidates once
+        var ys = YCandidates(s, files, ct).ToList();
+        foreach (var z in ZCandidates(s))
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var y in ys)
+            {
+                foreach (var a2 in A2Candidates(s, y, z, files))
+                {
+                    foreach (var a3 in A3Candidates(s, y, z, a2, files))
+                    {
+                        uint a0 = (uint)(s.A0Lo | (s.A1 << 8) | (a2 << 16) | (a3 << 24));
+                        foreach (var x in XCandidates(a0))
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            yield return new ZipStayKeys(x, y, z);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Z candidates from C bits 0..23 and the position-0 keystream (typically 1-3).</summary>
+    private static IEnumerable<uint> ZCandidates(Stage2Survivor s)
+    {
+        for (int lsb = 0; lsb < 256; lsb++)
+        {
+            uint z = (((s.C24 ^ StayTables.T[lsb]) & 0xffffff) << 8) | (uint)lsb;
+            if ((byte)StayTables.F14((z >> 2) & 0x3fff) == s.K)
+                yield return z;
+        }
+    }
+
+    /// <summary>
+    /// Y candidates: intersect (over files) the union (over options) of the carry constraint
+    /// subsets of Z_2^24, then add the high byte from bY = MSB(Y*M).
+    /// </summary>
+    private static IEnumerable<uint> YCandidates(Stage2Survivor s, IReadOnlyList<StayFileData> files, CancellationToken ct)
+    {
+        var acc = new ulong[N24 / 64];
+        Array.Fill(acc, ulong.MaxValue);
+        var union = new ulong[N24 / 64];
+        var scratch = new ulong[N24 / 64];
+        var optMask = new ulong[N24 / 64];
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            Array.Clear(union);
+            foreach (var option in s.PerFileOptions[i])
+            {
+                Array.Fill(optMask, ulong.MaxValue);
+                foreach (var c in option)
+                {
+                    BuildConstraintMask(c, scratch);
+                    AndInto(optMask, scratch);
+                }
+                OrInto(union, optMask);
+            }
+            AndInto(acc, union);
+        }
+
+        for (int w = 0; w < acc.Length; w++)
+        {
+            ulong word = acc[w];
+            while (word != 0)
+            {
+                int bit = BitOperations.TrailingZeroCount(word);
+                word &= word - 1;
+                uint y24 = (uint)(w * 64 + bit);
+                for (int h = 0; h < 256; h++)
+                {
+                    uint y = ((uint)h << 24) | y24;
+                    if ((byte)((y * StayTables.M) >> 24) == s.BY && (byte)((y * StayTables.M2) >> 24) == s.BY2)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        yield return y;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Sets mask[y] for every y in Z_2^24 where ((y*Mult) mod 2^24) meets the constraint.</summary>
+    private static void BuildConstraintMask(StayYConstraint c, ulong[] mask)
+    {
+        Array.Clear(mask);
+        uint w = 0;
+        uint threshold = c.Threshold, mult = c.Mult;
+        if (c.AtLeast)
+        {
+            for (int y = 0; y < N24; y++)
+            {
+                if (w >= threshold) mask[y >> 6] |= 1ul << (y & 63);
+                w = (w + mult) & 0xffffff;
+            }
+        }
+        else
+        {
+            for (int y = 0; y < N24; y++)
+            {
+                if (w < threshold) mask[y >> 6] |= 1ul << (y & 63);
+                w = (w + mult) & 0xffffff;
+            }
+        }
+    }
+
+    private static void AndInto(ulong[] target, ulong[] source)
+    {
+        for (int i = 0; i < target.Length; i++)
+            target[i] &= source[i];
+    }
+
+    private static void OrInto(ulong[] target, ulong[] source)
+    {
+        for (int i = 0; i < target.Length; i++)
+            target[i] |= source[i];
+    }
+
+    /// <summary>
+    /// a2 = A0 bits 16..23 that pass the exact position-3 keystream filter for every file.
+    /// Positions 0..3 depend on A0 bits 0..23 only.
+    /// </summary>
+    private static IEnumerable<byte> A2Candidates(Stage2Survivor s, uint y, uint z, IReadOnlyList<StayFileData> files)
+    {
+        for (int a2 = 0; a2 < 256; a2++)
+        {
+            uint a0lo24 = (uint)(s.A0Lo | (s.A1 << 8) | (a2 << 16));
+            bool all = true;
+            for (int i = 0; i < files.Count && all; i++)
+                all = PositionPasses(files[i], s, a0lo24, y, z, 3);
+            if (all)
+                yield return (byte)a2;
+        }
+    }
+
+    /// <summary>a3 = A0 bits 24..31 that pass the exact position-4 keystream filter for every file.</summary>
+    private static IEnumerable<byte> A3Candidates(Stage2Survivor s, uint y, uint z, byte a2, IReadOnlyList<StayFileData> files)
+    {
+        for (int a3 = 0; a3 < 256; a3++)
+        {
+            uint a0 = (uint)(s.A0Lo | (s.A1 << 8) | (a2 << 16) | (a3 << 24));
+            bool all = true;
+            for (int i = 0; i < files.Count && all; i++)
+                all = PositionPasses(files[i], s, a0, y, z, 4);
+            if (all)
+                yield return (byte)a3;
+        }
+    }
+
+    /// <summary>
+    /// Exact keystream-cancellation check at position n (3 or 4) for one file: both passes'
+    /// keystreams at position n must cancel to stored[n] ^ r[n]. The cipher state before byte 0
+    /// is (A0-derived k0, Y, Z): the byte-0 update of k0 is k0' = A0 ^ T[byte]
+    /// (crc32(X, b) = crc32(X, 0) ^ T[b]); later bytes use the standard CRC recurrence. Pass 2's
+    /// bytes are c1[pos] = r[pos] ^ ksE1[pos]. A0 must carry all bits positions 0..n depend on
+    /// (24 for n = 3, 32 for n = 4).
+    /// </summary>
+    private static bool PositionPasses(StayFileData f, Stage2Survivor s, uint a0, uint y, uint z, int n)
+    {
+        byte target = (byte)(f.Stored[n] ^ f.R[n]);
+        Span<int> ksE1 = stackalloc int[5];
+
+        // pass 1: bytes r[0..n]
+        uint k1 = y, k2 = z, k0 = 0;
+        for (int pos = 0; pos <= n; pos++)
+        {
+            ksE1[pos] = StayTables.F14((k2 >> 2) & 0x3fff);
+            byte b = f.R[pos];
+            k0 = pos == 0 ? a0 ^ StayTables.T[b] : (k0 >> 8) ^ StayTables.T[(k0 ^ b) & 0xff];
+            k1 = unchecked((k1 + (k0 & 0xff)) * StayTables.M + 1);
+            k2 = (k2 >> 8) ^ StayTables.T[(k2 ^ (k1 >> 24)) & 0xff];
+        }
+
+        // pass 2: bytes c1[pos] = r[pos] ^ ksE1[pos]; keystream at position n must cancel
+        (k1, k2, k0) = (y, z, 0);
+        int ksE2 = 0;
+        for (int pos = 0; pos <= n; pos++)
+        {
+            ksE2 = StayTables.F14((k2 >> 2) & 0x3fff);
+            byte b = (byte)(f.R[pos] ^ ksE1[pos]);
+            k0 = pos == 0 ? a0 ^ StayTables.T[b] : (k0 >> 8) ^ StayTables.T[(k0 ^ b) & 0xff];
+            k1 = unchecked((k1 + (k0 & 0xff)) * StayTables.M + 1);
+            k2 = (k2 >> 8) ^ StayTables.T[(k2 ^ (k1 >> 24)) & 0xff];
+        }
+        return ((ksE1[n] ^ ksE2) & 0xff) == target;
+    }
+
+    /// <summary>X candidates by CRC inversion of A0: find zb with (A0 ^ T[zb]) >> 24 == 0, X = ((A0 ^ T[zb])&lt;&lt;8)|zb.</summary>
+    private static IEnumerable<uint> XCandidates(uint a0)
+    {
+        for (int zb = 0; zb < 256; zb++)
+        {
+            uint v = a0 ^ StayTables.T[zb];
+            if ((v >> 24) == 0)
+                yield return (v << 8) | (uint)zb;
+        }
+    }
 }
