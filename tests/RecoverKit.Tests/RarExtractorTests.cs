@@ -145,6 +145,18 @@ public class RarExtractorTests
         Assert.Equal("$RAR3$*0*45109af8ab5f297a*adbf6c5385d7a40373e8f77d7b89d317", d.Target.HashLines);
     }
 
+    [Fact]
+    public void EncryptedHeadersUseEndOfArchiveBlock()
+    {
+        // WinRAR 6.24: rar a -ma4 -hpab1 hp.rar a.txt
+        var d = Extract(Convert.FromHexString(
+            "526172211a0700ce997380000d000000000000003a94df521d0214a7db167c1b7727e42ae95c6b1cc9b3367c55500f7634a03d4075f2d5479a79e2002efbd35ec85f87d13b77594bc34546fc08b2c05a5783fe8ba7390147422ed97bca9b8acec6faaf99bce7b8062809d7a8167366e88e92d89bdf350c3634acfa0cd7d702eac1ecdbdfcd32c3f6a0c0dae3c2adcc7deb71d1b9cd96fc1a8305e1953a94df521d0214a716445717853d420c627bc11af1e2b1b1"));
+        Assert.Equal("$RAR3$*0*3a94df521d0214a7*16445717853d420c627bc11af1e2b1b1", d.Target!.HashLines);
+        var k = RecoverKit.Core.Native.Kernels.Rar3Kernel.TryParse(d.Target.HashLines)!;
+        Assert.True(k.Verify("ab1"u8));
+        Assert.False(k.Verify("ab2"u8));
+    }
+
     [Theory]
     [InlineData(23700, 20, true)]
     [InlineData(23700, 21, false)]

@@ -128,8 +128,10 @@ public static class RarExtractor
         if (size < 13 || size > s.Length - pos) throw new FormatException("Bad RAR main header size.");
         if ((flags & 0x0080) != 0)
         {
-            var tail = Bin.ReadAt(s, pos + size, 8 + 16);
-            if (tail.Length < 24) throw new FormatException("Truncated encrypted RAR header.");
+            // hashcat and the native kernel verify the encrypted end-of-archive block, which is the
+            // last 24 bytes (salt + first AES block) of the archive.
+            if (s.Length - (pos + size) < 24) throw new FormatException("Truncated encrypted RAR header.");
+            var tail = Bin.ReadAt(s, s.Length - 24, 8 + 16);
             d.Add("Encrypted file names", "yes");
             d.Target = new HashTarget
             {
