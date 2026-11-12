@@ -72,8 +72,13 @@ public sealed class HybridRunner
     public IReadOnlyList<BackendDevice>? Devices { get; init; }
 
     // Tuning, adjustable by tests.
-    /// <summary>Seconds a hashcat start costs (process start, self-test, autotune).</summary>
-    internal double HashcatStartupSeconds { get; init; } = 6;
+    /// <summary>
+    /// Seconds a hashcat start costs (process start, kernel load, self-test, autotune) when nothing
+    /// was measured yet. Each run measures it (time to its first speed report); on an Apple M1 Pro
+    /// it is about 40 s for PDF R6, so restarts are only worth it for long remaining work.
+    /// </summary>
+    internal double HashcatStartupSeconds { get; init; } = 15;
+    private double _startup;
     /// <summary>Seconds of CPU work per batch taken from the top.</summary>
     internal double BatchSeconds { get; init; } = 3;
     internal TimeSpan Tick { get; init; } = TimeSpan.FromSeconds(1);
@@ -139,8 +144,11 @@ public sealed class HybridRunner
 
         var space = plan.Space;
         int threads = ThreadsOverride ?? CpuThreads(s, Devices, true);
-        double cpuSpeed = InitialCpuSpeed > 0 ? InitialCpuSpeed : plan.Kernel.SpeedHint * threads;
+        double cpuSpeed = InitialCpuSpeed > 0 ? InitialCpuSpeed
+            : s.CpuSpeedByMode.TryGetValue(r.Mode, out var known) && known > 0 ? known : plan.Kernel.SpeedHint * threads;
         double gpuSpeed = InitialGpuSpeed > 0 ? InitialGpuSpeed : s.GpuSpeedByMode.GetValueOrDefault(r.Mode);
+        _startup = InitialGpuSpeed > 0 || InitialCpuSpeed > 0 ? HashcatStartupSeconds
+            : s.GpuStartupByMode.TryGetValue(r.Mode, out var st) && st > 0 ? st : HashcatStartupSeconds;
         var excluded = new HashSet<int>();
         OutputLine?.Invoke($"Hybrid CPU + GPU: hashcat on the GPUs, built-in CPU engine ({plan.Kernel.Name}) on {threads} thread(s), " +
                            $"lengths {space.MinLength}-{space.MaxLength}" + (resume is not null ? $", resuming at length {resume.Length}" : ""));
@@ -149,8 +157,9 @@ public sealed class HybridRunner
 
         var proc = Process.GetCurrentProcess();
         ProcessPriorityClass? previous = null;
-        try { previous = proc.PriorityClass; proc.PriorityClass = NativeRunner.ProcessClassFor(s.Priority); }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
+        if (NativeRunner.LowersProcessPriority)
+            try { previous = proc.PriorityClass; proc.PriorityClass = NativeRunner.ProcessClassFor(s.Priority); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
         HashcatStatus? last = null;
         bool gpuAlive = true;
         try
@@ -162,7 +171,7 @@ public sealed class HybridRunner
                 var sorted = HashcatOrder.SortedPositions(space, len);
                 HashcatOrder? order = null;
                 // A length the CPU finishes before hashcat would be up and running stays on the CPU.
-                bool worthGpu = gpuAlive && (double)space.Keyspace(len) / cpuSpeed > 2 * HashcatStartupSeconds;
+                bool worthGpu = gpuAlive && (double)space.Keyspace(len) / cpuSpeed > 2 * _startup;
                 if (worthGpu)
                 {
                     long? baseCount = await gpu.KeyspaceAsync(HashcatOrder.MaskArgs(sorted)!, ct);
@@ -183,6 +192,8 @@ public sealed class HybridRunner
                 gpuSpeed = job.GpuSpeed;
                 if (job.GpuFailed) gpuAlive = false;
                 if (job.GpuSpeedMeasured) s.GpuSpeedByMode[r.Mode] = gpuSpeed;
+                if (job.CpuSpeedMeasured) s.CpuSpeedByMode[r.Mode] = cpuSpeed;
+                if (job.StartupMeasured) s.GpuStartupByMode[r.Mode] = _startup;
                 switch (outcome)
                 {
                     case LengthOutcome.Found:
@@ -250,6 +261,9 @@ public sealed class HybridRunner
         public double CpuSpeed { get; private set; }
         public double GpuSpeed { get; private set; }
         public bool GpuSpeedMeasured { get; private set; }
+        public bool CpuSpeedMeasured { get; private set; }
+        public bool StartupMeasured { get; private set; }
+        private Stopwatch? _hcStarted;
         public bool GpuFailed { get { lock (_lock) return _gpuDead; } }
         public byte[]? FoundByCpu { get; private set; }
         public List<string> FoundByGpu { get; private set; } = new();
@@ -320,10 +334,11 @@ public sealed class HybridRunner
                         {
                             long x = _cpuDead ? _top : SplitPoint();
                             double cpuAlone = (double)(_top - _lo) * _a / CpuSpeed;
-                            if (x > _lo && (_cpuDead || cpuAlone > 2 * _owner.HashcatStartupSeconds))
+                            if (x > _lo && (_cpuDead || cpuAlone > 2 * _owner._startup))
                             {
                                 skip = _lo; count = x - _lo;
                                 _hcEnd = x; _hcRunning = true; _hcReported = false; _hcProgress = 0; _hcLive = _lo;
+                                _hcStarted = Stopwatch.StartNew();
                                 _correctedThisRun = false; _gpuStatuses = 0;
                             }
                         }
@@ -360,7 +375,12 @@ public sealed class HybridRunner
                 if (dt >= Math.Min(0.5, 5 * _owner.Tick.TotalSeconds))
                 {
                     long cpuDone = DoneCpu();
-                    if (cpuDone > lastCpuDone && !CpuIdle()) CpuSpeed = 0.7 * CpuSpeed + 0.3 * ((cpuDone - lastCpuDone) / dt);
+                    if (cpuDone > lastCpuDone && !CpuIdle())
+                    {
+                        double sample = (cpuDone - lastCpuDone) / dt;
+                        CpuSpeed = CpuSpeedMeasured ? 0.7 * CpuSpeed + 0.3 * sample : sample;
+                        CpuSpeedMeasured = true;
+                    }
                     lastCpuDone = cpuDone;
                     lastTick.Restart();
                     Emit();
@@ -401,8 +421,8 @@ public sealed class HybridRunner
         {
             double work = (double)(_top - _lo) * _a;
             double sg = GpuSpeed > 0 ? GpuSpeed : CpuSpeed * 4;   // unknown GPU: corrected once hashcat reports
-            double t = (work + sg * _owner.HashcatStartupSeconds) / (CpuSpeed + sg);
-            double gpuCandidates = sg * Math.Max(0, t - _owner.HashcatStartupSeconds);
+            double t = (work + sg * _owner._startup) / (CpuSpeed + sg);
+            double gpuCandidates = sg * Math.Max(0, t - _owner._startup);
             long x = _lo + (long)Math.Min(_top - _lo, Math.Floor(gpuCandidates / _a));
             if (x <= _lo) return _lo;
             if (x >= _top) return _top;
@@ -415,6 +435,13 @@ public sealed class HybridRunner
             lock (_lock)
             {
                 if (!_hcRunning) return;
+                if (st.Status == 3 && !_hcReported && _hcStarted is { } sw)
+                {
+                    // Start-up cost of this run: from launch to its first speed report.
+                    double measured = sw.Elapsed.TotalSeconds;
+                    _owner._startup = StartupMeasured ? 0.5 * _owner._startup + 0.5 * measured : measured;
+                    StartupMeasured = true;
+                }
                 if (st.Status == 3) { _hcReported = true; _gpuStatuses++; }
                 _hcProgress = Math.Max(0, st.ProgressDone);
                 if (st.RestorePoint >= _lo && st.RestorePoint <= _hcEnd) _hcLive = Math.Max(_hcLive, st.RestorePoint);
@@ -501,7 +528,7 @@ public sealed class HybridRunner
             {
                 if (!_hcRunning || !_hcReported || _cpuDead || _rebalances >= 6 || GpuSpeed <= 0) return;
                 double gpuLeft = (double)(_hcEnd - _hcLive) * _a / GpuSpeed;
-                double restart = 3 * _owner.HashcatStartupSeconds;
+                double restart = 3 * _owner._startup;
                 bool cpuIdle = _top <= _hcEnd && _top == _doneFrom && _pending is null;
                 double cpuLeft = ((double)(_top - _hcEnd) * _a + Math.Max(0, (_doneFrom - _top) * _a - _batchDone)) / CpuSpeed;
                 if (cpuIdle && gpuLeft > restart)
@@ -512,7 +539,7 @@ public sealed class HybridRunner
                 else if (!_correctedThisRun && _gpuStatuses >= 3)
                 {
                     _correctedThisRun = true;
-                    if (gpuLeft - cpuLeft > 5 * _owner.HashcatStartupSeconds)
+                    if (gpuLeft - cpuLeft > 5 * _owner._startup)
                     {
                         stop = true;
                         why = $"hashcat would need {gpuLeft:F0} s, the CPU {cpuLeft:F0} s";

@@ -78,6 +78,10 @@ public sealed class Settings
     public Dictionary<int, double> SpeedByMode { get; set; } = new();
     /// <summary>hashcat's own speed (GPUs only) in hybrid attacks, to split the next one.</summary>
     public Dictionary<int, double> GpuSpeedByMode { get; set; } = new();
+    /// <summary>The built-in engine's speed next to hashcat in hybrid attacks.</summary>
+    public Dictionary<int, double> CpuSpeedByMode { get; set; } = new();
+    /// <summary>Seconds hashcat needs to start a hybrid run of this mode (until its first speed report).</summary>
+    public Dictionary<int, double> GpuStartupByMode { get; set; } = new();
     public string? LastOpenedDirectory { get; set; }
     public string? LastDictionaryDirectory { get; set; }
     public int[]? WindowBounds { get; set; }
