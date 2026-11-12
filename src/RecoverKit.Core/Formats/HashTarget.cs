@@ -30,6 +30,9 @@ public sealed class HashTarget
 
     public VolumeCredentials? VolumeCredentials { get; init; }
 
+    /// <summary>Classic ZipCrypto entries (stored headers) for Stay's header-RNG attack, when applicable.</summary>
+    public ZipStayTarget? StayZip { get; set; }
+
     public string? Notes { get; init; }
 }
 

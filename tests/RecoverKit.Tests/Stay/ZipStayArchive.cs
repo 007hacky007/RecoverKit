@@ -12,7 +12,10 @@ public sealed class GeneratedEntry
     public required byte[] Content { get; init; }   // uncompressed plaintext
     public int Method { get; init; } = 8;           // 0 stored, 8 deflate, other: CompData passed as-is
     public bool DataDescriptor { get; init; }       // flag bit 3: check bytes come from the DOS time
+    public bool Classic { get; init; } = true;      // false: store unencrypted (no header, no RNG use)
     public byte[]? ExoticCompData { get; init; }    // raw "compressed" bytes for methods other than 0/8
+    public long? ForceCompSize { get; init; }       // lie about the size in both headers (corrupt-entry tests)
+    public bool FakeAes { get; init; }              // write a WinZip-AES extra field with fake AES data
 }
 
 public sealed class GeneratedEntryInfo
@@ -21,6 +24,7 @@ public sealed class GeneratedEntryInfo
     public required byte[] Content { get; init; }
     public required byte[] CompData { get; init; }
     public required int Method { get; init; }
+    public required int CdMethod { get; init; }      // 99 for fake-AES entries, else Method
     public required bool DataDescriptor { get; init; }
     public required uint Crc { get; init; }
     public required ushort Flags { get; init; }
@@ -77,6 +81,7 @@ public static class ZipStayArchive
         var stored = new byte[n][];
         var infos = new GeneratedEntryInfo[n];
         var bodies = new byte[n][];   // 12-byte header + encrypted compressed data
+        byte[][]? extras = new byte[n][];  // central/local extra fields (fake AES; null = none)
         uint x = 0, y = 0, z = 0;
         InitKeys(password, ref x, ref y, ref z);
 
@@ -101,12 +106,16 @@ public static class ZipStayArchive
             };
 
             // 10 fresh rand() bytes; headers beyond the first session come from the second chain
-            ref uint chain = ref (i < filesInFirstSession ? ref s1 : ref s2);
-            var ri = new byte[10];
-            for (int j = 0; j < 10; j++)
+            var ri = Array.Empty<byte>();
+            if (spec.Classic)
             {
-                chain = unchecked(chain * 214013u + (variant == TestRngVariant.Msvc ? 2531011u : 0u));
-                ri[j] = (byte)((chain >> 23) & 0xff);
+                ref uint chain = ref (i < filesInFirstSession ? ref s1 : ref s2);
+                ri = new byte[10];
+                for (int j = 0; j < 10; j++)
+                {
+                    chain = unchecked(chain * 214013u + (variant == TestRngVariant.Msvc ? 2531011u : 0u));
+                    ri[j] = (byte)((chain >> 23) & 0xff);
+                }
             }
             r[i] = ri;
 
@@ -115,6 +124,31 @@ public static class ZipStayArchive
             byte check2 = spec.DataDescriptor ? (byte)((dosTime >> 8) & 0xff) : (byte)((crc >> 24) & 0xff);
 
             // pass 1: encrypt the random bytes (they land in c1), keys reset, pass 2: encrypt [c1, checks]
+            byte[] body;
+            ushort flags = (ushort)(spec.Classic ? 0x0001 : 0); // encrypted when classic
+            ushort cdMethod = (ushort)spec.Method;
+            byte[]? extra = null;
+            if (!spec.Classic)
+            {
+                body = comp;
+                c1[i] = [];
+            }
+            else if (spec.FakeAes)
+            {
+                // WinZip AES extra field (0x9901): version 2, vendor AE, strength 3, real method
+                cdMethod = 99;
+                extra = new byte[11];
+                extra[0] = 0x01; extra[1] = 0x99;         // header id 0x9901
+                extra[2] = 7; extra[3] = 0;               // data size
+                extra[4] = 2; extra[5] = 0;               // version 2
+                extra[6] = (byte)'A'; extra[7] = (byte)'E';
+                extra[8] = 3;                             // strength: AES-256
+                extra[9] = 8; extra[10] = 0;              // real compression method
+                body = new byte[16 + 2 + 16 + 10];        // salt + pw verifier + body + auth (fake)
+                new Random(42).NextBytes(body);
+            }
+            else
+            {
             var header = new byte[12];
             uint tx = x, ty = y, tz = z;
             for (int j = 0; j < 10; j++)
@@ -128,14 +162,15 @@ public static class ZipStayArchive
             stored[i] = header;
 
             // entry data continues in the pass-2 stream
-            var body = new byte[12 + comp.Length];
-            Array.Copy(header, body, 12);
+            var body2 = new byte[12 + comp.Length];
+            Array.Copy(header, body2, 12);
             for (int j = 0; j < comp.Length; j++)
-                body[12 + j] = Encode(comp[j], ref tx, ref ty, ref tz);
-            bodies[i] = body;
+                body2[12 + j] = Encode(comp[j], ref tx, ref ty, ref tz);
+            body = body2;
+            }
 
-            ushort flags = 0x0001;                        // encrypted
             if (spec.DataDescriptor) flags |= 0x0008;
+            if (!spec.Classic) stored[i] = [];
             long pos = ms.Position;
             offsets[i] = pos;
             var name = Encoding.ASCII.GetBytes(spec.Name);
@@ -146,11 +181,12 @@ public static class ZipStayArchive
             bw.Write((ushort)dosTime);
             bw.Write((ushort)dosDate);
             bw.Write(crc);
-            bw.Write((uint)body.Length);                  // comp size incl. 12-byte header
+            bw.Write((uint)(spec.ForceCompSize ?? body.Length)); // comp size incl. 12-byte header
             bw.Write((uint)spec.Content.Length);
             bw.Write((ushort)name.Length);
-            bw.Write((ushort)0);                          // extra len
+            bw.Write((ushort)(extra?.Length ?? 0));       // extra len
             bw.Write(name);
+            if (extras[i] is { } ex) bw.Write(ex);
             bw.Write(body);
             if (spec.DataDescriptor)
             {
@@ -160,11 +196,12 @@ public static class ZipStayArchive
                 bw.Write((uint)spec.Content.Length);
             }
 
+            extras[i] = extra;
             infos[i] = new GeneratedEntryInfo
             {
-                Name = spec.Name, Content = spec.Content, CompData = comp, Method = spec.Method,
+                Name = spec.Name, Content = spec.Content, CompData = comp, Method = spec.Method, CdMethod = cdMethod,
                 DataDescriptor = spec.DataDescriptor, Crc = crc, Flags = flags, DosTime = dosTime,
-                CompSize = body.Length, LocalOffset = offsets[i],
+                CompSize = spec.ForceCompSize ?? body.Length, LocalOffset = offsets[i],
             };
         }
 
@@ -177,18 +214,19 @@ public static class ZipStayArchive
             bw.Write((ushort)((20 << 8) | 0));            // version made by (MS-DOS, zip 2.0)
             bw.Write((ushort)20);
             bw.Write(e.Flags);
-            bw.Write((ushort)e.Method);
+            bw.Write((ushort)e.CdMethod);
             bw.Write((ushort)e.DosTime);
             bw.Write((ushort)0x5bb1);
             bw.Write(e.Crc);
             bw.Write((uint)e.CompSize);
             bw.Write((uint)e.Content.Length);
             bw.Write((ushort)name.Length);
-            bw.Write((ushort)0); bw.Write((ushort)0);     // extra, comment
+            bw.Write((ushort)(extras[i]?.Length ?? 0)); bw.Write((ushort)0); // extra, comment
             bw.Write((ushort)0); bw.Write((ushort)0);     // disk start, internal attrs
             bw.Write(0u);                                 // external attrs
             bw.Write((uint)e.LocalOffset);
             bw.Write(name);
+            if (extras[i] is { } ex) bw.Write(ex);
         }
         long cdSize = ms.Position - cdOffset;
         bw.Write(0x06054b50u);                            // end of central directory

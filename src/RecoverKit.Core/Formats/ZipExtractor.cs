@@ -58,6 +58,38 @@ public static class ZipExtractor
             return;
         }
         d.Target = Pkzip(s, classic, delta, d);
+        d.Target.StayZip = CollectStayTarget(s, enc, delta);
+    }
+
+    /// <summary>
+    /// Gathers every classic ZipCrypto entry (any compression method, header at least 12 bytes) in
+    /// archive order, with its stored 12-byte encryption header — the payload for Stay's attack.
+    /// </summary>
+    private static ZipStayTarget? CollectStayTarget(Stream s, List<ZipEntry> enc, long delta)
+    {
+        var usable = enc.Where(e => e.AesStrength == 0 && e.CompSize >= 12).ToList();
+        if (usable.Count < 2) return null;
+        try
+        {
+            return new ZipStayTarget
+            {
+                Entries = usable.Select(e => new ZipStayEntry
+                {
+                    Name = e.Name,
+                    StoredHeader = ReadEntryData(s, e, delta)[..12],
+                    Crc = e.Crc,
+                    Flags = e.Flags,
+                    Method = e.Method,
+                    CompSize = e.CompSize,
+                    UncompSize = e.UncompSize,
+                    LocalOffset = e.LocalOffset,
+                }).ToList(),
+            };
+        }
+        catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException)
+        {
+            return null;   // a truncated/corrupt entry must not break the normal extraction path
+        }
     }
 
     private static HashTarget WinZipAes(Stream s, ZipEntry e, long delta, Detection d)
