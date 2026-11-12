@@ -372,6 +372,18 @@ notes are taken from it, and the release job fails if the section is missing.
   Extraction was compared with `office2john.py` and hashcat 7.1.2 modules 9400-9800. Saved
   `.xlsx`, `.xlsm` and `.xlsb` packages were reopened through LibreOffice headless without
   supplying a password.
+- Office XOR recovery lives in `Formats/OfficeXor.cs`, with one dispatch hook in `OfficeExtractor`.
+  It recognizes Word FIB versions 0x65-0x69 (including the 0xA5DC signature), Word 97+ fObfuscated,
+  BIFF5 four-byte FILEPASS and BIFF8 encryption-type-zero FILEPASS. It implements
+  [MS-OFFCRYPTO 2.3.7](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-offcrypto/06494548-8c5c-4697-bce1-e2a9fe1c4de4)
+  array reversal using WRITEACCESS space padding, common BIFF bytes, and Word font/text data.
+  ASCII candidates of 1-15 characters must match the array evidence, key and verifier. Matching
+  the key/verifier alone is insufficient because the array also contains the password bytes.
+  Recovery reads at most 1 MiB per stream; files with insufficient evidence remain inconclusive.
+  Results are password-only `InstantUnlock` entries, with no hashcat mode, target or attack scenario.
+  No CFB writer or deobfuscated-copy action is added. The small fixtures include an original POI
+  XOR workbook and independently obfuscated real Word/BIFF5 files. Headless LibreOffice 26.2.4.2
+  reopened the recovered passwords and checked document text and worksheet cells against the sources.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with

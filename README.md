@@ -47,7 +47,7 @@ number at the end"), and it tests those combinations until it finds the right on
 
 | Kind of file | Examples |
 |---|---|
-| Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
+| Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365; Word 6/95 and Excel 5/95 passwords shown instantly |
 | Word and Excel editing restrictions | Read-only, "password to modify", sheet and workbook protection removed from files that open without a password (.docx, .doc, .xlsx, .xls, .odt, .ods) |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones; printing and copying restrictions removed instantly |
 | Access databases | Access 97-2003 databases (.mdb): the password is shown instantly |
@@ -203,6 +203,9 @@ quickest guesses.
 - **Excel sheet and workbook protection:** RecoverKit saves a copy without the protection and
   also shows a password that Excel accepts for old-style protection. Files that need a password to
   open must be recovered first. VBA project passwords and .xlsb files are not supported yet.
+- **Old Word and Excel files (Word 6/95, Excel 5/95, and 97-2003 files saved with "XOR"
+  protection):** the password is shown instantly in most cases. If the file holds too little data
+  to be sure, RecoverKit says so instead of guessing.
 - **Excel files that open in Excel without a password:** Excel sometimes encrypts a workbook with
   its built-in default password "VelvetSweatshop", which other programs then ask for. RecoverKit
   recognizes this (and empty passwords) instantly and can save a normal copy of .xlsx files; for

@@ -283,6 +283,7 @@ public class SpreadsheetProtectionTests : IDisposable
         File.WriteAllBytes(path, container);
         var d = FormatDetector.Detect(path);
         Assert.Empty(d.Unlocks);
+        Assert.True(d.Target is not null, d.Message + " | " + d.TypeName);
         Assert.Equal(new[] { 9700 }, d.Target!.Modes);
         Assert.Contains(d.Info, p => p.Key == "Notes");
     }
@@ -380,6 +381,7 @@ public class SpreadsheetProtectionTests : IDisposable
         // Existing encrypted extraction reads only the first 64 KiB; the damaged tail is irrelevant.
         var d = FormatDetector.Detect(path);
         Assert.Empty(d.Unlocks);
+        Assert.True(d.Target is not null, d.Message + " | " + d.TypeName);
         Assert.Equal(new[] { 9700 }, d.Target!.Modes);
     }
 
