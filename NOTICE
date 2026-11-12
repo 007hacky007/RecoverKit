@@ -71,3 +71,11 @@ NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPO
 NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Spreadsheet protection test fixtures (not bundled)
+  tests/RecoverKit.Tests/Fixtures/Spreadsheets/workbookProtection-sheet_password-2013.xlsx and
+  workbookProtection-workbook_password-2013.xlsx come from Apache POI test-data/spreadsheet:
+  https://github.com/apache/poi/tree/trunk/test-data/spreadsheet - Apache License 2.0.
+  A copy of the license is in Fixtures/Spreadsheets/Apache-2.0.txt beside the fixtures.
+  openpyxl-protected.xls was created locally with openpyxl 3.1.5 (password secret, cell A1 = 123),
+  then exported to Excel 97 format with LibreOffice headless.

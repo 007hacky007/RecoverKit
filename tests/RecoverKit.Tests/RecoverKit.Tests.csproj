@@ -28,6 +28,8 @@
     <EmbeddedResource Include="Fixtures/android-v*.ab" />
     <EmbeddedResource Include="Fixtures/Access/*.bin" />
     <EmbeddedResource Include="Fixtures/Word/*" />
+    <EmbeddedResource Include="Fixtures/Spreadsheets/*.xlsx" />
+    <EmbeddedResource Include="Fixtures/Spreadsheets/*.xls" />
   </ItemGroup>
 
 </Project>

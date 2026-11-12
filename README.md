@@ -48,7 +48,7 @@ number at the end"), and it tests those combinations until it finds the right on
 | Kind of file | Examples |
 |---|---|
 | Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365 |
-| Word editing restrictions | Instant unrestricted copies of unencrypted .docx/.docm/.dotx and Word 97-2003 .doc; includes password to modify |
+| Word and Excel editing restrictions | Read-only, "password to modify", sheet and workbook protection removed from files that open without a password (.docx, .doc, .xlsx, .xls, .odt, .ods) |
 | PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Access databases | Access 97-2003 databases (.mdb): the password is shown instantly |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
@@ -200,6 +200,9 @@ quickest guesses.
   modify" can be removed from .docx, .doc and .odt files that open without a password. RecoverKit
   saves a separate copy and never changes the original.
 - **Android backups:** RecoverKit finds the backup password; it does not unpack the backup.
+- **Excel sheet and workbook protection:** RecoverKit saves a copy without the protection and
+  also shows a password that Excel accepts for old-style protection. Files that need a password to
+  open must be recovered first. VBA project passwords and .xlsb files are not supported yet.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

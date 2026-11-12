@@ -5,8 +5,8 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab;*.mdb;*.mde;*.accdb",
-        "MS Office documents|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
+        "All supported files|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xltx;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab;*.mdb;*.mde;*.accdb",
+        "MS Office documents|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xltx;*.xlsb;*.ppt;*.pptx;*.pptm",
         "Access databases|*.mdb;*.mde;*.accdb",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
@@ -40,11 +40,12 @@ public static class FormatDetector
             }
             else if (CompoundFile.IsCompoundFile(head))
             {
-                OfficeExtractor.Extract(new CompoundFile(s), d);
+                var cf = new CompoundFile(s);
+                if (!SpreadsheetProtection.TryExtractBiff(cf, d)) OfficeExtractor.Extract(cf, d);
             }
             else if (head.Length >= 4 && head[0] == 'P' && head[1] == 'K' && ZipExtractor.LooksLikeZip(s))
             {
-                ZipExtractor.Extract(s, d);
+                if (!SpreadsheetProtection.TryExtractZip(s, d)) ZipExtractor.Extract(s, d);
             }
             else if (head.Length >= 7 && head[0] == 'R' && head[1] == 'a' && head[2] == 'r' && head[3] == '!')
             {
