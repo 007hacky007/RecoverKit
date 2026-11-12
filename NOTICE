@@ -27,6 +27,12 @@ LZMA metadata decoder (built in)
   src/RecoverKit.Core/Formats/SevenZipLzma.cs adapts the LZMA1 decoder from Igor Pavlov's
   LZMA SDK 23.01 (https://www.7-zip.org/sdk.html), placed in the public domain.
 
+Access test fixtures (test data only)
+  tests/RecoverKit.Tests/Fixtures/Access/*.bin contain header-page excerpts from Jackcess
+  and Jackcess Encrypt, Apache License 2.0, https://github.com/jahlborn/jackcess and
+  https://github.com/jahlborn/jackcessencrypt. Sources and modifications are listed in that
+  folder's README.md; the upstream license and notice are included there.
+
 Intel CPU Runtime for OpenCL Applications (intel-opencl-rt) and oneAPI Threading
 Building Blocks (tbb), Windows only, optional, after the user accepts Intel's license
   https://pypi.org/project/intel-opencl-rt/ - Intel End User License Agreement.

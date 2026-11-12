@@ -5,8 +5,9 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab",
+        "All supported files|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab;*.mdb;*.mde;*.accdb",
         "MS Office documents|*.doc;*.docx;*.docm;*.xls;*.xlsx;*.xlsm;*.xlsb;*.ppt;*.pptx;*.pptm",
+        "Access databases|*.mdb;*.mde;*.accdb",
         "OpenDocument files|*.od?;*.sx?",
         "ZIP archives|*.zip;*.zipx",
         "RAR archives|*.rar",
@@ -33,7 +34,11 @@ public static class FormatDetector
             if (keePassKeyfile is not null && !KeePassExtractor.IsKeePass(head))
                 throw new UnsupportedFormatException("A KeePass keyfile can only be used with a KeePass database.");
 
-            if (CompoundFile.IsCompoundFile(head))
+            if (AccessExtractor.IsAccess(head))
+            {
+                AccessExtractor.Extract(s, d);
+            }
+            else if (CompoundFile.IsCompoundFile(head))
             {
                 OfficeExtractor.Extract(new CompoundFile(s), d);
             }
