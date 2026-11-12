@@ -30,8 +30,8 @@
 
 ## What it does
 
-RecoverKit does not "remove" a password. It finds the password by trying possible passwords,
-very quickly. You tell it what you remember about the password (for example "about 6
+For files that are properly encrypted, RecoverKit does not "remove" a password. It finds the
+password by trying possible passwords, very quickly. You tell it what you remember about the password (for example "about 6
 characters, lower case letters and digits" or "one of the words in this list, maybe with a
 number at the end"), and it tests those combinations until it finds the right one.
 
@@ -47,25 +47,34 @@ number at the end"), and it tests those combinations until it finds the right on
 
 | Kind of file | Examples |
 |---|---|
-| Microsoft Office documents | Word, Excel and PowerPoint, from Office 97 up to Microsoft 365; Word 6/95 and Excel 5/95 passwords shown instantly |
-| Word and Excel editing restrictions | Read-only, "password to modify", sheet and workbook protection removed from files that open without a password (.docx, .doc, .xlsx, .xls, .odt, .ods) |
-| PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones; printing and copying restrictions removed instantly |
-| Access databases | Access 97-2003 databases (.mdb): the password is shown instantly |
+| Microsoft Office documents | Word, Excel and PowerPoint, from Office 6/95 up to Microsoft 365 |
+| PDF documents | All standard PDF passwords, from old Acrobat files to current AES-256 ones |
 | Archives | ZIP (classic and WinZip AES), RAR 3 and RAR 5, 7-Zip (.7z) |
 | OpenDocument files | LibreOffice and OpenOffice documents |
-| OpenDocument text restrictions | Instant removal of protected sections and the read-only flag in unencrypted .odt files |
-| Encrypted disks | TrueCrypt and VeraCrypt volumes |
-| Phone backups | Encrypted Apple iPhone / iPad backups made with iTunes or Finder |
-| Android backups | Encrypted adb / Helium `.ab` backups, versions 1-5 |
-| Wi-Fi | WPA/WPA2 handshakes from your own network |
 | Password managers | KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx) databases, with an optional keyfile |
-| Cryptocurrency wallets | Ethereum keystore v3, Electrum, MetaMask vaults, Blockchain.com backups |
+| Cryptocurrency wallets | Ethereum keystore files, Electrum, MetaMask vaults, Blockchain.com wallet backups |
+| Encrypted disks | TrueCrypt and VeraCrypt volumes |
+| Phone backups | Encrypted iPhone / iPad backups (iTunes or Finder) and Android backups (.ab) |
+| Wi-Fi | WPA/WPA2 handshakes from your own network |
 
-Some older ZIP archives open in minutes whatever the password: those made by WinZip 8 or older,
-or by the Windows `zip.exe` that many scripts and tools still use, with five or more encrypted
-files. Their encryption has a known weakness (Stay's attack, 2001) that lets RecoverKit recover
-the archive's keys directly. It then saves a copy without a password and keeps looking for the
-password itself. This runs automatically and can be turned off in Preferences > Key search.
+### Opened instantly, no search needed
+
+Some protections are weak enough that RecoverKit undoes them right away. It shows the password or
+saves a copy without the protection; the original file is never changed.
+
+- **Old Word and Excel files:** passwords of Word 6/95, Excel 5/95 and Office 97-2003 files saved
+  with "XOR" protection.
+- **Excel files that open in Excel without a password:** Excel's built-in default password
+  ("VelvetSweatshop") and empty passwords.
+- **Editing restrictions:** Excel sheet and workbook protection, Word "read-only", "comments only",
+  "filling in forms" and "password to modify", and OpenDocument protected sections.
+- **PDF permissions:** printing and copying restrictions on PDFs that open without a password.
+- **Access databases:** passwords of Access 97-2003 databases (.mdb).
+- **Some older ZIP archives, within minutes:** archives made by WinZip 8 or older, or by the
+  Windows `zip.exe` that many scripts and tools still use, with five or more encrypted files.
+  A known weakness (Stay's attack, 2001) lets RecoverKit recover the archive's keys whatever the
+  password; it saves a copy without a password and keeps looking for the password itself. This
+  can be turned off in Preferences > Key search.
 
 Just open the file (or drag it onto the window). RecoverKit recognizes the format by itself.
 
@@ -107,10 +116,10 @@ More things it does:
   `Password1`, `PASSWORD` or `drowssap`. A rules editor shows a preview of the variations.
 - **Ready-made plans** that run several methods in a row, from quick guesses to longer searches.
 - **Works with any language.** Passwords with accents and non-Latin letters are supported.
-- **Unlocks very old Office and PDF R2 files for certain.** Files from Office 97-2003 and PDF
-  security handler revision 2 use weak 40-bit encryption, so RecoverKit can search every possible
-  key and always succeed (fast with a graphics card). R3 RC4-40 files support password search;
-  hashcat 7.1.2 has no guaranteed key-search mode for them.
+- **Unlocks very old Office and PDF files for certain.** Files from Office 97-2003 and early PDF
+  versions use weak 40-bit encryption, so RecoverKit can search every possible key and always
+  succeed (fast with a graphics card). Some later PDFs with 40-bit encryption only support a
+  password search.
 - **Extra tools:** create your own word lists from any search, and prepare Wi-Fi lookup tables.
 - **Check for updates** from the Help menu (only when you click it).
 
