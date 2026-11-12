@@ -679,8 +679,10 @@ public sealed partial class MainWindow : Window
         DebugLog.IncludeHashes = _settings.DebugLogIncludeHashes;
         DebugLog.RegisterHashes(det.Target?.HashLines);
         if (det.Target?.HashLines is { Length: > 0 } hl)
-            DebugLog.Info("  extracted hash: " + (hl.Length > 4000 ? hl[..4000] + $"... ({hl.Length} chars)" : hl) +
-                          (_settings.DebugLogIncludeHashes ? "" : "  (enable \"Include extracted hashes\" in Preferences > Other to log it)"));
+            // Only the full hash is masked by the log, so a truncated one must never be written unless asked for.
+            DebugLog.Info(_settings.DebugLogIncludeHashes
+                ? "  extracted hash: " + (hl.Length > 4000 ? hl[..4000] + $"... ({hl.Length} chars)" : hl)
+                : $"  extracted hash: <{hl.Length} chars>  (enable \"Include extracted hashes\" in Preferences > Other to log it)");
         Title = $"{AppName} - {Path.GetFileName(det.FilePath)}";
         ClearInfo();
         ResetStatus();
