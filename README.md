@@ -213,6 +213,10 @@ quickest guesses.
 - Exodus `seed.seco` files are recognized but not extracted: the SECO binary layout has not
   been verified against mode 28200. Use an independently verified extractor and Open As for hashes.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
+- Encrypted Office files are checked for an empty password; Excel workbooks are also checked
+  for the built-in `VelvetSweatshop` password. Matching OOXML files can be saved as decrypted
+  copies. Legacy Word/Excel RC4 files report the password only; saving a decrypted copy is
+  not supported. Agile checks above 1,000,000 iterations are skipped during detection.
 
 ## For developers
 

@@ -14,6 +14,8 @@ public class OfficeKnownPasswordsTests
     [InlineData("agile-empty.xlsx", "", 9600, true)]
     [InlineData("agile-sha1-default.xlsx", "VelvetSweatshop", 9500, true)]
     [InlineData("agile-sha1-empty.xlsx", "", 9500, true)]
+    [InlineData("agile-sha1-dashed.xlsx", "VelvetSweatshop", 9500, true)]
+    [InlineData("agile-certificate-first.xlsx", "VelvetSweatshop", 9600, true)]
     [InlineData("standard-default.xlsx", "VelvetSweatshop", 9400, true)]
     [InlineData("standard-empty.xlsx", "", 9400, true)]
     [InlineData("lo-default.xls", "VelvetSweatshop", 9700, false)]
@@ -55,6 +57,11 @@ public class OfficeKnownPasswordsTests
     [InlineData("agile-empty.xlsx")]
     [InlineData("agile-sha1-default.xlsx")]
     [InlineData("agile-sha1-empty.xlsx")]
+    [InlineData("agile-sha1-dashed.xlsx")]
+    [InlineData("agile-certificate-first.xlsx")]
+    [InlineData("agile192-default.xlsx")]
+    [InlineData("agile-sha256-default.xlsx")]
+    [InlineData("agile-sha256-empty.xlsx")]
     [InlineData("standard-default.xlsx")]
     [InlineData("standard-empty.xlsx")]
     public async Task SavesOriginalPackageAtomically(string name)
@@ -92,6 +99,19 @@ public class OfficeKnownPasswordsTests
         var d = Extract(Fixture("cryptoapi-default.xls"));
         Assert.StartsWith("$oldoffice$4*", d.Target!.HashLines);
         Assert.Null(Office2003Kernel.TryParse(d.Target.HashLines));
+    }
+
+    [Theory]
+    [InlineData("agile192-default.xlsx", "VelvetSweatshop")]
+    [InlineData("agile-sha256-default.xlsx", "VelvetSweatshop")]
+    [InlineData("agile-sha256-empty.xlsx", "")]
+    public void UnlocksUnsupportedHashcatVariants(string name, string password)
+    {
+        using var stream = new MemoryStream(Fixture(name));
+        var d = new Detection { FilePath = "test.bin" };
+        Assert.Throws<UnsupportedFormatException>(() => OfficeExtractor.Extract(new CompoundFile(stream), d));
+        Assert.Null(d.Target);
+        Assert.Equal(password, Assert.Single(d.Unlocks).Password);
     }
 
     [Theory]
@@ -149,6 +169,32 @@ public class OfficeKnownPasswordsTests
         OfficeExtractor.Extract(new CompoundFile(stream), d);
         Assert.Single(d.Unlocks);
         Assert.True(stream.BytesRead < 32 * 1024);
+    }
+
+    [Theory]
+    [InlineData("standard-default.xlsx", 8)]
+    [InlineData("standard-default.xlsx", 114)]
+    [InlineData("agile-default.xlsx", 8)]
+    [InlineData("agile-default.xlsx", 200)]
+    public void RejectsTruncatedEncryptionInfo(string name, int length)
+    {
+        byte[] bytes = Fixture(name);
+        int entry = bytes.AsSpan().IndexOf(Encoding.Unicode.GetBytes("EncryptionInfo\0"));
+        Assert.True(entry >= 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(entry + 120), (uint)length);
+        Assert.Throws<FormatException>(() => Extract(bytes));
+    }
+
+    [Fact]
+    public void RejectsOverflowingSpinCount()
+    {
+        var bytes = ReplaceInfo("agile-default.xlsx", info =>
+        {
+            string text = Encoding.UTF8.GetString(info).Replace("spinCount=\"100000\"", "spinCount=\"9999999999\"")
+                .Replace("\n    ", "\n");
+            return Encoding.UTF8.GetBytes(text.PadRight(info.Length, '\0'));
+        });
+        Assert.Throws<FormatException>(() => Extract(bytes));
     }
 
     [Fact]

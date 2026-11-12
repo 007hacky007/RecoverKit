@@ -278,6 +278,20 @@ notes are taken from it, and the release job fails if the section is missing.
 
 ## Technical notes
 
+- `OfficeKnownPasswords` checks default/empty passwords using only encryption verifiers;
+  detection never reads `EncryptedPackage`. Standard and Agile reuse `OfficeDecryptor`'s
+  KDF and AES routines; Agile derives its iterated password hash once per candidate for both
+  verifier blocks. The KDF reuses buffers and hash state, and detection skips Agile spin counts
+  above 1,000,000 to bound work on untrusted headers (reported in detection info). OOXML unlocks
+  decrypt to a temporary file beside the destination and rename it atomically. Legacy RC4
+  unlocks report the password only: BIFF record exclusions, block rekeying and OLE stream
+  rewriting need a separate decryptor. CryptoAPI 128-bit hashes use type 4 and hashcat, since
+  the built-in CPU kernel implements only 40-bit keys. Hashcat does not support all Agile
+  key/hash combinations; their default/empty password unlocks still work without an attack
+  target. Fixtures use msoffcrypto-tool, LibreOffice and Apache POI 5.4.1 (sources in NOTICE).
+  Extraction was compared with `office2john.py` and hashcat 7.1.2 modules 9400-9800. Saved
+  `.xlsx`, `.xlsm` and `.xlsb` packages were reopened through LibreOffice headless without
+  supplying a password.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
   and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with

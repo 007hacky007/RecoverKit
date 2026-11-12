@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml;
 using System.Xml.Linq;
 using RecoverKit.Core.Native.Kernels;
 using RecoverKit.Core.Native.Simd;
@@ -13,23 +14,37 @@ internal static class OfficeKnownPasswords
     private static readonly byte[] VerifierInputBlock = [0xfe, 0xa7, 0xd2, 0x76, 0x3b, 0x4b, 0x9e, 0x79];
     private static readonly byte[] VerifierHashBlock = [0xd7, 0xaa, 0x0f, 0x6d, 0x30, 0x61, 0x34, 0x4e];
 
+    internal static XElement AgileKey(byte[] info)
+    {
+        try
+        {
+            var doc = XDocument.Parse(Encoding.UTF8.GetString(info, 8, info.Length - 8).TrimEnd('\0').Trim('\uFEFF'));
+            return doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "encryptedKey" && e.Attribute("spinCount") is not null)
+                ?? throw new FormatException("Agile encryption descriptor has no password key encryptor.");
+        }
+        catch (XmlException ex) { throw new FormatException("Invalid Agile encryption descriptor.", ex); }
+    }
+
+    internal static int Number(string value) => int.TryParse(value, out int result)
+        ? result : throw new FormatException("Invalid integer in Office encryption header.");
+
     internal static void CheckOoxml(byte[] info, Detection d)
     {
         Func<string, bool> verify;
         if (Bin.U16(info, 0) == 4 && Bin.U16(info, 2) == 4)
         {
-            var doc = XDocument.Parse(Encoding.UTF8.GetString(info, 8, info.Length - 8).TrimEnd('\0').Trim('\uFEFF'));
-            var enc = doc.Descendants().First(e => e.Name.LocalName == "encryptedKey" && e.Attribute("spinCount") is not null);
+            var enc = AgileKey(info);
             string A(string name) => enc.Attribute(name)?.Value ?? throw new FormatException($"Missing {name} in EncryptionInfo.");
-            int spin = int.Parse(A("spinCount")), bits = int.Parse(A("keyBits"));
-            string algorithm = A("hashAlgorithm").ToUpperInvariant();
+            int spin = Number(A("spinCount")), bits = Number(A("keyBits"));
+            string algorithm = OfficeDecryptor.HashName(A("hashAlgorithm"));
             byte[] salt = Convert.FromBase64String(A("saltValue"));
             byte[] input = Convert.FromBase64String(A("encryptedVerifierHashInput"));
             byte[] expected = Convert.FromBase64String(A("encryptedVerifierHashValue"));
-            int hashSize = algorithm == "SHA1" ? 20 : 64;
+            int hashSize = algorithm switch { "SHA1" => 20, "SHA256" => 32, "SHA384" => 48, "SHA512" => 64, _ => 0 };
+            if (hashSize == 0 || !A("cipherAlgorithm").Equals("AES", StringComparison.OrdinalIgnoreCase)) return;
             if (spin < 0 || bits is not (128 or 192 or 256) || salt.Length != 16 || input.Length != 16 ||
-                expected.Length != (hashSize + 15) / 16 * 16 || int.Parse(A("blockSize")) != 16 ||
-                int.Parse(A("saltSize")) != 16 || int.Parse(A("hashSize")) != hashSize)
+                expected.Length != (hashSize + 15) / 16 * 16 || Number(A("blockSize")) != 16 ||
+                Number(A("saltSize")) != 16 || Number(A("hashSize")) != hashSize)
                 throw new FormatException("Invalid Agile password verifier parameters.");
             if (!A("cipherChaining").Equals("ChainingModeCBC", StringComparison.OrdinalIgnoreCase)) return;
             // shortcut: bound attacker-controlled KDF work during detection; use an attack for higher counts.

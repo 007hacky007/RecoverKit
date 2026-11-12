@@ -43,7 +43,7 @@ public static class OfficeDecryptor
         var doc = XDocument.Parse(xml);
         XElement El(string local) => doc.Descendants().First(e => e.Name.LocalName == local);
         var keyData = El("keyData");
-        var enc = El("encryptedKey");
+        var enc = OfficeKnownPasswords.AgileKey(info);
         string A(XElement e, string n) => e.Attribute(n)?.Value ?? throw new FormatException($"Missing {n} in EncryptionInfo.");
 
         string hash = A(enc, "hashAlgorithm");
@@ -62,6 +62,7 @@ public static class OfficeDecryptor
         byte[] h = PasswordHash(hash, pSalt, password, spin);
         byte[] keyBytes = Fit(Hash(hash, h, BlockEncryptedKeyValue), keyBits / 8);
         byte[] secretKey = AesCbcNoPad(encKeyValue, keyBytes, Fit(pSalt, 16), decrypt: true);
+        secretKey = Fit(secretKey, int.Parse(A(keyData, "keyBits")) / 8);
 
         // Decrypt the package in 4096-byte segments, each with IV = Hash(keyDataSalt || segmentIndex).
         long total = (long)Bin.U64(package, 0);
@@ -120,7 +121,7 @@ public static class OfficeDecryptor
     // Reuse the hash state and buffers: detection runs this once per candidate, without package I/O.
     internal static byte[] PasswordHash(string algorithm, byte[] salt, string password, int spin)
     {
-        using var hash = IncrementalHash.CreateHash(new HashAlgorithmName(algorithm.ToUpperInvariant()));
+        using var hash = IncrementalHash.CreateHash(new HashAlgorithmName(HashName(algorithm)));
         hash.AppendData(salt);
         hash.AppendData(Encoding.Unicode.GetBytes(password));
         byte[] value = hash.GetHashAndReset();
@@ -137,9 +138,11 @@ public static class OfficeDecryptor
 
     // ---------------------------------------------------------------- primitives
 
+    internal static string HashName(string algorithm) => algorithm.Replace("-", "").ToUpperInvariant();
+
     internal static byte[] Hash(string alg, params byte[][] parts)
     {
-        using HashAlgorithm h = alg.ToUpperInvariant() switch
+        using HashAlgorithm h = HashName(alg) switch
         {
             "SHA1" => SHA1.Create(),
             "SHA256" => SHA256.Create(),
