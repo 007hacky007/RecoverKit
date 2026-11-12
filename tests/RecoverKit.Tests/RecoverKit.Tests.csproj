@@ -7,8 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <!-- The Stay ZIP attack tests take many minutes. They run only with -p:RunStayTests=true
-         (CI does that when the attack's code changes, see .github/workflows/stay-tests.yml). -->
-    <VSTestTestCaseFilter Condition="'$(RunStayTests)' != 'true'">Category!=Stay</VSTestTestCaseFilter>
+         (CI does that when the attack's code changes, see .github/workflows/stay-tests.yml).
+         Slow tests run a real hashcat (hybrid CPU + GPU numbering); include them with -p:RunSlowTests=true. -->
+    <VSTestTestCaseFilter Condition="'$(RunStayTests)' != 'true' and '$(RunSlowTests)' != 'true'">Category!=Stay&amp;Category!=Slow</VSTestTestCaseFilter>
+    <VSTestTestCaseFilter Condition="'$(RunStayTests)' != 'true' and '$(RunSlowTests)' == 'true'">Category!=Stay</VSTestTestCaseFilter>
   </PropertyGroup>
 
   <ItemGroup>
