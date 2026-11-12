@@ -90,6 +90,33 @@ Reproduce the built-in measurement:
 recoverkit-cli bench-native --mode 29331 --threads 8 --seconds 12
 ```
 
+## ZIP: Stay fast key search
+
+For ZipCrypto archives whose encryption headers come from Microsoft Visual C `rand()`,
+Michael Stay's 2001 attack ("ZIP Attacks with Reduced Known Plaintext", FSE 2001) recovers the
+three internal cipher keys without guessing the password: about 2^39 cipher-byte operations,
+independent of the password's length. RecoverKit then writes a password-free decrypted copy and
+continues with the normal password attacks. It runs as the first step of the default ZIP scenario;
+incompatible archives are rejected within seconds.
+
+| Machine | Archive | Time to keys |
+|---|---|---:|
+| Apple M1 Pro, 10 cores | 5 encrypted files, WinZip-style MSVC headers (test archive) | 42 s |
+
+Requirements: ZipCrypto (not AES), at least 5 encrypted files added in the same run of the
+zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attack (not implemented).
+
+| Software | Vulnerable |
+|---|---|
+| WinZip 8.0 and earlier (until about 2001) | Yes (WinZip 8.0's variant without the LCG increment is handled) |
+| WinZip 8.1 and later | Believed fixed; WinZip 9 (2003) also added AES |
+| Info-ZIP `zip.exe` built for Windows (MSVC) | Yes, never fixed (last release Zip 3.0, 2008); still bundled with many scripts and tools |
+| Other Info-ZIP-based Windows tools (for example NetZip) | Yes |
+| Info-ZIP on Linux and macOS | No (different `rand()`; reported as not compatible) |
+| 7-Zip, PKZIP | No (different, stronger generators) |
+| WinRAR (ZIP output) | Not known to be vulnerable; RAR archives are unrelated |
+| Windows Explorer (XP-era password option) | Unknown, treated as not compatible |
+
 ## When the built-in engine runs
 
 `NativeRunner.Plan()` picks it only when all of these hold:
