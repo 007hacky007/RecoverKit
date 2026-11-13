@@ -17,8 +17,8 @@ Original GUI report (before the Whirlpool optimization): [benchmarks/xeon-e5-262
 | TrueCrypt Whirlpool | 2,806 | **4,038** | built-in | **1.44x** |
 | Word 2007 | 4,784 | **6,691** | hashcat | 1.40x |
 | Word 2003 (RC4/SHA-1) | 16.36 M | **21.58 M** | built-in | 1.32x |
+| RAR 5 | 1,586 | **2,089** | built-in | 1.32x |
 | PowerPoint 2013+ | 403 | **518** | hashcat | 1.29x |
-| RAR 5 | 1,586 | **2,028** | hashcat | 1.28x |
 | RAR 3 (-hp) | 3,802 | **4,799** | built-in | 1.26x |
 | Word 97 (RC4/MD5) | 13.97 M | **17.27 M** | built-in | 1.24x |
 | PDF R3 (RC4) | 1.128 M | **1.293 M** | built-in | 1.15x |
@@ -61,8 +61,11 @@ built-in engine exists:
 | RAR 3 -hp | 12500 | 240 (465 with -O) | 4,799 | 10.3x vs -O |
 | PDF R6 | 10700 | 2,882 (3,149 with -O) | 19,045 | 6.0x vs -O |
 | TrueCrypt Whirlpool | 29331 | 1,723 | 4,038 | 2.34x |
+| RAR 5 | 13000 | 2,028 | 2,089 | 1.03x |
 
 On every other format hashcat on CPU already beats the commercial result, so those stay on hashcat.
+RAR 5 is the exception: hashcat's CPU result was already ahead, and the built-in kernel matches it
+on this CPU (see below); it exists to run on the CPU next to hashcat on the GPU.
 
 ## Whirlpool follow-up (same winbench VM)
 
@@ -121,8 +124,8 @@ zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attac
 
 `NativeRunner.Plan()` and `HybridRunner.Plan()` use it when all of these hold:
 
-- the format has a built-in kernel (ZIP, Word/Excel 97, Word/Excel 2003, PDF R2-R4, PDF R6, RAR 3 -hp, TrueCrypt Whirlpool with a single cipher);
-- for PDF R6 and the fast RAR 3 path, the native library is present and the CPU has AVX2 (PDF R6 also AES-NI) or NEON;
+- the format has a built-in kernel (ZIP, Word/Excel 97, Word/Excel 2003, PDF R2-R4, PDF R6, RAR 3 -hp, RAR 5, TrueCrypt Whirlpool with a single cipher);
+- for PDF R6, RAR 5 and the fast RAR 3 path, the native library is present and the CPU has AVX2 (PDF R6 also AES-NI) or NEON;
 - the attack is brute-force or mask (`-a 3`), not dictionary or stdin generators;
 - no extra hashcat arguments are configured (they can change candidate interpretation);
 - for TrueCrypt Whirlpool, the native library is present;
@@ -167,6 +170,48 @@ the engine fed the GPU at 2,500/s instead of 9,600/s. On macOS neither is lowere
 Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without `--no-hybrid`, and
 `--strategy CpuOnly`; the status lines list each device's speed.
 
+## RAR 5 (PBKDF2-HMAC-SHA256)
+
+RAR 5 costs 32,800 PBKDF2-HMAC-SHA256 iterations per password (2^15 for the key plus 32 for the
+password check value), each two SHA-256 compressions. The built-in kernel runs one candidate per
+lane: 16 lanes with AVX-512, 8 with AVX2, 8 interleaved streams of the ARMv8 SHA-256 instructions
+on Apple silicon (see DEVELOPERS.md, Native kernels).
+
+| Machine | Path | Built-in, 1 thread | Built-in, all threads | hashcat |
+|---|---|---:|---:|---:|
+| Xeon E5-2620 v4 VM, 8 vCPU | AVX2 | 276/s | 2,089/s (2,110, 2,082, 2,089) | 2,028/s (CPU, OpenCL) |
+| Apple M1 Pro, 8P + 2E | ARMv8 SHA-256 | 730/s (NEON 308/s) | 6,134/s (10 threads) | GPU: 10,600-11,000/s live, 9,028/s `-b` |
+
+Windows VM: three 12-second `bench-native --mode 13000 --threads 8` runs, median 2,089/s, 3 %
+above hashcat's CPU figure from the same VM. On this Broadwell CPU every vector shift and rotate
+goes through one execution port, and SHA-256 needs about 1,200 of them per 8-lane compression; both
+programs hit that limit, so there is little to gain here. A CPU-only attack on a RAR 5 test archive
+on the VM found the password.
+
+Apple M1 Pro, hybrid (`crack <file> --brute sd --min 1 --max 4`, fresh `RECOVERKIT_HOME`, 9 CPU
+threads next to hashcat): during length 4 the status showed 12,500-13,600/s, GPU 7,500-7,900 and
+CPU 5,000-5,800. The same attack with `--no-hybrid` ran length 4 at 10,600-11,000/s, so hybrid is
+about 1.2 times GPU only on this machine: the integrated GPU loses about 30 % to the busy CPU (one
+power budget), and the CPU more than makes up for it. Lengths 1-3 stayed on the CPU (less than two
+hashcat start-ups of work); with GPU only, hashcat started once per length and spent most of the
+run on lengths 1-2. Two test archives (copies of r5.rar with the check value replaced for a
+4-character password) checked both shares: `ab1z` (last character at the top of hashcat's order,
+the CPU's first batch) was found by the built-in engine after 31 s, `ab10` (the bottom, hashcat's
+first range) by hashcat after 137 s; GPU only found `ab10` after 448 s. Another program used the
+GPU at times during these runs. Unlike RAR 3, the CPU here stays above a quarter of the integrated
+GPU's speed, so both keep running. On a discrete GPU the CPU's share should add almost fully.
+
+Estimate for a Ryzen 7 9800X3D (8 Zen 5 cores, full-width AVX-512) next to an RTX 4060, not
+measured: the AVX-512 loop is about 3,250 vector operations per iteration for 16 lanes (1,112
+VPROLD, 812 VPTERNLOGD, 1,154 VPADDD, 172 shifts). With Zen 5's four vector ALUs and rotates on two
+of them that is roughly 800-850 cycles, about 53 cycles per candidate and iteration, or 1.7 million
+cycles per candidate. At about 5 GHz all-core that is 2,900/s per core and, with one thread left to
+hashcat's GPU thread, about 20,000/s for the CPU (SMT adds little to a loop that already fills the
+vector units). If the RTX 4060 gives hashcat on the order of 80,000-100,000/s for mode 13000, the
+CPU adds 20-25 %, which would turn the reported 7 % deficit against the commercial CPU + GPU
+result into a lead of 10-15 %. The AVX-512 path was compiled and inspected but not run on AVX-512
+hardware for this work.
+
 ## Findings
 
 - **ZipCrypto.** AVX2, three interleaved vectors per thread, CRC-32 table lookups done as
@@ -188,6 +233,9 @@ Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without 
   group has eight ready. The AES blocks of eight independent CBC chains are interleaved (AES-NI
   latency hidden) and fed straight into an 8-lane SHA-256 or two 4-lane SHA-384/512 compressions,
   without storing E. hashcat's OpenCL kernel loses most of its vector width to that divergence.
+- **RAR 5.** Multi-lane PBKDF2-HMAC-SHA256 from one generic C source per vector width; the first
+  SHA-256 round of the fixed HMAC states and the constant padding words are folded out of the
+  loop. On arm64 the SHA-256 instructions beat the NEON lanes 2.4 times.
 - **TrueCrypt Whirlpool.** Native scalar 64-bit table rounds, with the inner and outer HMAC
   states and their Whirlpool round keys cached across all 1,000 PBKDF2 iterations. Bouncy Castle
   provides independent reference derivation and AES, Serpent and Twofish checks. Candidates must
