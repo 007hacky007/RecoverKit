@@ -227,6 +227,35 @@ stayed empty and the built-in engine ran alone. Devices the user unchecks are re
 name and position (`Settings.DisabledDeviceKeys`), not only by hashcat's id, which shifts when a
 driver adds or removes a backend. `Memory.Unified` marks integrated GPUs.
 
+## Native kernels
+
+`native/rknative.c` is plain C with intrinsics; `build.sh` compiles it with zig for win-x64 and
+osx-arm64. Every vector path has a per-function target attribute and is chosen at run time from
+`rk_features()` (cpuid / xgetbv on x64, sysctl on macOS), so the library loads on any CPU of the
+architecture. `rk_set_features(mask)` (`RkNative.LimitFeatures`) turns paths off for tests and
+benchmarks. `RK_API_VERSION` must match `RkNative.RequiredVersion`; bump both when an export
+changes, and add a bit to both feature enums for a new instruction set (AVX-512 is bit 512: CPUID
+leaf 7 AVX512F plus the opmask and ZMM state enabled in XCR0).
+
+PBKDF2-HMAC-SHA256 (`pbkdf2_sha256()`, for RAR 5 now and meant to be reused by later kernels):
+per candidate, scalar code computes the HMAC inner and outer states (key xor ipad / opad, keys
+over 64 bytes hashed first) and U1. The remaining iterations are two SHA-256 compressions of a
+32-byte message, one lane per candidate. `native/sha256_lanes.h` holds that loop once, in generic
+clang vector arithmetic, and is included per width: 16 lanes with AVX-512 (the rotates become
+VPROLD and the boolean trees VPTERNLOGD), 8 with AVX2, 8 on NEON register pairs, and 1 (scalar
+fallback). The first round of each compression depends on the message only through W0, so it is
+computed once per call; message words 8-15 are constant padding and fold into the schedule. On
+arm64 with the SHA-256 instructions, 8 interleaved streams of SHA256H/H2 are used instead
+(2.4 times the NEON path on an M1 Pro, 730 against 308 candidates per second per core). The
+`rk_pbkdf2_sha256` export takes candidates of different lengths and any salt, iteration count
+and output length; `Pbkdf2Sha256Tests` checks it against .NET on every path the CPU has.
+
+RAR 5 (`Rar5Kernel`, mode 13000): the hash line is `$rar5$16$salt$lg2$iv$8$check`. WinRAR's key
+is PBKDF2 with 2^lg2 iterations; the password check value continues to 2^lg2 + 32 iterations and
+folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13000 kernel. The
+iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's PBKDF2. The kernel
+is offered when the library has a vector path (AVX2 or NEON).
+
 ## Hybrid CPU + GPU
 
 With a GPU, brute-force and mask attacks on formats with a built-in kernel run on both engines at
@@ -541,7 +570,7 @@ notes are taken from it, and the release job fails if the section is missing.
   and entries depending on earlier solid files are skipped. The first file in a solid archive
   can be used. The pinned hashcat version
   accepts at most 327,520 encrypted bytes and 655,360 unpacked bytes per selected file.
-  Data-only recovery uses hashcat on both CPU and GPU; the built-in RAR kernel handles `-hp` only.
+  Data-only recovery uses hashcat on both CPU and GPU; the built-in RAR 3 kernel handles `-hp` only.
   Only the selected file's password is recovered; other entries can have different passwords.
 - The per-user CPU runtime is not used when RecoverKit runs as administrator: the OpenCL loader
   ignores per-process driver lists in elevated processes on purpose, and RecoverKit does not register

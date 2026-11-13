@@ -28,6 +28,9 @@ All notable changes to RecoverKit. Downloads are on the
   every GPU and the built-in CPU engine at the same time, on separate parts of the passwords, with
   rebalancing and exact resume (on by default, Preferences > Performance, CLI `--no-hybrid`).
   Optional: hashcat's CPU device next to the GPUs for other formats (`--hashcat-cpu`).
+- Built-in CPU engine for RAR 5 archives: brute-force and mask attacks run on the CPU (16 passwords
+  at once with AVX-512, 8 with AVX2 or on Apple silicon), and next to hashcat on the GPU in hybrid
+  runs. On an Apple M1 Pro the CPU adds about 5,800 passwords per second to the GPU's 7,800.
 
 ### Fixed
 - "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP
