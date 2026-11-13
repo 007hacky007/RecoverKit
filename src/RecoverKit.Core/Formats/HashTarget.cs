@@ -33,6 +33,9 @@ public sealed class HashTarget
     /// <summary>Classic ZipCrypto entries (stored headers) for Stay's header-RNG attack, when applicable.</summary>
     public ZipStayTarget? StayZip { get; set; }
 
+    /// <summary>The archive entry used for full confirmation when the GPU receives only a prefix.</summary>
+    public ZipPartialTarget? ZipPartial { get; init; }
+
     /// <summary>
     /// A second check for candidates that passed the hash: a password is reported (or taken from the
     /// password cache) only when this also returns true for its bytes. Set for ZIP archives whose other

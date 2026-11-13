@@ -69,6 +69,12 @@ public static class ZipExtractor
             d.Add("Also checked against", $"{confirmer.Entries} other encrypted file(s)" +
                   (confirmer.FullChecks < confirmer.Entries ? $" ({confirmer.FullChecks} with their whole data)" : ""));
         }
+        if (d.Target.ZipPartial is { } partial)
+        {
+            var kernel = Native.Kernels.ZipCryptoKernel.TryParse(d.Target.HashLines, partial)
+                ?? throw new FormatException("The ZIP entry cannot be checked from the archive.");
+            d.Target.ConfirmPassword = password => (confirmer?.Confirm(password) ?? true) && kernel.Verify(password);
+        }
         d.Target.StayZip = CollectStayTarget(s, enc, delta);
     }
 
@@ -94,6 +100,8 @@ public static class ZipExtractor
     }
 
     private const long HashcatMaxData = 320 * 1024;
+    // Crosses at least three 65535-byte stored deflate blocks; shorter prefixes admit too many header survivors.
+    private const int PartialPrefixLength = 256 * 1024;
 
     // Limits for the confirmation entries: how many, and how much data is kept for full checks.
     private const int MaxConfirmEntries = 16;
@@ -155,7 +163,7 @@ public static class ZipExtractor
                 entries.Add(new ZipStayEntry
                 {
                     Name = e.Name,
-                    StoredHeader = ReadEntryData(s, e, delta)[..12],
+                    StoredHeader = Bin.ReadAt(s, EntryDataOffset(s, e, delta), 12),
                     Crc = e.Crc,
                     Flags = e.Flags,
                     Method = e.Method,
@@ -199,7 +207,10 @@ public static class ZipExtractor
 
     private static HashTarget Pkzip(Stream s, ZipEntry e, long delta, Detection d, string? notes)
     {
-        var data = ReadEntryData(s, e, delta);
+        bool partial = e.CompSize > HashcatMaxData;
+        long offset = EntryDataOffset(s, e, delta);
+        if (offset < 0 || e.CompSize > s.Length - offset) throw new FormatException("ZIP entry is truncated.");
+        var data = partial ? Bin.ReadAt(s, offset, PartialPrefixLength) : ReadEntryData(s, e, delta);
         int mode = e.Method == 8 ? 17200 : 17210;
         d.TypeName = "ZIP archive (ZipCrypto)";
         d.Add("Attacked entry", $"{e.Name} ({e.CompSize:N0} bytes, {(e.Method == 8 ? "deflate" : "stored")})");
@@ -209,20 +220,28 @@ public static class ZipExtractor
             FormatName = "ZIP archive (ZipCrypto)",
             Protection = "ZipCrypto (PKZIP 2.0)",
             Modes = [mode],
-            HashLines = PkzipLine(e, data),
+            HashLines = PkzipLine(e, data, partial),
             Speed = SpeedClass.VeryFast,
-            Notes = notes,
+            ZipPartial = partial ? new(d.FilePath, offset, e.CompSize, e.UncompSize, e.Crc, e.Method) : null,
+            Notes = partial
+                ? e.Method == 0
+                    ? "Only the beginning of the file fits the GPU check; this uncompressed file uses the CPU to avoid missing the password."
+                    : "Only the beginning of the file is given to the GPU; passwords are checked against the whole file."
+                : notes,
         };
     }
 
-    /// <summary>hashcat's $pkzip2$ line for one entry (one check byte, full data).</summary>
-    private static string PkzipLine(ZipEntry e, byte[] data)
+    /// <summary>hashcat's $pkzip2$ line for one entry, with full data or a bounded prefix.</summary>
+    private static string PkzipLine(ZipEntry e, byte[] data, bool partial = false)
     {
         int checksumFromCrc = (int)(e.Crc >> 16);
         // The header's check byte is the CRC's high byte, or the modification time's high byte when
         // the entry uses a data descriptor (flag bit 3). Emitting the time checksum only in that case
         // lets hashcat and the built-in engine test one byte instead of two (half the false positives).
         int checksumFromTime = (e.Flags & 8) != 0 ? e.ModTime : checksumFromCrc;
+        if (partial)
+            return string.Join('*', "$pkzip2$1", "1", "1", "0", e.Method.ToString(), data.Length.ToString("x"),
+                checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
         return string.Join('*',
             "$pkzip2$1", "1", "2", "0",
             e.CompSize.ToString("x"), e.UncompSize.ToString("x"), e.Crc.ToString("x8"),

@@ -46,6 +46,12 @@ All notable changes to RecoverKit. Downloads are on the
   hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ### Fixed
+- Large classic ZIP entries now use a bounded GPU prefix and streamed whole-file password checks.
+  Uncompressed large entries and installations without the ZIP GPU kernels use the built-in CPU engine.
+- Optional HIP/CUDA startup advice no longer obscures hashcat's actual failure; NVIDIA OpenCL fallback
+  points to the CUDA compiler download in Tools.
+- GPU runtime failures resume the current attack from its checkpoint, with up to three retries
+  without progress, including the GPU side of hybrid attacks.
 - Resumed hashcat attacks keep their original optimized-kernel choice, even after Preferences change.
 - Optimized kernels use hashcat's reported limit for each mode and attack, avoiding skipped long masks.
   Unknown limits, dictionaries and rule attacks use pure kernels; benchmarks share the same decision.

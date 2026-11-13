@@ -227,6 +227,14 @@ quickest guesses.
 Building from source, the command-line tool and the scenario file format are described in
 [docs/DEVELOPERS.md](docs/DEVELOPERS.md).
 
+Classic ZIP archives with large encrypted files use a prefix on the GPU and check each hit against
+the whole file. Large uncompressed entries use the CPU because their short GPU check can hide the
+real password among wrong matches. Without RecoverKit's ZIP GPU kernels, large entries also use
+the CPU; this fallback supports brute-force, masks and plain dictionaries, without hashcat rules
+or extra options. Enable the built-in CPU engine in Preferences for these attacks.
+Stopping waits for the current whole-file password check to finish; for very large files this can
+take longer than a normal status update.
+
 The native ZipCrypto CPU paths are measured on Apple silicon (ARM CRC and NEON). Native AVX2
 and AVX-512 are experimental, compiled but unexecuted here; x86 keeps managed search by default.
 `bench-native` includes a native comparison row for remote measurements. See the
