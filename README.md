@@ -156,6 +156,11 @@ On a PC without measurements, a longer attack can run a short automatic calibrat
 **Preferences > Performance** shows the profile, with **Reset**, **Run detailed test**, and
 **Measure the fastest method automatically**. Your explicit settings take priority.
 
+The automatic check measures CPU paths and worker counts. Run the detailed test to compare GPU
+backends and finite CPU/GPU/hybrid jobs. Whole-job engine comparisons currently cover RAR 5 and
+classic stored ZIP. Other formats keep their existing engine strategy. Temperature and power
+limits are respected; some GPU comparisons are skipped when those limits cannot be enforced.
+
 
 ## Getting started
 

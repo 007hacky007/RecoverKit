@@ -47,6 +47,18 @@ require correctness and repeated measurements with at least a 5% margin; explici
 win. CPU and GPU fingerprints allow driver changes to invalidate GPU choices without discarding
 CPU path measurements. Preferences exposes automatic calibration and profile reset.
 
+Automatic calibration currently measures CPU variants and worker counts, with a six-second budget,
+only for masks of up to ten characters whose estimated duration is at least twelve seconds. It
+keeps the engine strategy until a detailed finite comparison is available. Detailed whole-job
+engine comparisons cover RAR 5 and stored ZipCrypto; other formats retain their existing engine
+strategy. GPU backend choices are measured per physical device, never by adding aliases.
+ZIP GPU source variants are applied when a single physical GPU runs the job; a mixed-device
+process keeps the replacement default because it shares one kernel source tree and kernel flag.
+If a temperature or duty guard is active, the raw hashcat benchmark and ZIP comparison are skipped;
+the finite jobs use the normal guarded runner. A requested power cap must already be active.
+All skipped or unavailable cases remain visible in the report. Native CPU checks and timings
+run in short-lived child processes; a native fault is recorded and remaining steps continue.
+
 ## Building
 
 Requires the .NET 10 SDK, and [zig](https://ziglang.org) 0.15.2 for the native kernels.
