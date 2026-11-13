@@ -494,18 +494,16 @@ DECLSPEC int check_inflate_code1 (PRIVATE_AS u8 *next, int left)
   }                                                                   \
 }
 
-#if ATTACK_MODE == 9
-#define RK_BODY RK_A0_ASSOC_BODY
-#else
-#define RK_BODY RK_A0_BODY
-#endif
-
 KERNEL_FQ KERNEL_FA void m17200_sxx (KERN_ATTR_RULES_ESALT (pkzip_t))
 {
-  RK_BODY (RK_REPORT_S);
+  #define RK_REPORT RK_REPORT_S
+  #include M2S(INCLUDE_PATH/inc_rk_zip_a0.cl)
+  #undef RK_REPORT
 }
 
 KERNEL_FQ KERNEL_FA void m17200_mxx (KERN_ATTR_RULES_ESALT (pkzip_t))
 {
-  RK_BODY (RK_REPORT_M);
+  #define RK_REPORT RK_REPORT_M
+  #include M2S(INCLUDE_PATH/inc_rk_zip_a0.cl)
+  #undef RK_REPORT
 }

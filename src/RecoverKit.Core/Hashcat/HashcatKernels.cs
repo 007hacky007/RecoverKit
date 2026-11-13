@@ -18,8 +18,15 @@ namespace RecoverKit.Core.Hashcat;
 /// </summary>
 public static class HashcatKernels
 {
-    /// <summary>The shared include, installed whenever a kernel is.</summary>
+    /// <summary>The shared helpers (key schedule, queue, RK_QUEUE and RK_AMP_CACHE settings).</summary>
     public const string IncludeFile = "inc_rk_zipcrypto.cl";
+
+    /// <summary>
+    /// Every include file (the helpers and the kernel bodies), installed whenever the kernels are. They are
+    /// named inc_*: hashcat 8 hands only such files to NVRTC on Windows, and checksums every file of
+    /// OpenCL/ that is not a mode kernel into its kernel cache key, so a changed include is recompiled.
+    /// </summary>
+    public static IEnumerable<string> IncludeFiles => Sources.Keys.Where(k => !k.StartsWith('m')).Order();
 
     /// <summary>Suffix of the saved hashcat original.</summary>
     public const string OriginalSuffix = ".hashcat";
@@ -63,8 +70,8 @@ public static class HashcatKernels
         return d;
     });
 
-    /// <summary>Kernel file names RecoverKit replaces (without the include).</summary>
-    public static IEnumerable<string> KernelFiles => Sources.Keys.Where(k => k != IncludeFile).Order();
+    /// <summary>Kernel file names RecoverKit replaces (m17200_*, m17210_*).</summary>
+    public static IEnumerable<string> KernelFiles => Sources.Keys.Where(k => k.StartsWith('m')).Order();
 
     internal static string Hash(string text)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n")))).ToLowerInvariant();
@@ -95,7 +102,7 @@ public static class HashcatKernels
             if (!orig) allOriginal = false;
             if (!ours && !orig) return State.Unsupported;
         }
-        if (allOurs && ReadNormalized(Path.Combine(dir, IncludeFile)) == Sources[IncludeFile]) return State.Installed;
+        if (allOurs && IncludeFiles.All(f => ReadNormalized(Path.Combine(dir, f)) == Sources[f])) return State.Installed;
         return allOriginal ? State.Original : State.Installed;
     }
 
@@ -151,8 +158,8 @@ public static class HashcatKernels
             if (!File.Exists(backup)) File.Copy(path, backup);
             WriteAtomic(path, Sources[f]);
         }
-        if (ReadNormalized(Path.Combine(dir, IncludeFile)) != Sources[IncludeFile])
-            WriteAtomic(Path.Combine(dir, IncludeFile), Sources[IncludeFile]);
+        foreach (var f in IncludeFiles)
+            if (ReadNormalized(Path.Combine(dir, f)) != Sources[f]) WriteAtomic(Path.Combine(dir, f), Sources[f]);
         if (state != State.Installed) DebugLog.Info($"ZIP kernels: installed RecoverKit's kernels into {dir}");
         return true;
     }

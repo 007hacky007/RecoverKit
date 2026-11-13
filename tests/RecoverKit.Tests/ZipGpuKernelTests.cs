@@ -25,17 +25,20 @@ public class ZipGpuKernelTests
     {
         Assert.True(HashcatKernels.Sources.ContainsKey(HashcatKernels.IncludeFile));
         var files = HashcatKernels.KernelFiles.ToList();
-        Assert.Contains("m17200_a3-pure.cl", files);
-        Assert.Contains("m17210_a3-pure.cl", files);
+        Assert.Equal(["m17200_a0-pure.cl", "m17200_a3-pure.cl", "m17210_a0-pure.cl", "m17210_a3-pure.cl"], files);
         foreach (var f in files)
         {
             Assert.True(HashcatKernels.Originals.ContainsKey(f), f);
             Assert.Contains("inc_rk_zipcrypto.cl", HashcatKernels.Sources[f]);
+            Assert.Contains(f.Contains("_a3") ? "inc_rk_zip_a3.cl" : "inc_rk_zip_a0.cl", HashcatKernels.Sources[f]);
             Assert.DoesNotContain('\r', HashcatKernels.Sources[f]);
         }
         // hashcat 8 checksums every non-kernel file of OpenCL/ into its cache key, and on Windows
-        // hands NVRTC only files named inc_*: the include must keep that name.
-        Assert.StartsWith("inc_", HashcatKernels.IncludeFile);
+        // hands NVRTC only files named inc_*: the includes must keep that prefix.
+        Assert.All(HashcatKernels.IncludeFiles, f => Assert.StartsWith("inc_rk_", f));
+        // The settings the benchmark and the tests rewrite.
+        Assert.Contains("#define RK_AMP_CACHE 0", HashcatKernels.Sources[HashcatKernels.IncludeFile]);
+        Assert.Matches(@"#define RK_QUEUE \d+", HashcatKernels.Sources[HashcatKernels.IncludeFile]);
     }
 
     private static (string Dir, Dictionary<string, string> Originals) FakeHashcat(string root, bool crlf = false)
@@ -69,7 +72,8 @@ public class ZipGpuKernelTests
             Assert.Equal(HashcatKernels.Sources[f], File.ReadAllText(Path.Combine(ocl, f)));
             Assert.Equal(before[f], File.ReadAllText(Path.Combine(ocl, f + HashcatKernels.OriginalSuffix)));
         }
-        Assert.Equal(HashcatKernels.Sources[HashcatKernels.IncludeFile], File.ReadAllText(Path.Combine(ocl, HashcatKernels.IncludeFile)));
+        foreach (var f in HashcatKernels.IncludeFiles)
+            Assert.Equal(HashcatKernels.Sources[f], File.ReadAllText(Path.Combine(ocl, f)));
         Assert.Empty(Directory.GetFiles(ocl, "*.rk-tmp"));
 
         // Installing again changes nothing; restoring brings hashcat's files back.

@@ -79,7 +79,7 @@ try
             var bench = new ZipKernelBenchmark(tool)
             {
                 Seconds = int.TryParse(Opt(argv, "--seconds"), out var sec) ? sec : 10,
-                WithoutCache = !argv.Contains("--quick"),
+                WithAmpCache = !argv.Contains("--quick"),
             };
             bench.Progress += Console.WriteLine;
             using var cts = new CancellationTokenSource();

@@ -124,10 +124,14 @@ Related publication: https://scitepress.org/PublicationsDetail.aspx?ID=KLPzPqStp
 
 KERNEL_FQ KERNEL_FA void m17210_sxx (KERN_ATTR_VECTOR_ESALT (pkzip_t))
 {
-  RK_A3_BODY (RK_REPORT_S);
+  #define RK_REPORT RK_REPORT_S
+  #include M2S(INCLUDE_PATH/inc_rk_zip_a3.cl)
+  #undef RK_REPORT
 }
 
 KERNEL_FQ KERNEL_FA void m17210_mxx (KERN_ATTR_VECTOR_ESALT (pkzip_t))
 {
-  RK_A3_BODY (RK_REPORT_M);
+  #define RK_REPORT RK_REPORT_M
+  #include M2S(INCLUDE_PATH/inc_rk_zip_a3.cl)
+  #undef RK_REPORT
 }
