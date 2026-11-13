@@ -44,7 +44,8 @@ try
             {
                 var runner = new DetailedBenchmarkRunner(tool, settings, devices)
                 {
-                    Seconds = int.TryParse(Opt(argv, "--seconds"), out int seconds) ? Math.Clamp(seconds, 3, 60) : 6,
+                    Seconds = int.TryParse(Opt(argv, "--seconds"), out int seconds) ? Math.Clamp(seconds, 3, 60) : 3,
+                    Thorough = argv.Contains("--thorough"),
                 };
                 var progress = new Progress<DiagnosticProgress>(p => Console.Error.WriteLine($"{p.Section}: {p.Step} ({p.Elapsed:mm\\:ss} elapsed, about {p.EstimatedRemaining.TotalMinutes:F0} min remaining)"));
                 var report = await runner.RunAsync(Opt(argv, "--sections")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), progress, cts.Token);

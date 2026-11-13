@@ -85,6 +85,7 @@ public sealed class HybridRunner
     /// <summary>Starting estimates (candidates per second); 0 = remembered or derived.</summary>
     internal double InitialGpuSpeed { get; init; }
     internal double InitialCpuSpeed { get; init; }
+    internal bool ForceGpu { get; init; }
     internal int? ThreadsOverride { get; init; }
 
     public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".hybrid.json");
@@ -196,7 +197,7 @@ public sealed class HybridRunner
                 var sorted = HashcatOrder.SortedPositions(space, len);
                 HashcatOrder? order = null;
                 // A length the CPU finishes before hashcat would be up and running stays on the CPU.
-                bool worthGpu = gpuAlive && (double)space.Keyspace(len) / cpuSpeed > 2 * _startup;
+                bool worthGpu = gpuAlive && (ForceGpu || (double)space.Keyspace(len) / cpuSpeed > 2 * _startup);
                 if (worthGpu)
                 {
                     long? baseCount = await gpu.KeyspaceAsync(HashcatOrder.MaskArgs(sorted)!, ct);

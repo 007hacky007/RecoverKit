@@ -27,11 +27,12 @@ public sealed class DiagnosticReport
     public bool Cancelled { get; set; }
     public string CpuPolicy { get; set; } = "";
     public string GpuPolicy { get; set; } = "";
+    public List<DiagnosticStep> Plan { get; set; } = [];
     public List<DiagnosticMeasurement> Measurements { get; set; } = [];
     public List<string> Summary { get; set; } = [];
     public List<PerformanceDecision> Decisions { get; set; } = [];
     public Dictionary<string, string> System { get; set; } = new();
 }
 
-public sealed record DiagnosticProgress(string Section, string Step, TimeSpan Elapsed, TimeSpan EstimatedRemaining);
+public sealed record DiagnosticProgress(string Section, string Step, TimeSpan Elapsed, TimeSpan EstimatedRemaining, double Fraction = 0);
 public sealed record DiagnosticSection(string Id, string Title, double EstimatedMinutes);

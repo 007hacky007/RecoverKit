@@ -1,5 +1,6 @@
 using System.Text;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Diagnostics;
 
 namespace RecoverKit.Core.Hashcat;
 
@@ -25,6 +26,8 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
     /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
     public int Seconds { get; init; } = 10;
     public ProcessPriority? Priority { get; init; }
+    internal bool Optimized { get; init; }
+    internal bool BoundedTuning { get; init; }
 
     /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
     public string Mask { get; init; } = "?a?a?a?a?a?a?a?a";
@@ -107,6 +110,21 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
         return rows;
     }
 
+    internal async Task<double> MeasureAsync(Sample sample, BackendDevice device, string variant, CancellationToken ct)
+    {
+        var directory = Directory.CreateTempSubdirectory("rk-zip-sample-").FullName;
+        try
+        {
+            string file = Path.Combine(directory, "synthetic.hash");
+            DebugLog.RegisterHashes(sample.HashLine);
+            await File.WriteAllTextAsync(file, sample.HashLine + "\n", ct);
+            using var selection = HashcatKernels.ApplyProfile(tool, sample.Mode, variant);
+            using var tuning = BoundedTuning ? DiagnosticGpuTuning.Apply(tool, [device]) : null;
+            return await SpeedAsync(sample.Mode, file, device.Id, ct);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     /// <summary>Median speed (H/s) over the status updates of one run, the first two (warm-up) left out.</summary>
     private async Task<double> SpeedAsync(int mode, string hashFile, int device, CancellationToken ct)
     {
@@ -118,6 +136,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
             "--keep-guessing", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
+        if (Optimized) args.Add("-O");
         var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
         double speed = ParseSpeed(code, o);
         if (speed > 0) return speed;

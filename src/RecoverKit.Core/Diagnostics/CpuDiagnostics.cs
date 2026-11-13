@@ -50,45 +50,48 @@ public static class CpuDiagnostics
 
     public static async Task RunAsync(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings = null)
     {
-        ct.ThrowIfCancellationRequested();
-        int limit = settings?.MaxCpuThreads is > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
+        var report = new DiagnosticReport();
+        var plan = new DiagnosticPlan();
+        AddSteps(plan, report, settings ?? new Settings(), true, ct);
+        await plan.RunAsync(report, () => progress(plan.Progress(TimeSpan.Zero).Step), ct);
+        foreach (var row in report.Measurements) add(row);
+    }
+
+    internal static void AddSteps(DiagnosticPlan plan, DiagnosticReport report, Settings settings, bool thorough, CancellationToken ct)
+    {
+        int limit = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
         int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
+        var repeats = new List<(string Label, Func<Task> Run, Func<bool> Needed)>();
         foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
         {
-            ct.ThrowIfCancellationRequested();
-            foreach (var variant in KernelVariants.ForMode(mode))
+            var rows = new List<DiagnosticMeasurement>();
+            foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
+            foreach (int threads in counts)
             {
-                if (!variant.Supported) continue;
-                progress($"Mode {mode}: checking {variant.Name}");
-                var check = await CpuDiagnosticWorker.CheckAsync(mode, variant.Name, ct);
-                if (!check.Passed)
+                var option = variant;
+                async Task Measure(int repeat)
                 {
-                    add(new DiagnosticMeasurement { Section = "cpu", Step = "Correctness FAIL", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name,
-                        Correct = false, Error = check.Error, Target = Target(mode), Length = 7 });
-                    continue;
-                }
-                bool failed = false;
-                foreach (int threads in counts)
-                {
-                    if (failed) break;
-                    for (int repeat = 1; repeat <= 2; repeat++)
+                    var result = await CpuDiagnosticWorker.MeasureAsync(mode, option.Name, threads, settings.Priority, repeat, ct, thorough ? 3 : 2);
+                    var row = new DiagnosticMeasurement
                     {
-                        ct.ThrowIfCancellationRequested();
-                        progress($"Mode {mode}, {variant.Name}, {threads} workers, repeat {repeat}/2");
-                        var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, threads, settings?.Priority ?? ProcessPriority.Normal, repeat, ct);
-                        add(new DiagnosticMeasurement
-                        {
-                            Section = "cpu", Step = result.Check.Passed ? "Correctness PASS; timed" : "Worker failed; variant skipped", Mode = Math.Abs(mode),
-                            Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
-                            Error = result.Error ?? result.Check.Error ?? (result.Speed <= 0 ? "No CPU benchmark rate was reported." : null),
-                            ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = 7,
-                            Details = new() { ["correctness cases"] = result.Check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = result.ActualPath,
-                                ["Isolation"] = "Separate process for each correctness check and timing sample." },
-                        });
-                        if (!result.Check.Passed) { failed = true; break; }
-                    }
+                        Section = "cpu", Step = result.Check.Passed ? "Correctness PASS; timed" : "Worker failed; variant skipped", Mode = Math.Abs(mode),
+                        Engine = "cpu", Variant = option.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
+                        Error = result.Error ?? result.Check.Error ?? (result.Speed <= 0 ? "No CPU benchmark rate was reported." : null),
+                        ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = 7,
+                        Details = new() { ["correctness cases"] = result.Check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = result.ActualPath,
+                            ["Adaptive sampling"] = (!thorough).ToString(), ["Isolation"] = "Separate process for each correctness check and timing sample." },
+                    };
+                    rows.Add(row);
+                    report.Measurements.Add(row);
                 }
+                string label = $"Mode {mode}, {option.Name}, {threads} workers";
+                plan.Add("cpu", label, thorough ? 4 : 3, () => Measure(1), () => !rows.Any(r => r.Variant == option.Name && !r.Correct));
+                // Repeat slots are added after the complete first sweep below.
+                repeats.Add((label, () => Measure(2), () => !rows.Any(r => r.Variant == option.Name && !r.Correct) && (thorough || rows.Count > 1 && DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Variant == option.Name && r.Threads == threads)?.Speed ?? 0, rows.Select(r => r.Speed)))));
             }
+            foreach (var repeat in repeats)
+                plan.Add("cpu", repeat.Label + ", confirmation", thorough ? 4 : 3, repeat.Run, repeat.Needed, conditional: !thorough);
+            repeats.Clear();
         }
     }
 

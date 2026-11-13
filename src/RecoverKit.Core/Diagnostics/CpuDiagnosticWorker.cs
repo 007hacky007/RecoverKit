@@ -38,11 +38,11 @@ public static class CpuDiagnosticWorker
                 {
                     var timer = Stopwatch.StartNew();
                     double speed;
-                    if (seconds == -1)
+                    if (seconds is -1 or 1)
                     {
                         var kernel = NativeKernels.TryCreate(Math.Abs(mode), NativeKernels.BenchmarkHashes[mode])!;
                         var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", length))])!;
-                        using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(650));
+                        using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(seconds == 1 ? 1000 : 650));
                         var measured = new NativeEngine(kernel, space) { Threads = threads, Priority = NativeRunner.ThreadPriorityFor(priority) }.Run(null, sample.Token);
                         speed = timer.Elapsed.TotalSeconds > 0 ? measured.Tested / timer.Elapsed.TotalSeconds : 0;
                     }
@@ -60,8 +60,8 @@ public static class CpuDiagnosticWorker
     public static async Task<CpuDiagnostics.CorrectnessResult> CheckAsync(int mode, string variant, CancellationToken ct = default)
         => (await ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct)).Check;
 
-    public static Task<WorkerResult> MeasureAsync(int mode, string variant, int threads, ProcessPriority priority, int repeat, CancellationToken ct = default)
-        => ExecuteAsync(mode, variant, threads, priority, repeat, 7, 3, ct);
+    public static Task<WorkerResult> MeasureAsync(int mode, string variant, int threads, ProcessPriority priority, int repeat, CancellationToken ct = default, int seconds = 3)
+        => ExecuteAsync(mode, variant, threads, priority, repeat, 7, seconds, ct);
 
     public static Task<WorkerResult> MeasureAutomaticAsync(int mode, string variant, int threads, int length, ProcessPriority priority, CancellationToken ct = default)
         => ExecuteAsync(mode, variant, threads, priority, 1, length, -1, ct);

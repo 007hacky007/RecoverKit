@@ -6,6 +6,8 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- Two-minute detailed performance test with enforced section/step budgets, short samples, shared
+  GPU kernel cache and a Thorough option for the full sweep.
 - Detailed performance test with selectable sections, live progress, partial reports and a
   privacy-scrubbed HTML/JSON report; measured performance profiles and automatic calibration.
 - Native ZipCrypto CPU header filters, with measured ARM CRC acceleration on Apple silicon and

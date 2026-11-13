@@ -25,8 +25,9 @@ public sealed class DetailedBenchmarkWindow : Window
     private readonly TextBlock _step = L.Text("", wrap: true);
     private readonly TextBlock _timing = L.Text("", dim: true);
     private readonly SelectableTextBlock _results = new() { TextWrapping = TextWrapping.Wrap };
-    private readonly ProgressBar _bar = new() { IsIndeterminate = true, Height = 5, IsVisible = false };
+    private readonly ProgressBar _bar = new() { IsIndeterminate = false, Maximum = 1, Height = 5, IsVisible = false };
     private readonly Control _selectionGroup;
+    private readonly CheckBox _thorough = new() { Content = "Thorough (slower)", IsChecked = false };
     private readonly Button _start;
     private readonly Button _save;
     private readonly Button _copy;
@@ -59,13 +60,15 @@ public sealed class DetailedBenchmarkWindow : Window
         {
             var box = new CheckBox
             {
-                Content = new TextBlock { Text = section.EstimatedMinutes < 1 ? $"{section.Title} - under 1 min" : $"{section.Title} - about {section.EstimatedMinutes:N0} min", TextWrapping = TextWrapping.Wrap },
+                Content = new TextBlock { Text = $"{section.Title} - {DetailedBenchmarkRunner.DefaultSectionSeconds(section.Id)} s budget", TextWrapping = TextWrapping.Wrap },
                 IsChecked = true,
             };
             _sections.Add((section.Id, box));
             box.IsCheckedChanged += (_, _) => UpdateEstimate();
             selection.Children.Add(box);
         }
+        selection.Children.Add(_thorough);
+        _thorough.IsCheckedChanged += (_, _) => UpdateEstimate();
         _start = L.Button("Start detailed test", () => _ = RunAsync(), 155, isDefault: true);
         _save = L.Button("Save report...", () => _ = SaveAsync(), 125);
         _copy = L.Button("Copy summary", () => _ = CopyAsync(), 120);
@@ -104,7 +107,9 @@ public sealed class DetailedBenchmarkWindow : Window
     {
         double minutes = DetailedBenchmarkRunner.Sections.Where(s => _sections.Any(c => c.Id == s.Id && c.Box.IsChecked == true))
             .Sum(s => s.EstimatedMinutes);
-        _estimate.Text = $"Takes about {minutes:N0} minutes for the selected sections. More devices and first-time GPU compilation can take longer.";
+        _estimate.Text = _thorough.IsChecked == true
+            ? "Thorough runs the full repeated sweep and can take an hour or longer."
+            : "The default test stops within 2 minutes, including startup. Steps that do not fit are listed as not measured. Thorough keeps the full sweep.";
         if (_start is not null) _start.IsEnabled = _sections.Any(s => s.Box.IsChecked == true);
     }
 
@@ -142,13 +147,14 @@ public sealed class DetailedBenchmarkWindow : Window
             if (!_running) return;
             _section.Text = DetailedBenchmarkRunner.Sections.FirstOrDefault(section => section.Id == p.Section)?.Title ?? p.Section;
             _step.Text = p.Step;
+            _bar.Value = p.Fraction;
             _remaining = p.EstimatedRemaining;
             _lastElapsed = _elapsed.Elapsed;
             UpdateTiming();
         });
         try
         {
-            var runner = new DetailedBenchmarkRunner(_hashcat, _settings, _devices);
+            var runner = new DetailedBenchmarkRunner(_hashcat, _settings, _devices) { Thorough = _thorough.IsChecked == true };
             _report = await Task.Run(() => runner.RunAsync(selected, progress, _cts.Token));
             _section.Text = _report.Cancelled ? "Test abandoned - partial report ready" : "Report ready";
             _step.Text = "Save the report and send the file to the developers.";

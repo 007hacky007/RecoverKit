@@ -93,12 +93,14 @@ public static class PerformanceProfiles
     private static (string Engine, string Variant, int Threads, string Device, string Backend, string Optimized) Configuration(DiagnosticMeasurement row)
         => (row.Engine, row.Variant, row.Threads, row.DeviceKey, row.Backend, row.Details.GetValueOrDefault("Optimized", ""));
 
-    /// <summary>Two independent repeats on identical targets; the worst winner must beat the best baseline.</summary>
+    /// <summary>Confirmed winners on identical workloads must beat the best baseline sample by 5%.</summary>
     public static PerformanceDecision? Choose(IEnumerable<DiagnosticMeasurement> measurements, string defaultVariant)
     {
         var all = measurements.ToList();
         var valid = all.Where(m => m.Correct && m.Error is null && double.IsFinite(m.Speed) && m.Speed > 0 && m.Repeat > 0).ToList();
         if (valid.Count == 0) return null;
+        if (all.Any(r => r.Details.GetValueOrDefault("Default") == "True")
+            && !valid.Any(r => r.Details.GetValueOrDefault("Default") == "True")) return null;
         var defaults = valid.Where(r => r.Variant == defaultVariant).ToList();
         var target = defaults.FirstOrDefault(r => bool.TryParse(r.Details.GetValueOrDefault("Default"), out bool marked) && marked)
             ?? defaults.FirstOrDefault();
@@ -108,13 +110,15 @@ public static class PerformanceProfiles
         var groups = valid.Where(r => r.Mode == target.Mode && r.Target == target.Target && r.Length == target.Length)
             .Where(r => !failedVariants.Contains((r.Engine, r.Variant, r.DeviceKey, r.Backend)))
             .GroupBy(Configuration)
-            .Where(g => g.Select(r => r.Repeat).Distinct().Count() >= 2)
+            .Where(g => g.Select(r => r.Repeat).Distinct().Count() >= 2 || g.All(r => r.Details.GetValueOrDefault("Adaptive sampling") == "True"))
             .Select(g => new { Key = g.Key, Row = g.First(), Low = g.Min(r => r.Speed), High = g.Max(r => r.Speed), Mean = g.Average(r => r.Speed) })
             .OrderByDescending(g => g.Mean).ToList();
         var baseline = groups.FirstOrDefault(g => g.Key == Configuration(target));
         // Without a measured exact baseline an alternative has no demonstrated advantage.
         if (baseline is null) return null;
-        var winner = groups.FirstOrDefault(g => g.Low >= baseline.High * 1.05) ?? baseline;
+        var winner = groups.FirstOrDefault(g => g.Row != baseline.Row && g.Low >= baseline.High * 1.05
+            && (g.Row.Details.GetValueOrDefault("Internally averaged benchmark") == "True"
+                || valid.Where(r => r.Mode == target.Mode && r.Target == target.Target && r.Length == target.Length && Configuration(r) == g.Key).Select(r => r.Repeat).Distinct().Count() >= 2)) ?? baseline;
         var row = winner.Row;
         double margin = winner == baseline ? 0 : winner.Low / baseline.High - 1;
         return new PerformanceDecision
@@ -129,7 +133,7 @@ public static class PerformanceProfiles
             Speed = winner.Mean,
             Margin = margin,
             Optimized = row.Details.TryGetValue("Optimized", out var opt) && bool.TryParse(opt, out bool optimized) ? optimized : null,
-            Reason = margin > 0 ? $"measured at least {1 + margin:F2}x faster across two repeats" : "current default retained; no repeatable gain of 5%",
+            Reason = margin > 0 ? $"measured at least {1 + margin:F2}x faster; " + (row.Details.GetValueOrDefault("Internally averaged benchmark") == "True" ? "internally averaged hashcat samples" : "winner confirmed in two samples") : "current default retained; no repeatable gain of 5%",
         };
     }
 

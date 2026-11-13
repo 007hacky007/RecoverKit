@@ -29,8 +29,11 @@ public static class FiniteDiagnosticWorker
         public int Count { get; set; }
         public int Length { get; set; }
         public int Limit { get; set; }
+        public string[]? MaskArgs { get; set; }
+        public bool ShortPlan { get; set; }
         public WorkerLimits Limits { get; set; } = new();
         public List<WorkerDevice> Devices { get; set; } = [];
+        public List<WorkerDevice> KnownDevices { get; set; } = [];
     }
 
     internal sealed class WorkerLimits
@@ -49,6 +52,7 @@ public static class FiniteDiagnosticWorker
     internal sealed class WorkerDevice
     {
         public int Id { get; set; }
+        public int Processors { get; set; }
         public int? AliasOf { get; set; }
         public string Key { get; set; } = "";
         public string Name { get; set; } = "";
@@ -61,7 +65,7 @@ public static class FiniteDiagnosticWorker
         public bool IsSkippedAlias { get; set; }
         public BackendDevice ToDevice() => new()
         {
-            Id = Id, AliasOf = AliasOf, Key = Key, Name = Name, Backend = Backend, BackendVersion = BackendVersion,
+            Id = Id, Processors = Processors, AliasOf = AliasOf, Key = Key, Name = Name, Backend = Backend, BackendVersion = BackendVersion,
             DriverVersion = DriverVersion, Type = Type, Vendor = Vendor, Unified = Unified, IsSkippedAlias = IsSkippedAlias,
         };
     }
@@ -77,13 +81,13 @@ public static class FiniteDiagnosticWorker
         },
         Devices = group.Select(d => new WorkerDevice
         {
-            Id = d.Id, AliasOf = d.AliasOf, Key = d.Key, Name = d.Name, Backend = d.Backend, BackendVersion = d.BackendVersion,
+            Id = d.Id, Processors = d.Processors, AliasOf = d.AliasOf, Key = d.Key, Name = d.Name, Backend = d.Backend, BackendVersion = d.BackendVersion,
             DriverVersion = d.DriverVersion, Type = d.Type, Vendor = d.Vendor, Unified = d.Unified, IsSkippedAlias = d.IsSkippedAlias,
         }).ToList(),
     };
 
     public static async Task<Result> ExecuteAsync(HashcatTool tool, Settings settings, IReadOnlyList<BackendDevice> group,
-        int mode, int count, int length, int limit, CancellationToken ct)
+        int mode, int count, int length, int limit, CancellationToken ct, string[]? maskArgs = null, bool shortPlan = false, IReadOnlyList<BackendDevice>? knownDevices = null)
     {
         ct.ThrowIfCancellationRequested();
         string? directory = null;
@@ -91,7 +95,11 @@ public static class FiniteDiagnosticWorker
         {
             directory = Directory.CreateTempSubdirectory("rk-finite-worker-").FullName;
             string requestFile = Path.Combine(directory, "request.json"), resultFile = Path.Combine(directory, "result.json");
-            await File.WriteAllTextAsync(requestFile, JsonSerializer.Serialize(BuildRequest(tool.Exe, settings, group, mode, count, length, limit)), ct);
+            var request = BuildRequest(tool.Exe, settings, group, mode, count, length, limit);
+            request.MaskArgs = maskArgs;
+            request.ShortPlan = shortPlan;
+            request.KnownDevices = BuildRequest(tool.Exe, settings, knownDevices ?? group, mode, count, length, limit).Devices;
+            await File.WriteAllTextAsync(requestFile, JsonSerializer.Serialize(request), ct);
             var start = CpuDiagnosticWorker.SelfStartInfo();
             CpuRuntime.ApplyTo(start, settings.MaxCpuThreads);
             NvrtcRuntime.ApplyTo(start);
@@ -99,7 +107,7 @@ public static class FiniteDiagnosticWorker
             start.ArgumentList.Add(Command);
             start.ArgumentList.Add(requestFile);
             start.ArgumentList.Add(resultFile);
-            var process = await CpuDiagnosticWorker.RunJsonProcessAsync(start, resultFile, TimeSpan.FromMinutes(3), ct, isolatedProcessGroup: true);
+            var process = await CpuDiagnosticWorker.RunJsonProcessAsync(start, resultFile, TimeSpan.FromSeconds(shortPlan ? 45 : 180), ct, isolatedProcessGroup: true);
             return process.Error is not null ? Failed(process.Error) : ReadResult(process.ExitCode, process.Json);
         }
         catch (OperationCanceledException) { throw; }
@@ -110,6 +118,19 @@ public static class FiniteDiagnosticWorker
             if (directory is not null)
                 try { Directory.Delete(directory, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
+    }
+
+    internal static string[] SizedMask(double speed, double seconds)
+    {
+        double candidates = Math.Clamp(speed * seconds, 196, 28_925_465_497_600d);
+        int length = 2;
+        double prefix = 1;
+        while (prefix * 196 < candidates && length < 10) { prefix *= 14; length++; }
+        double want = candidates / prefix;
+        var pair = (from a in Enumerable.Range(1, 14) from b in Enumerable.Range(1, 14)
+                    orderby Math.Abs(a * b - want) select (a, b)).First();
+        return ["-a", "3", "-1", "ABCDEFGHIJKLMN", "-2", "ABCDEFGHIJKLMN"[..pair.a], "-3", "ABCDEFGHIJKLMN"[..pair.b],
+            string.Concat(Enumerable.Repeat("?1", length - 2)) + "?2?3"];
     }
 
     public static int Run(string[] args)
@@ -137,6 +158,8 @@ public static class FiniteDiagnosticWorker
         var devices = value.Devices.Select(d => d.ToDevice()).ToList();
         if (value.Count >= 0 && (devices.Count == 0 || devices.Any(d => !d.IsGpu || d.IsSkippedAlias)))
             return Failed("Finite diagnostic request has no eligible GPU group.");
+        var known = value.KnownDevices.Count > 0
+            ? value.KnownDevices.Select(d => devices.FirstOrDefault(selected => selected.Key == d.Key) ?? d.ToDevice()).ToList() : devices;
         var limits = value.Limits;
         var settings = new Settings
         {
@@ -147,6 +170,7 @@ public static class FiniteDiagnosticWorker
             Strategy = value.Count < 0 ? DeviceStrategy.CpuOnly : DeviceStrategy.GpuOnly,
             // Force -d even when this finite job uses only a subset of the available GPUs.
             DisabledDevices = [-1],
+            DisabledDeviceKeys = known.Where(d => !devices.Any(selected => selected.Key == d.Key)).Select(d => d.Key).ToList(),
         };
         string hash = NativeKernels.BenchmarkHashes[value.Mode];
         DebugLog.RegisterHashes(hash);
@@ -159,8 +183,15 @@ public static class FiniteDiagnosticWorker
         }
         var tool = HashcatTool.Locate(value.EngineExe) ?? throw new InvalidOperationException("Isolated GPU engine unavailable.");
         tool.MaxCpuThreads = value.Limit;
-        var maskArgs = new[] { "-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", value.Length)) };
-        var space = MaskSpace.FromHashcatArgs(maskArgs)!;
+        using var tuning = value.ShortPlan ? DiagnosticGpuTuning.Apply(tool, devices) : null;
+        var maskArgs = value.MaskArgs ?? new[] { "-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", value.Length)) };
+        if (value.MaskArgs is not null && (maskArgs.Length is not (5 or 9) || maskArgs[0] != "-a" || maskArgs[1] != "3"
+            || maskArgs[2] != "-1" || maskArgs[3] != "ABCDEFGHIJKLMN"
+            || maskArgs.Length == 9 && (maskArgs[4] != "-2" || maskArgs[6] != "-3"
+                || !maskArgs[5].All(c => c is >= 'A' and <= 'N') || !maskArgs[7].All(c => c is >= 'A' and <= 'N'))))
+            return Failed("Finite diagnostic mask is invalid.");
+        var space = MaskSpace.FromHashcatArgs(maskArgs);
+        if (space is null || space.MaxLength != value.Length || space.MinLength != value.Length) return Failed("Finite diagnostic mask length is invalid.");
         var attack = new PreparedAttack { Description = "Synthetic finite diagnostics job", Keyspace = space.Keyspace(value.Length) };
         attack.Args.AddRange(maskArgs);
         string hashFile = Path.Combine(directory, "synthetic.hash");
@@ -183,13 +214,13 @@ public static class FiniteDiagnosticWorker
         }
         else if (value.Count == 0)
         {
-            var runner = new HashcatRunner(tool) { KnownDevices = devices };
+            var runner = new HashcatRunner(tool) { KnownDevices = known };
             runner.StatusReceived += samples.Add;
             completed = await runner.RunAsync(run, timeout.Token);
         }
         else
         {
-            var runner = new HybridRunner { Devices = devices, ThreadsOverride = value.Count };
+            var runner = new HybridRunner { Devices = known, ThreadsOverride = value.Count, ForceGpu = value.MaskArgs is not null };
             runner.StatusReceived += samples.Add;
             completed = await runner.RunAsync(new HybridPlan(kernel!, space), hash, run, tool, timeout.Token);
         }

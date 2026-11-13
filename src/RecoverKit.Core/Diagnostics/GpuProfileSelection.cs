@@ -30,8 +30,8 @@ public static class GpuProfileSelection
         {
             var current = family.First();
             var choice = profile.Decisions
-                .Where(d => d.Domain == "gpu" && d.Scope == family.Key && d.Mode == mode )
-                .OrderByDescending(d => d.Length == length).ThenByDescending(d => d.Margin)
+                .Where(d => d.Domain == "gpu" && d.Scope == family.Key && (d.Mode == mode || d.Mode == 0))
+                .OrderByDescending(d => d.Mode == mode).ThenByDescending(d => d.Length == length).ThenByDescending(d => d.Margin)
                 .FirstOrDefault(d => d.DeviceKeys.Count == 1 && devices.Any(device => device.IsGpu
                     && device.Key == d.DeviceKeys[0] && FamilyKey(device.Key, devices) == family.Key)
                     && PerformanceProfiles.Apply(d, settings, devices) is not null);

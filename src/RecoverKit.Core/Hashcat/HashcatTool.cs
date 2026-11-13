@@ -61,6 +61,7 @@ public sealed class HashModeInfo
     public string? BenchmarkMask { get; init; }
     public string? BenchmarkCharset1 { get; init; }
     public string? ExampleHash { get; init; }
+    public int PureBenchmarkLength { get; init; }
     public int BenchmarkLength => Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", BenchmarkCharset1 ?? "", BenchmarkMask ?? ""])?.MaxLength ?? 0;
 }
 
@@ -267,9 +268,9 @@ public sealed partial class HashcatTool
         return (p.ExitCode, o, e);
     }
 
-    public async Task<string> VersionAsync()
+    public async Task<string> VersionAsync(CancellationToken ct = default)
     {
-        var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20));
+        var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20), ct: ct);
         return _fullVersion = o.Trim();
     }
 
@@ -360,17 +361,17 @@ public sealed partial class HashcatTool
 
     // ---------------------------------------------------------------- mode info
 
-    public async Task<HashModeInfo?> ModeInfoAsync(int mode, int attackMode = 0)
+    public async Task<HashModeInfo?> ModeInfoAsync(int mode, int attackMode = 0, CancellationToken ct = default)
     {
         HashModeInfo? info = null;
         try
         {
-            string version = await VersionAsync();
+            string version = await VersionAsync(ct);
             if (string.IsNullOrWhiteSpace(version)) return null;
             var key = (version, mode, attackMode);
             lock (_modeInfo) if (_modeInfo.TryGetValue(key, out var c)) return c;
             var args = new List<string> { "--hash-info", "-m", mode.ToString(), "-a", attackMode.ToString(), "--machine-readable", "--quiet" };
-            var (code, pure, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+            var (code, pure, _) = await RunAsync(args, TimeSpan.FromSeconds(30), ct: ct);
             if (code == 0)
             {
                 info = ParseModeInfo(mode, pure, null);
@@ -381,7 +382,7 @@ public sealed partial class HashcatTool
                     args.Add("-O");
                     try
                     {
-                        var (optCode, opt, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+                        var (optCode, opt, _) = await RunAsync(args, TimeSpan.FromSeconds(30), ct: ct);
                         if (optCode == 0) info = ParseModeInfo(mode, pure, opt);
                     }
                     catch (Exception ex) when (ex is TimeoutException or IOException or System.ComponentModel.Win32Exception) { }
@@ -419,6 +420,7 @@ public sealed partial class HashcatTool
         }
         return new HashModeInfo
         {
+            PureBenchmarkLength = Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", e.TryGetProperty("benchmark_charset1", out var pcs) ? pcs.GetString() ?? "" : "", e.TryGetProperty("benchmark_mask", out var pm) ? pm.GetString() ?? "" : ""])?.MaxLength ?? 0,
             Mode = mode,
             Name = e.GetProperty("name").GetString() ?? "",
             SlowHash = e.TryGetProperty("slow_hash", out var sh) && sh.GetBoolean(),

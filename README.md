@@ -147,7 +147,9 @@ All measurements, and how they were made: [docs/benchmarks.md](docs/benchmarks.m
 
 If the developers ask for a detailed performance report: **Tools > Benchmark > Detailed
 performance test**, then **Save report** and send the file. Select which sections to run;
-each shows an estimated time. The test uses synthetic targets and keeps completed results if
+the default has a two-minute total budget, including engine startup. Unfinished measurements are
+listed as "not measured, run the thorough test".
+**Thorough (slower)** runs the full sweep for developers. The test uses synthetic targets and keeps completed results if
 you abandon it. The HTML report includes the measurements and a **Copy summary** button.
 
 The measurements also build a performance profile for this PC. RecoverKit keeps the current
