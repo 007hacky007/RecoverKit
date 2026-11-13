@@ -21,6 +21,10 @@ public sealed record RunRequest
     public string? PasswordCachePath { get; init; }
     /// <summary>GPU temperature guard / load limit for this run; null when off or no GPU is used.</summary>
     public ThermalGuard? Guard { get; init; }
+    /// <summary>Hybrid attacks: hashcat runs on the GPUs only, the built-in engine has the processor.</summary>
+    public bool GpuOnly { get; init; }
+    /// <summary>Device ids to leave out of this run (an integrated GPU slower than the CPU thread it costs).</summary>
+    public IReadOnlyCollection<int>? ExcludeDevices { get; init; }
 }
 
 public sealed class RunResult
@@ -75,7 +79,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (s.DontUsePasswordCache) a.Add("--potfile-disable");
         else a.AddRange(["--potfile-path", r.PasswordCachePath ?? s.PotfilePath]);
         a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
-        a.AddRange(DeviceArguments(s, KnownDevices));
+        a.AddRange(DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices));
         if (r.UseOptimizedKernel) a.Add("-O");
         if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
@@ -102,34 +106,54 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     /// <summary>Whether hashcat runs with these settings can use a GPU (unknown devices count as yes).</summary>
     public static bool UsesGpu(Settings s, IReadOnlyList<BackendDevice>? known)
-        => s.Strategy != DeviceStrategy.CpuOnly &&
-           (known is not { Count: > 0 } || known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)));
+        => s.Strategy != DeviceStrategy.CpuOnly && (known is not { Count: > 0 } || known.Any(d => d.IsGpu));
 
-    /// <summary>-d / -D arguments derived from the GPU configuration and CPU/GPU strategy.</summary>
-    public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known)
+    /// <summary>
+    /// -d / -D arguments derived from the GPU configuration and CPU/GPU strategy. Every GPU hashcat
+    /// can use runs (discrete and integrated, each physical device once: aliases stay skipped) unless
+    /// the user unchecked it. <paramref name="gpuOnly"/> keeps the processor out of hashcat because the
+    /// built-in CPU engine is using it (hybrid attacks); <paramref name="exclude"/> leaves further
+    /// devices out for this run.
+    /// </summary>
+    public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known, bool gpuOnly = false,
+        IReadOnlyCollection<int>? exclude = null)
     {
         var a = new List<string>();
         // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
         // instead of failing with "no devices found".
-        bool noGpu = known is not null && known.Count > 0 &&
-                     !known.Any(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase));
-        switch (s.Strategy)
+        bool noGpu = known is not null && known.Count > 0 && !known.Any(d => d.IsGpu);
+        bool cpuDevice = known?.Any(d => !d.IsSkippedAlias && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)) == true;
+        if (gpuOnly && !noGpu) a.AddRange(["-D", "2"]);
+        else
+            switch (s.Strategy)
+            {
+                case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", "1,2"]); break;
+                // hashcat reaches the processor only through OpenCL; skipping the GPU-only CUDA and HIP
+                // interfaces keeps a half-installed GPU runtime (for example AMD HIP without its compiler
+                // library) from aborting a CPU-only run.
+                case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"]); break;
+                case DeviceStrategy.FastGpu: a.AddRange(["-D", noGpu ? "1" : "2"]); break;
+                default:
+                    if (noGpu) a.AddRange(["-D", "1"]);
+                    else if (s.HashcatCpuWithGpu && cpuDevice) a.AddRange(["-D", "1,2"]);
+                    break;
+            }
+        bool anyOff = s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0 || exclude is { Count: > 0 };
+        if (anyOff && known is not null)
         {
-            case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", "1,2"]); break;
-            // hashcat reaches the processor only through OpenCL; skipping the GPU-only CUDA and HIP
-            // interfaces keeps a half-installed GPU runtime (for example AMD HIP without its compiler
-            // library) from aborting a CPU-only run.
-            case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"]); break;
-            case DeviceStrategy.FastGpu: a.AddRange(["-D", noGpu ? "1" : "2"]); break;
-            default: if (noGpu) a.AddRange(["-D", "1"]); break;
-        }
-        if (s.DisabledDevices.Count > 0 && known is not null)
-        {
-            var enabled = known.Where(d => !d.IsSkippedAlias && !s.DisabledDevices.Contains(d.Id)).Select(d => d.Id).ToList();
+            var enabled = known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).Select(d => d.Id).ToList();
             if (enabled.Count > 0) a.AddRange(["-d", string.Join(',', enabled)]);
         }
         return a;
     }
+
+    /// <summary>Whether the user unchecked this device (by its stable key; ids only for older settings files).</summary>
+    public static bool IsDisabled(Settings s, BackendDevice d)
+        => s.DisabledDeviceKeys.Count > 0 ? s.DisabledDeviceKeys.Contains(d.Key) : s.DisabledDevices.Contains(d.Id);
+
+    /// <summary>The GPUs hashcat will run on with these settings (not skipped as an alias, not unchecked).</summary>
+    public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
+        => known is null ? [] : known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d)).ToList();
 
     /// <summary>
     /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
@@ -279,6 +303,10 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     private static void TrySetPriority(Process p, ProcessPriority pr)
     {
+        // As for the built-in engine (see NativeRunner.LowersProcessPriority): on macOS a niced hashcat
+        // loses its GPU-feeding thread to the built-in engine in hybrid attacks (measured on an M1 Pro:
+        // PDF R6 on the GPU fell from 9,600 to 2,500/s), and the GPU itself does not care about nice.
+        if (!Native.NativeRunner.LowersProcessPriority) return;
         try
         {
             p.PriorityClass = pr switch

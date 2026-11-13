@@ -18,6 +18,20 @@ public sealed class BackendDevice
     public int Processors { get; init; }
     public int ClockMhz { get; init; }
     public long MemoryMb { get; init; }
+    /// <summary>hashcat's "Memory.Unified" flag: the device shares the system memory (integrated GPUs, Apple silicon).</summary>
+    public bool Unified { get; init; }
+
+    /// <summary>A GPU built into the processor package (shares memory and power with the CPU cores).</summary>
+    public bool IsIntegratedGpu => Unified && IsGpu;
+
+    public bool IsGpu => Type.Contains("GPU", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Identifies the device across runs even when hashcat numbers devices differently (a backend
+    /// added or removed by a driver update shifts every id): backend, name and the position among
+    /// devices with the same backend and name.
+    /// </summary>
+    public string Key { get; internal set; } = "";
 
     private bool? _skipped;
 
@@ -204,15 +218,22 @@ public sealed partial class HashcatTool
                 AliasOf = dev.Groups[2].Success ? int.Parse(dev.Groups[2].Value) : null,
                 Backend = backend,
                 BackendVersion = f.GetValueOrDefault("Version") ?? backendVersion,
-                Type = f.GetValueOrDefault("Type") ?? "",
+                // hashcat -I prints no "Type" for CUDA and HIP devices; those backends only expose GPUs.
+                Type = f.GetValueOrDefault("Type") ?? (backend is "CUDA" or "HIP" ? "GPU" : ""),
                 Vendor = f.GetValueOrDefault("Vendor") ?? "",
                 Name = f.GetValueOrDefault("Name") ?? "",
                 Processors = Num("Processor(s)"),
                 ClockMhz = Num("Clock"),
                 MemoryMb = Num("Memory.Total"),
+                Unified = f.TryGetValue("Memory.Unified", out var uni) && uni.Trim() == "1",
             });
         }
         ResolveSkipped(list);
+        foreach (var g in list.GroupBy(d => (d.Backend, d.Name)))
+        {
+            int n = 0;
+            foreach (var d in g.OrderBy(d => d.Id)) d.Key = $"{d.Backend}|{d.Name}|{n++}";
+        }
         return list;
     }
 
@@ -268,6 +289,19 @@ public sealed partial class HashcatTool
     // ---------------------------------------------------------------- benchmark
 
     /// <summary>Benchmarks one mode; returns total H/s over all devices.</summary>
+    /// <summary>
+    /// hashcat's --keyspace for an attack: for masks, the number of base words that --skip/--limit and
+    /// restore points count (not candidates). Null when hashcat rejects the arguments.
+    /// </summary>
+    public async Task<long?> KeyspaceAsync(int mode, IEnumerable<string> attackArgs, CancellationToken ct = default)
+    {
+        var args = new List<string> { "-m", mode.ToString(), "--keyspace", "--quiet" };
+        args.AddRange(attackArgs);
+        var (code, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60), ct: ct);
+        var last = o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+        return code == 0 && long.TryParse(last, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var k) && k > 0 ? k : null;
+    }
+
     public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct)
     {
         var args = new List<string> { "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };

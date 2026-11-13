@@ -76,6 +76,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
         var inFlight = new long[threads];
         Array.Fill(inFlight, long.MaxValue);
         byte[]? found = null;
+        Exception? failure = null;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var started = DateTime.Now;
 
@@ -102,7 +103,8 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                     prefix[i] = pos[i][digits[i]];
                 }
 
-                for (long p = s; p < e;)
+                long p = s;
+                while (p < e)
                 {
                     // Pack up to `batch` consecutive prefixes.
                     int count = (int)Math.Min(batch, e - p);
@@ -135,12 +137,25 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                     p += count;
                     if ((before >> 6) != (p >> 6) && stop.IsCancellationRequested) break;
                 }
+                // A chunk left early (stop) stays marked in flight, so the resume point does not pass it.
+                if (p < e) return;
                 Interlocked.Add(ref done, (e - s) * last.Length);
                 Volatile.Write(ref inFlight[t], long.MaxValue);
             }
         }
 
-        var threadObjs = Enumerable.Range(0, threads).Select(t => new Thread(() => Worker(t))
+        // A kernel exception on a worker thread would end the process; stop the others and rethrow it here.
+        void Guarded(int t)
+        {
+            try { Worker(t); }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref failure, ex, null);
+                stop.Cancel();
+            }
+        }
+
+        var threadObjs = Enumerable.Range(0, threads).Select(t => new Thread(() => Guarded(t))
         {
             IsBackground = true, Priority = Priority, Name = $"RecoverKit CPU {t}",
         }).ToArray();
@@ -168,6 +183,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
             Progress?.Invoke(new NativeProgress { Length = len, Done = Math.Min(d, total), Total = total, Speed = speed, Started = started, ResumedFrom = startPrefix * last.Length });
         }
         tested = Volatile.Read(ref done) - startPrefix * last.Length;
+        if (failure is not null) throw new InvalidOperationException("Built-in engine kernel failed: " + failure.Message, failure);
 
         if (found is not null) return new NativeResult { Outcome = NativeOutcome.Found, Password = found };
         if (ct.IsCancellationRequested)

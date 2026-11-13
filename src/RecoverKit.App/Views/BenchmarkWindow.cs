@@ -160,7 +160,9 @@ public sealed class BenchmarkWindow : Window
                 try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token); }
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
-                _engines[e.Mode] = native ? "built-in CPU engine" : GpuNames().Any() ? "hashcat, GPU" : "hashcat, CPU (OpenCL)";
+                _engines[e.Mode] = native ? "built-in CPU engine"
+                    : SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? "hashcat on the GPU + built-in CPU engine"
+                    : GpuNames().Any() ? "hashcat, GPU" : "hashcat, CPU (OpenCL)";
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;
 

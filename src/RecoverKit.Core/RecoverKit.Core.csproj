@@ -25,6 +25,7 @@
     <EmbeddedResource Include="Attacks\DefaultScenarios.txt" LogicalName="RecoverKit.DefaultScenarios.txt" />
     <EmbeddedResource Include="Attacks\Resources\SmallEnglish.txt" LogicalName="RecoverKit.SmallEnglish.txt" />
     <EmbeddedResource Include="Attacks\Resources\MediumEnglish.txt" LogicalName="RecoverKit.MediumEnglish.txt" />
+    <EmbeddedResource Include="Native\Resources\ordered.hcstat2" LogicalName="RecoverKit.ordered.hcstat2" />
   </ItemGroup>
 
   <ItemGroup>

@@ -119,17 +119,53 @@ zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attac
 
 ## When the built-in engine runs
 
-`NativeRunner.Plan()` picks it only when all of these hold:
+`NativeRunner.Plan()` and `HybridRunner.Plan()` use it when all of these hold:
 
 - the format has a built-in kernel (ZIP, Word/Excel 97, Word/Excel 2003, PDF R2-R4, PDF R6, RAR 3 -hp, TrueCrypt Whirlpool with a single cipher);
-- for PDF R6 and the fast RAR 3 path, the native library is present and the CPU has AVX2 (PDF R6 also AES-NI);
+- for PDF R6 and the fast RAR 3 path, the native library is present and the CPU has AVX2 (PDF R6 also AES-NI) or NEON;
 - the attack is brute-force or mask (`-a 3`), not dictionary or stdin generators;
 - no extra hashcat arguments are configured (they can change candidate interpretation);
 - for TrueCrypt Whirlpool, the native library is present;
-- no GPU will be used (no GPU present, or strategy "CPU only");
 - Preferences > Performance "Use the built-in CPU engine" is on (default).
 
-Otherwise hashcat runs. With a GPU, hashcat runs everything.
+Without a GPU (no GPU present, every GPU unchecked, or strategy "CPU only") it runs alone. With a
+GPU it runs next to hashcat on part of the keyspace (hybrid, see below) when "Run it next to the
+GPUs" is on (default) and the strategy is "Keep one CPU thread free for each GPU" (default) or "Use
+all CPU threads"; with "Avoid the CPU" or hybrid off, hashcat runs alone as before.
+
+## Hybrid CPU + GPU (Apple M1 Pro)
+
+Measured on 2026-11-13 on an Apple M1 Pro (8 performance + 2 efficiency cores, 16-core GPU),
+hashcat 7.1.2 on the GPU through OpenCL, built-in engine with the native NEON library, 9 CPU threads
+next to hashcat (one left for hashcat's GPU thread), RecoverKit's CLI with default settings. Another
+program used the GPU at times during this session; rows marked * overlapped with it.
+
+| Format, mask | GPU only | CPU only | Hybrid |
+|---|---:|---:|---:|
+| PDF R6, `?u?u?u?u?u` (steady speed) | 7,700-9,600/s | 55,000-60,000/s | 63,000-67,000/s (GPU 6,700, CPU 58,000) |
+| PDF R6, same, second hybrid run * | | | 33,000-35,000/s (GPU 6,600, CPU 27,600) |
+| RAR 3 -hp, `?1?1?1?1?d`, `?1`=a-p, whole run | 48 s (11,500-14,000/s) | 147-186 s (3,500-4,800/s) | 142-191 s * |
+
+What this machine shows:
+
+- **PDF R6**: the CPU engine is about six times faster than this integrated GPU, and hybrid adds the
+  GPU on top: about +15-20 % over CPU only and seven times GPU only.
+- **RAR 3**: here the GPU is three times faster than the CPU, and the two share one power budget
+  and memory: with the CPU engine busy the GPU fell to 7,000-11,000/s while the CPU added about
+  1,700/s, and hashcat's start-up grew from a few seconds to about a minute. Hybrid lost to GPU only.
+  This is why, when every GPU is integrated and the last hybrid attack measured the CPU below a
+  quarter of hashcat's speed, later attacks on that mode run hashcat alone.
+- On a desktop with a discrete GPU the GPU does not share the processor's power budget, so the CPU's
+  share should add almost fully; that case (the user benchmark that prompted this, a Ryzen 7 9800X3D
+  with an RTX 4060) was not available for measurement.
+
+Before this work two things cost the built-in engine most of its speed on macOS: the default
+"Idle" priority niced the process, which macOS runs on the efficiency cores (PDF R6 10,000-16,000/s
+instead of 55,000/s; RAR 3 at "below normal" 1,800/s instead of 4,400/s), and a niced hashcat next to
+the engine fed the GPU at 2,500/s instead of 9,600/s. On macOS neither is lowered any more.
+
+Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without `--no-hybrid`, and
+`--strategy CpuOnly`; the status lines list each device's speed.
 
 ## Findings
 

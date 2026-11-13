@@ -167,6 +167,18 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         var native = new Native.NativeRunner();
         native.StatusReceived += s => Status?.Invoke(s);
         native.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
+        var hybrid = new Native.HybridRunner
+        {
+            Devices = Devices,
+            GuardEvents = h =>
+            {
+                h.GuardMessage += m => Log?.Invoke(LogKind.Warning, m);
+                h.Thermal += e => Thermal?.Invoke(e);
+            },
+        };
+        hybrid.StatusReceived += s => Status?.Invoke(s);
+        hybrid.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
+        hybrid.Warning += m => Log?.Invoke(LogKind.Warning, m);
 
         string? stayKeysHex = null;   // Stay fast key search: recovered ZipCrypto cipher keys (hex)
         string? stayCopy = null;
@@ -247,9 +259,18 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             {
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
                 var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, credentials: target.VolumeCredentials);
+                // With a GPU: hashcat on the GPUs and the built-in engine on the CPU, each on its own part.
+                var hybridPlan = nativePlan is null && pmkTable is null
+                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, settings, Devices, target.VolumeCredentials) : null;
+                if (nativePlan is null && hybridPlan is null && settings.HybridCpuGpu && Native.HybridRunner.CpuAddsTooLittle(settings, Devices, mode)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is not null)
+                    Log?.Invoke(LogKind.Info, $"The CPU added less than a quarter of the GPU's speed in the last hybrid attack on this format, " +
+                                              "and on an integrated GPU it slows the GPU down: hashcat runs alone.");
                 string restoreFile = nativePlan is not null
                     ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
-                    : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
+                    : hybridPlan is not null
+                        ? Native.HybridRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
+                        : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
                 bool restore = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
                                && File.Exists(restoreFile);
                 string session = restore ? resume!.HashcatSession : $"rk_{key}_{si}_{mi}";
@@ -285,10 +306,12 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 };
                 var result = nativePlan is { } np
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
-                    : await runner.RunAsync(request, ct);
+                    : hybridPlan is { } hp
+                        ? await hybrid.RunAsync(hp, target.HashLines, request, tool, ct)
+                        : await runner.RunAsync(request, ct);
 
                 // hashcat refuses some modes on Apple GPUs (e.g. PKZIP 17200 family): run the built-in CPU engine instead.
-                if (nativePlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
+                if (nativePlan is null && hybridPlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
                     && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is { } fallback)
                 {
                     Log?.Invoke(LogKind.Warning, $"hashcat cannot run hash mode {mode} on this GPU; using the built-in CPU engine instead.");
@@ -426,7 +449,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     private void Cleanup(string session)
     {
         foreach (var f in new[] { HashcatRunner.RestoreFile(settings.SessionsDir, session), HashcatRunner.OutFile(settings.SessionsDir, session),
-                                  Native.NativeRunner.RestoreFile(settings.SessionsDir, session) })
+                                  Native.NativeRunner.RestoreFile(settings.SessionsDir, session),
+                                  Native.HybridRunner.RestoreFile(settings.SessionsDir, session) })
             try { File.Delete(f); } catch (IOException) { }
     }
 }

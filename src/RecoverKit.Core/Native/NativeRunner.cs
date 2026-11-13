@@ -28,7 +28,7 @@ public sealed class NativeRunner
     {
         // Extra hashcat options can change candidate interpretation (for example TrueCrypt keyfiles).
         if (credentials is not null || !settings.UseNativeCpuEngine || attack.Stdin is not null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
-        bool gpu = devices?.Any(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)) == true;
+        bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly) return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length != 1) return null;
@@ -76,7 +76,8 @@ public sealed class NativeRunner
         // other programs win but the UI thread still outranks the workers.
         var proc = Process.GetCurrentProcess();
         ProcessPriorityClass? previous = null;
-        try { previous = proc.PriorityClass; proc.PriorityClass = ProcessClassFor(s.Priority); }
+        if (LowersProcessPriority)
+            try { previous = proc.PriorityClass; proc.PriorityClass = ProcessClassFor(s.Priority); }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
 
         var sw = Stopwatch.StartNew();
@@ -93,13 +94,9 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = result.Password!;
-                string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : "$HEX[" + Convert.ToHexString(pw).ToLowerInvariant() + "]";
-                if (!s.DontUsePasswordCache)
-                    try { await File.AppendAllTextAsync(s.PotfilePath, hashLine.Trim() + ":" + plain + "\n", new UTF8Encoding(false), CancellationToken.None); }
-                    catch (IOException ex) { DebugLog.Warn("Could not write potfile: " + ex.Message); }
+                var pw = await RecordFoundAsync(s, hashLine, result.Password!);
                 TryDelete(restoreFile);
-                return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [HashcatTool.DecodePlain(plain)], LastStatus = last };
+                return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
             case NativeOutcome.Stopped:
                 if (result.ResumeAt is { } at)
@@ -111,11 +108,35 @@ public sealed class NativeRunner
         }
     }
 
+    /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
+    internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw)
+    {
+        string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : "$HEX[" + Convert.ToHexString(pw).ToLowerInvariant() + "]";
+        if (!s.DontUsePasswordCache)
+            try { await File.AppendAllTextAsync(s.PotfilePath, hashLine.Trim() + ":" + plain + "\n", new UTF8Encoding(false), CancellationToken.None); }
+            catch (IOException ex) { DebugLog.Warn("Could not write potfile: " + ex.Message); }
+        return HashcatTool.DecodePlain(plain);
+    }
+
     private static bool Printable(byte[] pw) => pw.All(b => b is >= 0x20 and < 0x7f);
 
     private static void TryDelete(string f) { try { File.Delete(f); } catch (IOException) { } }
 
-    private static ThreadPriority ThreadPriorityFor(ProcessPriority p) => p switch
+    /// <summary>
+    /// Whether the engine lowers the whole process while it runs. Not on macOS: a niced process (and
+    /// "Idle" is nice 19) runs its threads on the efficiency cores, measured at a quarter of the speed
+    /// on an M1 Pro (PDF R6: about 14,000 instead of 55,000/s), and an unprivileged process cannot raise
+    /// its priority again afterwards. The lower thread priority alone keeps other programs first.
+    /// </summary>
+    internal static bool LowersProcessPriority => !OperatingSystem.IsMacOS();
+
+    /// <summary>
+    /// Worker thread priority. On macOS a lowered priority moves the threads towards the efficiency
+    /// cores as soon as anything else runs: measured on an M1 Pro, RAR 3 fell from about 3,700 to
+    /// 1,800/s at "below normal", and PDF R6 next to hashcat from 58,000 to 25,000-40,000/s at "lowest".
+    /// There the engine runs at normal priority and macOS shares the cores between applications.
+    /// </summary>
+    internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => OperatingSystem.IsMacOS() && p != ProcessPriority.High ? ThreadPriority.Normal : p switch
     {
         ProcessPriority.Idle => ThreadPriority.Lowest,
         ProcessPriority.BelowNormal => ThreadPriority.BelowNormal,
@@ -123,7 +144,7 @@ public sealed class NativeRunner
         _ => ThreadPriority.Normal,
     };
 
-    private static ProcessPriorityClass ProcessClassFor(ProcessPriority p) => p switch
+    internal static ProcessPriorityClass ProcessClassFor(ProcessPriority p) => p switch
     {
         ProcessPriority.Idle => ProcessPriorityClass.Idle,
         ProcessPriority.BelowNormal => ProcessPriorityClass.BelowNormal,

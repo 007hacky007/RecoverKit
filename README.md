@@ -219,6 +219,9 @@ quickest guesses.
   its built-in default password "VelvetSweatshop", which other programs then ask for. RecoverKit
   recognizes this (and empty passwords) instantly and can save a normal copy of .xlsx files; for
   old .xls files it shows the password.
+- **CPU and GPU together:** brute-force and mask attacks on ZIP, Office 97-2003, PDF, RAR 3 and
+  TrueCrypt (Whirlpool) use all your GPUs and the processor at the same time, each on its own part
+  of the passwords. Preferences > Performance can turn this off.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

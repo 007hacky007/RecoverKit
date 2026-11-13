@@ -161,6 +161,11 @@ try
             if (Opt(argv, "--gpu-duty") is { } gd) settings.GpuDutyPercent = int.Parse(gd);
             int? powerLimit = Opt(argv, "--power-limit") is { } pl ? int.Parse(pl) : null;
             if (Opt(argv, "--strategy") is { } strat) settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true);
+            // Hybrid CPU + GPU (on by default) and hashcat's CPU device next to the GPUs (off by default).
+            if (argv.Contains("--no-hybrid")) settings.HybridCpuGpu = false;
+            if (argv.Contains("--hybrid")) settings.HybridCpuGpu = true;
+            if (argv.Contains("--hashcat-cpu")) settings.HashcatCpuWithGpu = true;
+            if (Opt(argv, "--threads") is { } thr) settings.MaxCpuThreads = int.Parse(thr);
             // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
             if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
                 Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
@@ -177,7 +182,8 @@ try
             // Same device detection as the GUI, so the CPU/GPU strategy and built-in engine decisions match.
             var devices = await tool.DevicesAsync();
             foreach (var dev in devices)
-                Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.IsSkippedAlias ? ", skipped by hashcat" : "")})");
+                Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.IsIntegratedGpu ? ", integrated" : "")}" +
+                                  $"{(dev.IsSkippedAlias ? ", skipped by hashcat" : "")}{(HashcatRunner.IsDisabled(settings, dev) ? ", unchecked in Preferences" : "")})");
             if (powerLimit is int watts)
             {
                 var gpus = await PowerLimiter.QueryAsync();
@@ -211,7 +217,9 @@ try
                 if ((DateTime.Now - lastPrint).TotalSeconds < 5 && s.Status == 3) return;
                 lastPrint = DateTime.Now;
                 int temp = ThermalGuard.Hottest(s.Devices);
-                Console.WriteLine($"  {s.StatusText}: {s.ProgressDone:N0}/{s.ProgressTotal:N0} ({s.Fraction:P1}) {s.TotalSpeed:N0} H/s, base {s.GuessBase}" +
+                Console.WriteLine($"  {s.StatusText}: {s.ProgressDone:N0}/{s.ProgressTotal:N0} ({s.Fraction:P1}) {s.TotalSpeed:N0} H/s" +
+                                  (s.MaskLength is int ml ? $", length {ml}" : $", base {s.GuessBase}") +
+                                  (s.Devices.Count > 1 ? " [" + string.Join(", ", s.Devices.Select(d => $"{d.Name} {d.Speed:N0}")) + "]" : "") +
                                   (temp >= 0 ? $", GPU {temp} °C" : ""));
             };
             using var cts = new CancellationTokenSource();
@@ -222,6 +230,9 @@ try
             var res = await session.RunAsync(d.Target, d.FilePath, steps, resume, cts.Token);
             var persisted = Settings.Load(); // command-line overrides are not persisted
             persisted.SpeedByMode = settings.SpeedByMode;
+            persisted.GpuSpeedByMode = settings.GpuSpeedByMode;
+            persisted.CpuSpeedByMode = settings.CpuSpeedByMode;
+            persisted.GpuStartupByMode = settings.GpuStartupByMode;
             persisted.Save();
             Console.WriteLine($"RESULT: {res.Outcome}");
             foreach (var p in res.Passwords) Console.WriteLine($"PASSWORD: {p}");
@@ -378,5 +389,6 @@ static int Usage()
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
+    Console.WriteLine("Device options: --strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly; --no-hybrid hashcat alone on the GPUs (no built-in CPU engine next to them); --hashcat-cpu also run hashcat on the CPU for formats without a built-in kernel; --threads N CPU thread limit");
     return 64;
 }

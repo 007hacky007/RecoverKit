@@ -586,7 +586,7 @@ public sealed partial class MainWindow : Window
                     gpus.Count > 0 ? "GPU ready: " + _deviceStatus : _deviceStatus);
             var deviceLines = usable.Select(d =>
                 $"Device #{d.Id}: {d.Name} ({d.Backend}{(d.Processors > 0 ? $", {d.Processors} compute units" : "")}{(d.MemoryMb > 0 ? $", {d.MemoryMb} MB" : "")})"
-                + (_settings.DisabledDevices.Contains(d.Id) ? ", disabled" : "")).ToList();
+                + (d.IsIntegratedGpu ? ", integrated" : "") + (HashcatRunner.IsDisabled(_settings, d) ? ", disabled" : "")).ToList();
             ToolTip.SetTip(_pill, deviceLines.Count > 0 ? string.Join("\n", deviceLines) : null);
             Line();
             if (gpus.Count == 0 && cpu)
