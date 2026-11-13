@@ -12,6 +12,7 @@ using RecoverKit.Core.Diagnostics;
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
 //   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
+if (args.Length > 0 && args[0] == FiniteDiagnosticWorker.Command) return FiniteDiagnosticWorker.Run(args);
 if (args.Length > 0 && args[0] == CpuDiagnosticWorker.Command) return CpuDiagnosticWorker.Run(args);
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();

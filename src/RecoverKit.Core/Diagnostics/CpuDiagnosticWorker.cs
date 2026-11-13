@@ -27,6 +27,9 @@ public static class CpuDiagnosticWorker
                 result = Failed("Requested CPU variant is unsupported.");
             else
             {
+                if (NativeRunner.LowersProcessPriority)
+                    try { Process.GetCurrentProcess().PriorityClass = NativeRunner.ProcessClassFor(priority); }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
                 using var selection = KernelVariants.Select(mode, variant);
                 var check = Math.Abs(mode) is 17200 or 17210 ? CpuDiagnostics.CheckZipVariant(variant) : CpuDiagnostics.CheckKernel(mode);
                 string path = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : variant;
@@ -86,7 +89,7 @@ public static class CpuDiagnosticWorker
         }
     }
 
-    private static ProcessStartInfo SelfStartInfo()
+    internal static ProcessStartInfo SelfStartInfo()
     {
         string process = Environment.ProcessPath ?? throw new InvalidOperationException("The application executable is unavailable.");
         var start = new ProcessStartInfo(process);
@@ -100,6 +103,12 @@ public static class CpuDiagnosticWorker
     }
 
     internal static async Task<WorkerResult> RunProcessAsync(ProcessStartInfo start, string output, TimeSpan timeout, CancellationToken ct)
+    {
+        var result = await RunJsonProcessAsync(start, output, timeout, ct);
+        return result.Error is not null ? Failed(result.Error) : ReadResult(result.ExitCode, result.Json);
+    }
+
+    internal static async Task<(int ExitCode, string Json, string? Error)> RunJsonProcessAsync(ProcessStartInfo start, string output, TimeSpan timeout, CancellationToken ct, bool isolatedProcessGroup = false)
     {
         ct.ThrowIfCancellationRequested();
         start.UseShellExecute = false;
@@ -117,14 +126,16 @@ public static class CpuDiagnosticWorker
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            if (isolatedProcessGroup) FiniteDiagnosticWorker.StopProcessGroup(process.Id);
             await process.WaitForExitAsync(CancellationToken.None);
             await Task.WhenAll(stdout, stderr);
             ct.ThrowIfCancellationRequested();
-            return Failed("CPU worker exceeded its time limit.");
+            return (-1, "", "Diagnostic worker exceeded its time limit.");
         }
+        if (isolatedProcessGroup) FiniteDiagnosticWorker.StopProcessGroup(process.Id);
         await Task.WhenAll(stdout, stderr);
         string json = File.Exists(output) && new FileInfo(output).Length <= 1_000_000 ? await File.ReadAllTextAsync(output, ct) : "";
-        return ReadResult(process.ExitCode, json);
+        return (process.ExitCode, json, null);
     }
 
     internal static WorkerResult ReadResult(int exitCode, string json)
