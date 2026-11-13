@@ -60,6 +60,16 @@ public sealed class CpuDiagnosticsTests
     }
 
     [Fact]
+    public void DeflatedZipIsRegisteredForAutomaticCalibration()
+    {
+        Assert.True(NativeKernels.Supports(17200));
+        var kernel = NativeKernels.TryCreate(17200, NativeKernels.BenchmarkHashes[17200]);
+        Assert.NotNull(kernel);
+        Assert.True(kernel.Verify("hashcat"u8));
+        Assert.True(CpuDiagnostics.CheckKernel(17200).Passed);
+    }
+
+    [Fact]
     public void MachineFactsHaveNoMachineOrUserNames()
     {
         Assert.False(string.IsNullOrWhiteSpace(SystemFacts.CpuName()));

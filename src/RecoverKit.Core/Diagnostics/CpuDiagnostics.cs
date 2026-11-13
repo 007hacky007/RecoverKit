@@ -61,13 +61,13 @@ public static class CpuDiagnostics
             foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
             {
                 ct.ThrowIfCancellationRequested();
-                var variants = Math.Abs(mode) == 17210 ? Variants : new[] { new ZipVariant("default", savedPath) };
+                var variants = Math.Abs(mode) is 17200 or 17210 ? Variants : new[] { new ZipVariant("default", savedPath) };
                 foreach (var variant in variants)
                 {
-                    if (Math.Abs(mode) == 17210 && !variant.Supported) continue;
+                    if (Math.Abs(mode) is 17200 or 17210 && !variant.Supported) continue;
                     progress($"Mode {mode}: checking {variant.Name}");
-                    ZipCryptoNative.RequestedPath = Math.Abs(mode) == 17210 ? variant.Selector : savedPath;
-                    var check = Math.Abs(mode) == 17210 ? CheckZipPath(variant.Selector) : CheckKernel(mode);
+                    ZipCryptoNative.RequestedPath = Math.Abs(mode) is 17200 or 17210 ? variant.Selector : savedPath;
+                    var check = Math.Abs(mode) is 17200 or 17210 ? CheckZipPath(variant.Selector) : CheckKernel(mode);
                     if (!check.Passed)
                     {
                         add(new DiagnosticMeasurement { Section = "cpu", Step = "Correctness FAIL", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name, Correct = false, Error = check.Error, Target = Target(mode), Length = 7 });
@@ -89,7 +89,7 @@ public static class CpuDiagnostics
                                 Section = "cpu", Step = "Correctness PASS; timed", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name,
                                 Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
                                 ElapsedSeconds = timer.Elapsed.TotalSeconds, Target = Target(mode), Length = 7,
-                                Details = new() { ["correctness cases"] = check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = Math.Abs(mode) == 17210 ? NativeKernels.ZipCryptoPath : "native default" },
+                                Details = new() { ["correctness cases"] = check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : "native default" },
                             });
                         }
                         catch (OperationCanceledException) { throw; }
@@ -106,6 +106,7 @@ public static class CpuDiagnostics
 
     private static string Target(int mode) => mode switch
     {
+        17200 => "synthetic ZIP deflated 1 KB text fixture",
         17210 => "native ZIP stored 29-byte fixture",
         -17210 => "published ZIP stored 453-byte fixture",
         10700 => "RecoverKit synthetic PDF R6 fixture",
