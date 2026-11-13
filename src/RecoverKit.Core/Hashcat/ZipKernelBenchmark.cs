@@ -116,15 +116,21 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
             "--keep-guessing", "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
-        var (_, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
-        var speeds = o.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
-            .Where(st => st.Status == 3).Select(st => st.TotalSpeed).Where(v => v > 0).ToList();
-        if (speeds.Count == 0)
-        {
-            var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);
-            Progress?.Invoke("  no speed reported: " + string.Join(" / ", why));
-            return 0;
-        }
+        var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
+        double speed = ParseSpeed(code, o);
+        if (speed > 0) return speed;
+        var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);
+        Progress?.Invoke($"  no valid speed reported (exit {code}): " + string.Join(" / ", why));
+        return 0;
+    }
+
+    internal static double ParseSpeed(int exitCode, string output)
+    {
+        // Runtime expiry (4) is normal here; errors or a manual stop invalidate earlier samples.
+        if (exitCode is not (0 or 1 or 4)) return 0;
+        var speeds = output.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
+            .Where(st => st.Status == 3).Select(st => st.TotalSpeed).Where(v => v > 0 && double.IsFinite(v)).ToList();
+        if (speeds.Count == 0) return 0;
         var tail = speeds.Count > 3 ? speeds.Skip(2).ToList() : speeds;
         tail.Sort();
         return tail[tail.Count / 2];
