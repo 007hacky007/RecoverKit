@@ -104,19 +104,41 @@ public class ZipStayTargetTests
         Assert.DoesNotContain(payload.Entries, e => e.Name == "short.txt");
     }
 
-    [Fact]
-    public void Payload_absent_for_odf_and_aes_archives()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Payload_absent_for_odf_archives(bool encrypted)
     {
+        // ODF encrypts part bytes using manifest metadata, leaving ZIP encryption flags clear.
+        var encryption = encrypted ? """
+            <m:encryption-data m:checksum-type="SHA256/1K" m:checksum="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=">
+              <m:algorithm m:algorithm-name="http://www.w3.org/2001/04/xmlenc#aes256-cbc" m:initialisation-vector="AAAAAAAAAAAAAAAAAAAAAA=="/>
+              <m:key-derivation m:key-derivation-name="PBKDF2" m:iteration-count="1024" m:key-size="32" m:salt="AAAAAAAAAAAAAAAAAAAAAA=="/>
+              <m:start-key-generation m:start-key-generation-name="SHA256"/>
+            </m:encryption-data>
+            """ : "";
+        var manifest = $"""
+            <m:manifest xmlns:m="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
+              <m:file-entry m:full-path="content.xml" m:media-type="text/xml">{encryption}</m:file-entry>
+            </m:manifest>
+            """;
         var odfSpecs = new List<GeneratedEntry>
         {
             new() { Name = "mimetype", Content = "application/vnd.oasis.opendocument.text"u8.ToArray(), Method = 0, Classic = false },
-            new() { Name = "META-INF/manifest.xml", Content = "<manifest/>"u8.ToArray(), Method = 8, Classic = false },
-            new() { Name = "content.xml", Content = Encoding.ASCII.GetBytes(new string('z', 200)), Method = 8 },
+            new() { Name = "META-INF/manifest.xml", Content = Encoding.UTF8.GetBytes(manifest), Method = 8, Classic = false },
+            // Synthetic part bytes suffice for extraction; no password verification runs here.
+            new() { Name = "content.xml", Content = encrypted ? new byte[208] : "<document/>"u8.ToArray(), Method = 0, Classic = false },
         };
         var d = Extract(ZipStayArchive.Generate(odfSpecs, Password, ZipRngVariant.Msvc, 1));
-        Assert.True(d.Target is null || d.Target.FormatId != "ZIPC");   // ODF path taken, never ZIPC
+        if (encrypted) Assert.Equal("ODF2", d.Target!.FormatId);
+        else Assert.Null(d.Target);
+        Assert.StartsWith("OpenDocument", d.TypeName);
         Assert.Null(d.Target?.StayZip);
+    }
 
+    [Fact]
+    public void Payload_absent_for_aes_archives()
+    {
         var aesSpecs = Entries(3);
         aesSpecs.Add(new GeneratedEntry
         {
@@ -125,9 +147,20 @@ public class ZipStayTargetTests
             Method = 8,
             FakeAes = true,
         });
-        d = Extract(ZipStayArchive.Generate(aesSpecs, Password, ZipRngVariant.Msvc, 2));
+        var d = Extract(ZipStayArchive.Generate(aesSpecs, Password, ZipRngVariant.Msvc, 2));
         Assert.Equal("WZAE", d.Target!.FormatId);
         Assert.Null(d.Target.StayZip);
+    }
+
+    [Fact]
+    public void ZipCrypto_content_with_odf_named_entries_uses_zip_path()
+    {
+        var specs = Entries(2);
+        specs.Add(new() { Name = "mimetype", Content = "application/vnd.oasis.opendocument.text"u8.ToArray(), Method = 0, Classic = false });
+        specs.Add(new() { Name = "META-INF/manifest.xml", Content = "<manifest/>"u8.ToArray(), Method = 8, Classic = false });
+        var d = Extract(ZipStayArchive.Generate(specs, Password, ZipRngVariant.Msvc, 1));
+        Assert.Equal("ZIPC", d.Target!.FormatId);
+        Assert.Equal(2, d.Target.StayZip!.Entries.Count);
     }
 
     [Fact]

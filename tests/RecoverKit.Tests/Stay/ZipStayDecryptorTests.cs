@@ -246,10 +246,11 @@ public class ZipStayDecryptorTests
     [Fact]
     public void OutputPathFor_uses_settings_suffix()
     {
-        var archive = Path.Combine("/tmp", "vacation.zip");
-        Assert.Equal(Path.Combine("/tmp", "vacation_decrypted.zip"),
+        var directory = Path.GetTempPath();
+        var archive = Path.Combine(directory, "vacation.zip");
+        Assert.Equal(Path.Combine(directory, "vacation_decrypted.zip"),
             ZipStayDecryptor.OutputPathFor(archive, new Settings()));
-        Assert.Equal(Path.Combine("/tmp", "vacation-clear.zip"),
+        Assert.Equal(Path.Combine(directory, "vacation-clear.zip"),
             ZipStayDecryptor.OutputPathFor(archive, new Settings { DecryptSuffix = "-clear" }));
     }
 }
