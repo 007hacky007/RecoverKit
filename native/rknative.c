@@ -38,12 +38,13 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 6
+#define RK_API_VERSION 7
 
 enum
 {
     RK_FEAT_AVX2 = 1, RK_FEAT_SHANI = 2, RK_FEAT_AESNI = 4, RK_FEAT_NEON = 8,
     RK_FEAT_ARM_AES = 16, RK_FEAT_ARM_SHA1 = 32, RK_FEAT_ARM_SHA2 = 64, RK_FEAT_ARM_SHA512 = 128, RK_FEAT_ARM_SHA3 = 256,
+    RK_FEAT_AVX512 = 512,      /* AVX-512 F with the OS saving the ZMM state: the 16-lane PBKDF2-SHA256 path */
 };
 
 /* The feature that enables the 16-lane vector kernels on this architecture. */
@@ -59,7 +60,7 @@ static int detect_features(void)
 {
     int f = 0;
 #if RK_X64
-    unsigned a, b, c, d, xlo, xhi;
+    unsigned a, b, c, d, xlo = 0, xhi = 0;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0), "c"(0));
     unsigned maxLeaf = a;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
@@ -76,6 +77,7 @@ static int detect_features(void)
         __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
         if (osAvx && (b & (1u << 5))) f |= RK_FEAT_AVX2;
         if (b & (1u << 29)) f |= RK_FEAT_SHANI;
+        if (osAvx && (b & (1u << 16)) && (xlo & 0xe0) == 0xe0) f |= RK_FEAT_AVX512;   /* AVX512F; XCR0 opmask + ZMM */
     }
 #elif RK_ARM64
     f |= RK_FEAT_NEON;      /* Advanced SIMD is mandatory on AArch64 */
@@ -3308,6 +3310,238 @@ RK_EXPORT int rk_pdf_search(const rk_pdf_params* params, const uint8_t* pws, int
 #endif
     (void)params; (void)pws; (void)len; (void)n; (void)hits; (void)maxh;
     return -1;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* PBKDF2-HMAC-SHA256, many candidates at once                                                */
+/*                                                                                            */
+/* Per candidate the HMAC inner and outer states (SHA-256 after key ^ ipad / key ^ opad) and   */
+/* U1 are computed once, in scalar code. Every further iteration is two SHA-256 compressions    */
+/* of a 32-byte message, run on a lane per candidate: 16 lanes with AVX-512, 8 with AVX2 or     */
+/* NEON (sha256_lanes.h, one source for all widths), or 8 interleaved streams of the ARMv8      */
+/* SHA-256 instructions. pbkdf2_sha256() is the entry point for the kernels.                  */
+/* ------------------------------------------------------------------------------------------ */
+
+#define PBKDF2_MAXLANES 16
+
+/* SHA-256 over m[0..n) continuing state s, after `prefix` bytes already hashed (a multiple of 64). */
+static void sha256_tail(uint32_t s[8], const uint8_t* m, size_t n, uint64_t prefix)
+{
+    uint8_t b[128];
+    while (n >= 64) { sha256_block(s, m); m += 64; n -= 64; prefix += 64; }
+    memset(b, 0, sizeof b);
+    memcpy(b, m, n);
+    b[n] = 0x80;
+    int nb = n + 9 <= 64 ? 1 : 2;
+    uint64_t bits = (prefix + n) * 8;
+    for (int i = 0; i < 8; i++) b[nb * 64 - 1 - i] = (uint8_t)(bits >> (8 * i));
+    for (int i = 0; i < nb; i++) sha256_block(s, b + 64 * i);
+}
+
+/* HMAC-SHA256 key setup: states after the key block xor ipad / opad (keys over 64 bytes are hashed first). */
+static void hmac_sha256_states(const uint8_t* key, size_t klen, uint32_t ist[8], uint32_t ost[8])
+{
+    uint8_t k[64] = { 0 }, b[64];
+    if (klen > 64)
+    {
+        uint32_t s[8];
+        memcpy(s, SHA256_IV, sizeof s);
+        sha256_tail(s, key, klen, 0);
+        for (int i = 0; i < 8; i++) put_be32(k + 4 * i, s[i]);
+    }
+    else if (klen) memcpy(k, key, klen);
+    for (int i = 0; i < 64; i++) b[i] = (uint8_t)(k[i] ^ 0x36);
+    memcpy(ist, SHA256_IV, 32);
+    sha256_block(ist, b);
+    for (int i = 0; i < 64; i++) b[i] = (uint8_t)(k[i] ^ 0x5c);
+    memcpy(ost, SHA256_IV, 32);
+    sha256_block(ost, b);
+}
+
+/* U1 = HMAC(key, salt || INT(block)) from the key's states. */
+static void pbkdf2_sha256_u1(const uint32_t ist[8], const uint32_t ost[8], const uint8_t* salt, size_t slen, uint32_t block, uint32_t u[8])
+{
+    uint8_t buf[256], *m = slen + 4 <= sizeof buf ? buf : (uint8_t*)malloc(slen + 4), d[32];
+    if (!m) { memset(u, 0, 32); return; }
+    if (slen) memcpy(m, salt, slen);
+    put_be32(m + slen, block);
+    uint32_t s[8];
+    memcpy(s, ist, 32);
+    sha256_tail(s, m, slen + 4, 64);
+    if (m != buf) free(m);
+    for (int i = 0; i < 8; i++) put_be32(d + 4 * i, s[i]);
+    memcpy(u, ost, 32);
+    sha256_tail(u, d, 32, 64);
+}
+
+#define PS_SUFFIX _1
+#define PS_V uint32_t
+#define PS_L 1
+#define PS_FN
+#define PS_LANE(v, l) (v)
+#include "sha256_lanes.h"
+
+#if RK_X64
+#define AVX512 __attribute__((target("avx512f,evex512")))
+typedef uint32_t v8u __attribute__((vector_size(32)));
+typedef uint32_t v16u __attribute__((vector_size(64)));
+#define PS_SUFFIX _avx2
+#define PS_V v8u
+#define PS_L 8
+#define PS_FN AVX2
+#include "sha256_lanes.h"
+#define PS_SUFFIX _avx512
+#define PS_V v16u
+#define PS_L 16
+#define PS_FN AVX512
+#include "sha256_lanes.h"
+#elif RK_ARM64
+typedef uint32_t v8u __attribute__((vector_size(32)));
+#define PS_SUFFIX _neon
+#define PS_V v8u
+#define PS_L 8
+#define PS_FN
+#include "sha256_lanes.h"
+
+/*
+ * ARMv8 SHA-256 instructions: one message per register set, so the lanes are independent streams,
+ * interleaved to cover the instruction latency. Words 8..15 of every message are the constant
+ * padding of a 32-byte message after one 64-byte block.
+ */
+#ifndef PBKDF2_CE_STREAMS
+#define PBKDF2_CE_STREAMS 8         /* 4: -2 %; the hash instructions, not their latency, are the limit (M1 Pro) */
+#endif
+
+ARMCE static inline __attribute__((always_inline)) void sha256ce_c32(const uint32x4_t (*st)[2], uint32x4_t (*x)[2])
+{
+    static const uint32_t pad[8] = { 0x80000000u, 0, 0, 0, 0, 0, 0, 768 };
+    uint32x4_t m[PBKDF2_CE_STREAMS][4], s0[PBKDF2_CE_STREAMS], s1[PBKDF2_CE_STREAMS];
+    for (int l = 0; l < PBKDF2_CE_STREAMS; l++)
+    {
+        m[l][0] = x[l][0]; m[l][1] = x[l][1]; m[l][2] = vld1q_u32(pad); m[l][3] = vld1q_u32(pad + 4);
+        s0[l] = st[l][0]; s1[l] = st[l][1];
+    }
+#pragma clang loop unroll(full)
+    for (int i = 0; i < 16; i++)
+    {
+        const uint32x4_t k = vld1q_u32(SHA256_K + 4 * i);
+#pragma clang loop unroll(full)
+        for (int l = 0; l < PBKDF2_CE_STREAMS; l++)
+        {
+            if (i >= 4) m[l][i & 3] = vsha256su1q_u32(vsha256su0q_u32(m[l][i & 3], m[l][(i + 1) & 3]), m[l][(i + 2) & 3], m[l][(i + 3) & 3]);
+            uint32x4_t wk = vaddq_u32(m[l][i & 3], k), t = s0[l];
+            s0[l] = vsha256hq_u32(s0[l], s1[l], wk);
+            s1[l] = vsha256h2q_u32(s1[l], t, wk);
+        }
+    }
+    for (int l = 0; l < PBKDF2_CE_STREAMS; l++) { x[l][0] = vaddq_u32(s0[l], st[l][0]); x[l][1] = vaddq_u32(s1[l], st[l][1]); }
+}
+
+ARMCE static void pbkdf2_sha256_iter_ce(const uint32_t (*ist)[8], const uint32_t (*ost)[8], uint32_t (*u)[8], uint32_t iter)
+{
+    uint32x4_t is[PBKDF2_CE_STREAMS][2], os[PBKDF2_CE_STREAMS][2], x[PBKDF2_CE_STREAMS][2], t[PBKDF2_CE_STREAMS][2];
+    for (int l = 0; l < PBKDF2_CE_STREAMS; l++)
+        for (int h = 0; h < 2; h++)
+        {
+            is[l][h] = vld1q_u32(ist[l] + 4 * h); os[l][h] = vld1q_u32(ost[l] + 4 * h);
+            t[l][h] = x[l][h] = vld1q_u32(u[l] + 4 * h);
+        }
+    for (uint32_t i = 1; i < iter; i++)
+    {
+        sha256ce_c32(is, x);
+        sha256ce_c32(os, x);
+        for (int l = 0; l < PBKDF2_CE_STREAMS; l++) { t[l][0] = veorq_u32(t[l][0], x[l][0]); t[l][1] = veorq_u32(t[l][1], x[l][1]); }
+    }
+    for (int l = 0; l < PBKDF2_CE_STREAMS; l++) { vst1q_u32(u[l], t[l][0]); vst1q_u32(u[l] + 4, t[l][1]); }
+}
+#endif
+
+typedef void (*pbkdf2_iter_fn)(const uint32_t (*)[8], const uint32_t (*)[8], uint32_t (*)[8], uint32_t);
+
+/* The fastest iteration path this CPU (and the feature mask) allows, and its lane count. */
+static pbkdf2_iter_fn pbkdf2_sha256_path(int* lanes)
+{
+    int f = features();
+    (void)f;
+#if RK_X64
+    if (f & RK_FEAT_AVX512) { *lanes = 16; return pbkdf2_sha256_iter_avx512; }
+    if (f & RK_FEAT_AVX2) { *lanes = 8; return pbkdf2_sha256_iter_avx2; }
+#elif RK_ARM64
+    if (f & RK_FEAT_ARM_SHA2) { *lanes = PBKDF2_CE_STREAMS; return pbkdf2_sha256_iter_ce; }
+    if (f & RK_FEAT_NEON) { *lanes = 8; return pbkdf2_sha256_iter_neon; }
+#endif
+    *lanes = 1;
+    return pbkdf2_sha256_iter_1;
+}
+
+/*
+ * PBKDF2-HMAC-SHA256 (RFC 8018) for n candidates: candidate l is pws + l * stride, lens[l] bytes
+ * long (stride bytes when lens is NULL). dk + l * dklen receives its dklen-byte key. iter >= 1.
+ */
+static void pbkdf2_sha256(const uint8_t* pws, int stride, const int* lens, int n, const uint8_t* salt, int slen,
+                          uint32_t iter, uint8_t* dk, int dklen)
+{
+    int L;
+    pbkdf2_iter_fn fn = pbkdf2_sha256_path(&L);
+    uint32_t ist[PBKDF2_MAXLANES][8], ost[PBKDF2_MAXLANES][8], u[PBKDF2_MAXLANES][8];
+    for (int i0 = 0; i0 < n; i0 += L)
+    {
+        int m = n - i0 < L ? n - i0 : L;
+        for (int l = 0; l < m; l++)
+            hmac_sha256_states(pws + (size_t)(i0 + l) * stride, (size_t)(lens ? lens[i0 + l] : stride), ist[l], ost[l]);
+        for (int l = m; l < L; l++) { memcpy(ist[l], ist[0], 32); memcpy(ost[l], ost[0], 32); }   /* idle lanes repeat lane 0 */
+        for (int b = 0; b * 32 < dklen; b++)
+        {
+            for (int l = 0; l < L; l++) pbkdf2_sha256_u1(ist[l], ost[l], salt, (size_t)slen, (uint32_t)b + 1, u[l]);
+            if (iter > 1) fn(ist, ost, u, iter);
+            int take = dklen - 32 * b < 32 ? dklen - 32 * b : 32;
+            for (int l = 0; l < m; l++)
+            {
+                uint8_t w[32];
+                for (int j = 0; j < 8; j++) put_be32(w + 4 * j, u[l][j]);
+                memcpy(dk + (size_t)(i0 + l) * dklen + 32 * b, w, (size_t)take);
+            }
+        }
+    }
+}
+
+/* Lanes per group of the PBKDF2-SHA256 path in use (for logs and batch sizes). */
+RK_EXPORT int rk_pbkdf2_sha256_lanes(void) { int L; pbkdf2_sha256_path(&L); return L; }
+
+/* PBKDF2-HMAC-SHA256 of n packed candidates (see pbkdf2_sha256); for tests. Returns 0, or -1 on bad arguments. */
+RK_EXPORT int rk_pbkdf2_sha256(const uint8_t* pws, int stride, const int* lens, int n, const uint8_t* salt, int slen,
+                               uint32_t iter, uint8_t* dk, int dklen)
+{
+    if (n < 0 || stride < 0 || slen < 0 || iter < 1 || dklen < 1) return -1;
+    if (lens) for (int i = 0; i < n; i++) if (lens[i] < 0 || lens[i] > stride) return -1;
+    pbkdf2_sha256(pws, stride, lens, n, salt, slen, iter, dk, dklen);
+    return 0;
+}
+
+/*
+ * RAR 5 password check (hashcat 13000). The archive's KDF runs PBKDF2-HMAC-SHA256 with 2^lg2
+ * iterations for the key and continues to 2^lg2 + 32 for the password check value: the 32-byte
+ * value folded to 8 bytes (byte i xored into byte i % 8) must equal check8. n packed candidates of
+ * length len; returns the number of matches written to hits.
+ */
+RK_EXPORT int rk_rar5_search(const uint8_t* salt16, int lg2, const uint8_t* check8, const uint8_t* pws, int len, int n, int* hits, int maxh)
+{
+    if (lg2 < 1 || lg2 > 24 || len < 0 || n < 0) return -1;
+    uint8_t dk[PBKDF2_MAXLANES * 32];
+    int nh = 0;
+    for (int i0 = 0; i0 < n; i0 += PBKDF2_MAXLANES)
+    {
+        int m = n - i0 < PBKDF2_MAXLANES ? n - i0 : PBKDF2_MAXLANES;
+        pbkdf2_sha256(pws + (size_t)i0 * len, len, NULL, m, salt16, 16, (1u << lg2) + 32, dk, 32);
+        for (int l = 0; l < m; l++)
+        {
+            const uint8_t* v = dk + 32 * l;
+            int ok = 1;
+            for (int i = 0; i < 8 && ok; i++) ok = (v[i] ^ v[i + 8] ^ v[i + 16] ^ v[i + 24]) == check8[i];
+            if (ok) nh = add_hit(hits, nh, maxh, i0 + l);
+        }
+    }
+    return nh;
 }
 
 #if RK_X64
