@@ -93,6 +93,8 @@ public static class FiniteDiagnosticWorker
             string requestFile = Path.Combine(directory, "request.json"), resultFile = Path.Combine(directory, "result.json");
             await File.WriteAllTextAsync(requestFile, JsonSerializer.Serialize(BuildRequest(tool.Exe, settings, group, mode, count, length, limit)), ct);
             var start = CpuDiagnosticWorker.SelfStartInfo();
+            CpuRuntime.ApplyTo(start, settings.MaxCpuThreads);
+            NvrtcRuntime.ApplyTo(start);
             start.Environment["RECOVERKIT_HOME"] = directory;
             start.ArgumentList.Add(Command);
             start.ArgumentList.Add(requestFile);
