@@ -14,6 +14,10 @@ For formats where hashcat's CPU kernels are slow, a built-in CPU engine runs bru
 attacks when no GPU is used: managed .NET kernels plus a small native C library
 (`native/rknative.c`, built with `zig cc`). See [benchmarks.md](benchmarks.md).
 
+The one exception on the GPU side is classic ZIP (ZipCrypto, modes 17200/17210): RecoverKit ships
+its own versions of those two hashcat kernel sources and installs them into hashcat's `OpenCL/`
+folder (see [ZIP kernels for hashcat](#zip-kernels-for-hashcat)).
+
 ## Layout
 
 ```
@@ -40,6 +44,8 @@ dotnet test tests/RecoverKit.Tests
 
 The Stay ZIP attack tests (`Category=Stay`) run full key searches and take many minutes, so
 `dotnet test` skips them. Run them with `dotnet test tests/RecoverKit.Tests -p:RunStayTests=true`.
+Tests that run hashcat on the GPU (`Category=Slow`, for example `ZipGpuKernelSlowTests`) are skipped
+as well; run them with `-p:RunSlowTests=true` or an explicit `--filter`.
 CI runs them in a separate workflow (`stay-tests.yml`) only when the attack's code or tests change.
 
 The GUI:
@@ -83,25 +89,28 @@ Silicon Mac with the Xcode command line tools:
 macos/build-hashcat.sh            # add --force to rebuild, --jobs N to limit parallelism
 ```
 
-It downloads the official hashcat 7.1.2 source tarball (SHA-256 pinned in the script), builds
-an arm64-only binary with the Metal backend using hashcat's bundled dependencies (nothing from
+It downloads the official hashcat 8.0.0 source tarball (SHA-256 pinned in the script), builds
+an arm64-only binary with the Metal backend (`SHARED=0`: no libhashcat.dylib; nothing from
 Homebrew; `otool -L` is checked so that only system libraries and frameworks are linked) and
 assembles a portable folder in `macos/out/hashcat/`: the executable, `modules/`, `bridges/`
-(argon2, scrypt; the Python and Rust plugin bridges are left out), `OpenCL/` kernel sources,
-`charsets/`, `layouts/`, `masks/`, `rules/`, `tunings/`, `hashcat.hcstat2`, the license texts
-in `docs/` and a `RECOVERKIT_BUNDLE` stamp (`<hashcat version>-<bundle revision>`). The build
-takes about a minute and the folder is about 200 MB. It is skipped when the folder already holds
-the same stamp.
+(argon2, scrypt; the Python, Rust and FPGA bridges are left out), `feeds/` (candidate generators:
+stdin and wordlists go through them in hashcat 8), `OpenCL/` kernel sources, `charsets/`, `tables/`
+(keyboard layouts, formerly `layouts/`), `masks/`, `rules/`, `tunings/`, `pcfg/`,
+`hashcat.hcstat2`, the license texts in `docs/` and a `RECOVERKIT_BUNDLE` stamp
+(`<hashcat version>-<bundle revision>`). hashcat 8 loads liblzma (every mask attack reads the
+LZMA2-compressed `hashcat.hcstat2`) and zlib at run time; macOS has both in `/usr/lib`. The build
+takes about four minutes and the folder is about 130 MB. It is skipped when the folder already
+holds the same stamp.
 
 Portable mode: hashcat compares the folder of its resolved executable with the install folder
 compiled in (`PREFIX/bin`, `/usr/local/bin`). When they differ, which is everywhere except
 `/usr/local/bin`, it reads its data from and writes kernel caches, `hashcat.log`, dictstat and
-pid files to the executable's own folder.
+pid files to the executable's own folder (hashcat 8: kernel caches in `cache/kernels/`).
 
 That folder goes into `RecoverKit.app/Contents/Resources/hashcat/`. Because hashcat writes into
 its folder and the signed app bundle must stay unchanged (it may also be read-only), RecoverKit
 never runs it there: `HashcatInstaller.TryInstallBundled()` copies it to
-`~/Library/Application Support/RecoverKit/engines/hashcat-7.1.2` (keeping executable bits,
+`~/Library/Application Support/RecoverKit/engines/hashcat-8.0.0` (keeping executable bits,
 dropping the quarantine attribute) when that copy is missing or has another stamp, and
 `HashcatTool.Locate` prefers that copy. `recoverkit-cli install-hashcat --from macos/out/hashcat`
 installs a build by hand.
@@ -109,8 +118,91 @@ installs a build by hand.
 On Apple Silicon hashcat lists the GPU twice, as a Metal device and as an OpenCL alias, and by
 default disables Metal while an OpenCL device exists (`-d <metal id>` forces Metal). There is no
 CPU device, so the "Don't use GPU threads" strategy only works for formats the built-in CPU
-engine supports. Some modes (for example 17200, PKZIP) are refused on the Apple GPU by hashcat;
-when the built-in CPU engine supports such a mode, the attack step reruns on it automatically.
+engine supports. hashcat 7 refused some modes on the Apple GPU (17200 PKZIP: its inflate code used
+`goto`, which Metal rejects, and Apple's OpenCL compiler never finished it); hashcat 8 runs them on
+Metal and OpenCL. Should a mode still be refused and the built-in CPU engine support it, the attack
+step reruns on the CPU automatically.
+
+## ZIP kernels for hashcat
+
+hashcat compiles its kernels at run time from the `.cl` sources in its `OpenCL/` folder, and the
+same source serves CUDA, HIP, OpenCL and Metal. RecoverKit therefore speeds up classic ZIP
+(ZipCrypto) on the GPU by replacing two source files, without GPU host code of its own:
+`src/RecoverKit.Core/Hashcat/Kernels/` holds the brute-force/mask (`_a3`) and dictionary/rules
+(`_a0`) kernels for `m17210` (stored entries) and `m17200` (deflated entries), the shared
+`inc_rk_zipcrypto.cl` and the kernel bodies `inc_rk_zip_a3.cl` and `inc_rk_zip_a0.cl`, embedded
+in RecoverKit.Core. `HashcatKernels.EnsureFor` writes them into hashcat's `OpenCL/` folder before a
+mode 17200/17210 run or benchmark, keeping hashcat's file as `<name>.hashcat`. It only replaces a
+file whose content is exactly hashcat 8.0.0's (line endings ignored; the Windows release uses
+CRLF), so another hashcat version is left alone. hashcat 8 keys its kernel cache on the kernel
+source and on every non-kernel file in `OpenCL/`, so the new kernel is compiled on first use.
+`RECOVERKIT_HASHCAT_ZIP_KERNELS=0` keeps hashcat's kernels. Combinator and hybrid attacks
+(`-a 1/6/7`, hashcat's `_a1` kernels), multi-file hashes (17220/17225) and checksum-only hashes
+(17230) still run hashcat's kernels; RecoverKit's ZIP targets use none of them.
+
+Why hashcat's kernels are slow: each candidate runs the key schedule and decrypts the 12-byte
+encryption header; when the check byte matches (1 in 128 with the CRC and time check bytes,
+1 in 256 with one), the same thread decrypts the whole entry and computes its CRC-32 (17210) or
+inflates it (17200) inside the candidate loop. The other threads of the SIMD group wait for it,
+and with 32 threads one of them hits a check byte in about every fourth step, so the cost grows
+with the entry size: on the M1 Pro a 1 KB stored entry ran 13 times slower than a 17-byte one.
+
+The replacement kernels:
+
+- The candidate loop does only the key schedule and the header. A candidate that passes the check
+  byte is queued in local memory (one 32-bit word: thread and `il_pos`); after a round of
+  candidates the whole work-group verifies the queue together, one candidate per thread, with the
+  keys computed again. The rounds are sized for about 512 queued candidates (`RK_QUEUE` 1024). When
+  the queue is full a thread starts its next round at the first candidate it could not queue, so
+  nothing is lost; verifying inline instead put the long verification loop into the candidate
+  loop, and that alone halved the speed on the Apple GPU (register pressure).
+- The kernel bodies are plain code included into each kernel function (`#include` inside the
+  function, once per `_sxx`/`_mxx`), not one big macro: Apple's OpenCL compiler ran the identical
+  code at less than half the speed when it came from a macro. The candidate loop is not unrolled
+  (`#pragma unroll 1`).
+- hashcat's mask attack varies the first one to four characters fastest (the "amplifier" in
+  `words_buf_r`), so the key schedule cannot be shared between candidates the way a CPU loop over
+  the last character shares it. `RK_AMP_CACHE 1` computes the key state after the amplifier's
+  characters once per work-group into 12 KB of local memory; it brought nothing on the M1 Pro, so
+  it is off, and `bench-zip` measures it on other GPUs.
+- Dictionary attacks (`-a 0`) apply the rule to the word as hashcat's kernel does and use the same
+  queue; association attacks (`-a 9`) keep hashcat's one-candidate-per-hash logic.
+- Verification is the same as hashcat's: CRC-32 of the stored data, or for deflate hashcat's
+  block-type and Huffman-table pre-checks and its inflate (`inc_zip_inflate.cl`).
+
+Correctness: `ZipGpuKernelSlowTests` builds random archives (`ZipCryptoSample`: stored and deflated
+entries, 1-3 files, with and without data descriptors, passwords of 1 to 64 characters), attacks
+them with masks of a few thousand candidates on every GPU device (`--keep-guessing`) and requires
+exactly the passwords the built-in CPU engine accepts among the same candidates; a dictionary
+test does the same with rules (keep, append, delete last). A third test installs the include with
+a two-entry queue so that the retry path runs all the time. On the M1 Pro all three pass on Metal
+and OpenCL (and the random-archive test also with `RK_AMP_CACHE 1`).
+
+`recoverkit-cli bench-zip [--device N] [--seconds S]` measures hashcat's kernels against
+RecoverKit's on every device (CUDA, OpenCL and Metal aliases separately) for entries of 17 bytes to
+16 KB; see [benchmarks.md](benchmarks.md#zip-on-the-gpu).
+
+## CUDA on NVIDIA (NVRTC)
+
+hashcat drives NVIDIA GPUs through CUDA or OpenCL. The OpenCL compiler is part of the driver, but
+CUDA needs NVIDIA's run-time compiler NVRTC (`nvrtc64_*.dll` and `nvrtc-builtins64_*.dll`), which
+comes with the CUDA Toolkit and not with the driver; without it hashcat uses OpenCL and lists no
+CUDA device. hashcat 8 (`src/ext_nvrtc.c`) loads `nvrtc.dll`, or else the newest `nvrtc64_*.dll`
+in `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64` or any `PATH` folder, and the matching builtins DLL
+next to it; it needs CUDA 12.0 or later for both the driver and NVRTC.
+
+NVIDIA publishes NVRTC on its own as the `nvidia-cuda-nvrtc-cu12` package on PyPI (CUDA EULA,
+which lists these DLLs as redistributable). **Tools > Download NVIDIA CUDA compiler (NVRTC)**
+(Windows) downloads the wheel after the user accepts NVIDIA's license, checks its SHA-256,
+unpacks the two DLLs and the license text into `engines/nvrtc-<version>` and puts that folder on
+the `PATH` of every hashcat process (`NvrtcRuntime.ApplyTo`; not when RecoverKit runs elevated,
+as with the CPU runtime). hashcat hands the driver PTX from NVRTC, and a driver only accepts PTX
+from an NVRTC no newer than itself, so the package is chosen by the CUDA version in
+`nvidia-smi`'s banner: 12.8.93 for drivers with CUDA 12.8 or later (also the first that knows the
+RTX 50 series), 12.4.127 for CUDA 12.4 to 12.7; older drivers are asked to update. The start page
+says when an NVIDIA GPU runs through OpenCL. Installing the CUDA Toolkit works as well. Whether
+CUDA is faster than OpenCL for a given mode shows in `recoverkit-cli bench-zip`, which measures
+both. The download and the CUDA path were not tested on real NVIDIA hardware.
 
 ## macOS app
 
@@ -456,8 +548,17 @@ notes are taken from it, and the release job fails if the section is missing.
 - The debug log (`%APPDATA%\RecoverKit\logs`, `~/Library/Logs/RecoverKit` on macOS) records environment, settings, every hashcat command
   with output and exit code, detection results, wizard choices and crashes. Recovered passwords are
   never written to it, and the profile path and account name are replaced by `%USERPROFILE%` / `%USERNAME%`.
-- The built-in downloader pins hashcat 7.1.2. hashcat 8 changed `--restore` and `-w` handling, which
-  the resume and workload features rely on.
+- The built-in downloader and the macOS build pin hashcat 8.0.0. Resuming: hashcat 8 no longer runs
+  the command line stored in a `.restore` file (CVE-2026-68766, `--restore` only prints it), so
+  `HashcatRunner` gives the same command line again with `--restore-position`, which takes only the
+  position from the file; with an older hashcat (`--version` below 8) it still uses `--restore`.
+  hashcat 8 accepts `-w` but always uses the former workload 3, so the Workload setting no longer
+  changes anything; the GPU load limit (duty cycle) still works. An existing per-user
+  `engines/hashcat-7.1.2` copy keeps working until hashcat 8.0.0 is installed next to it, which
+  `HashcatTool.Locate` then prefers; the app shows a notice meanwhile. Every hash mode RecoverKit
+  produces was checked against hashcat 8.0.0 with the module's example hash and password on the
+  M1 Pro (OpenCL); notes below that name hashcat 7.1.2 describe how the format was validated at
+  the time.
 - Apple iOS backup extraction follows the documented keybag format and reproduces hashcat's example
   hashes, but has not been verified against a real backup. Automatic decryption is implemented for MS
   Office OOXML only.

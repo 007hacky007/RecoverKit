@@ -117,6 +117,115 @@ zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attac
 | WinRAR (ZIP output) | Not known to be vulnerable; RAR archives are unrelated |
 | Windows Explorer (XP-era password option) | Unknown, treated as not compatible |
 
+## ZIP on the GPU
+
+The starting point: on an NVIDIA RTX 4060 a commercial product reports 13.4 billion ZipCrypto
+passwords per second, while RecoverKit's benchmark (hashcat 7.1.2 `-b -m 17210`, OpenCL) reported
+1.4 to 1.6 billion. That hashcat figure depends on the archive: `-b` attacks hashcat's built-in
+example, a 453-byte stored file, and hashcat's PKZIP kernels decrypt and check the whole file in
+the candidate loop for the 1 in 128 candidates whose check byte matches, while the other threads of
+the SIMD group wait. The cost grows with the entry size, which is why the replacement kernels exist
+(see [DEVELOPERS.md](DEVELOPERS.md#zip-kernels-for-hashcat)).
+
+### Apple M1 Pro (16-core GPU), hashcat 7.1.2 vs 8.0.0 vs RecoverKit's kernels
+
+Live brute-force attacks, mask `?a?a?a?a?a?a?a?a`, median of the status updates of 6-second runs,
+millions of passwords per second, average of two runs each (they agreed within 5%). Entries made with
+Info-ZIP `zip` (data descriptor, so two check bytes are accepted: 1 in 128). hashcat 7.1.2 refuses
+deflated entries on the Apple GPU (Metal and OpenCL).
+
+| Entry | Backend | hashcat 7.1.2 | hashcat 8.0.0 | RecoverKit kernel | vs 8.0.0 |
+|---|---|---:|---:|---:|---:|
+| stored, 17 bytes | OpenCL | 3,545 | 3,183 | 3,002 | 0.94x |
+| stored, 453 bytes (hashcat `-b`) | OpenCL | 528 | 548 | 2,425 | **4.4x** |
+| stored, 1,000 bytes | OpenCL | 156 | 266 | 1,913 | **7.2x** |
+| deflated, 1,000 bytes (588 compressed) | OpenCL | refused | 913 | 920 | 1.0x |
+| deflated, 4,000 bytes (2,239 compressed) | OpenCL | refused | 873 | 890 | 1.0x |
+| stored, 17 bytes | Metal | 1,639 | 2,960 | 2,582 | 0.87x |
+| stored, 453 bytes (hashcat `-b`) | Metal | 17 | 444 | 2,112 | **4.8x** |
+| stored, 1,000 bytes | Metal | 26 | 220 | 1,629 | **7.4x** |
+| deflated, 1,000 bytes | Metal | refused | 254 | 642 | **2.5x** |
+| deflated, 4,000 bytes | Metal | refused | 194 | 742 | **3.8x** |
+
+hashcat selects the OpenCL device on Apple Silicon by default (the Metal device is an alias).
+
+hashcat's own benchmark (`hashcat -b`, its example hashes: a 453-byte stored and a deflated
+entry), million passwords per second:
+
+| Mode | Backend | hashcat 7.1.2 | hashcat 8.0.0 | RecoverKit kernel |
+|---|---|---:|---:|---:|
+| 17210 stored | OpenCL | 569 | 551 | 2,478 |
+| 17210 stored | Metal | 105 | 519 | 2,407 |
+| 17200 deflated | OpenCL | refused | 944 | 1,015 |
+| 17200 deflated | Metal | refused | 42 | 808 |
+
+Findings:
+
+- With the verification out of the candidate loop the speed hardly depends on the entry size any
+  more (stored: 3.0 billion at 17 bytes, 1.9 billion at 1,000 bytes; it falls by the 1/128 share of
+  candidates that still need the full check).
+- Tiny entries lose 6 to 13%: the queue and the barriers between rounds cost a little, and the
+  original kernel's inline check is cheap when there are only a few bytes to check.
+- Deflated entries on OpenCL do not gain. hashcat 8 already rejects most survivors with a quick
+  look at the first Huffman block, and the inflate code (77 KB of private memory per work item, and
+  hashcat runs this mode with 32 threads per work-group) is what limits both kernels: without it the
+  same kernel ran at 1,470 million, and at 2,600 million with 64 threads. A full inflate cannot be
+  moved out of the kernel without a writable buffer for its 32 KB window, which hashcat's kernel
+  interface does not give a mode without changing the module.
+- Things tried that did not help on this GPU: caching the key state after the amplifier
+  characters in local memory (`RK_AMP_CACHE`), and two candidates per thread for more
+  instruction-level parallelism. Writing the kernel body as one macro instead of included code
+  halved the speed, and so did verifying inline.
+- hashcat 8.0.0 against 7.1.2 on this Mac: Metal became usable for ZIP (17 to 444 million for the
+  453-byte entry), deflated entries run on the GPU at all, OpenCL with stored entries is within 10%.
+
+`recoverkit-cli bench-zip --seconds 6` on the same Mac (its generated entries have one check byte,
+so one candidate in 256 needs the full check; the GPU was shared with other jobs at times, so
+single rows can be off):
+
+```
+Device #1: Apple M1 Pro (Metal 382.5.3)
+  entry                                       hashcat     RecoverKit    gain      amp cache
+  stored, 17 bytes                       3,355.4 MH/s   2,826.2 MH/s   0.84x   2,730.8 MH/s
+  stored, 453 bytes (as hashcat -b)        771.3 MH/s   2,172.8 MH/s   2.82x   2,352.2 MH/s
+  stored, 4 KB                              94.0 MH/s   1,098.5 MH/s  11.69x   1,082.6 MH/s
+  deflated, 1 KB text                      557.8 MH/s     954.6 MH/s   1.71x     944.5 MH/s
+  deflated, 16 KB text                     563.9 MH/s     918.5 MH/s   1.63x     881.9 MH/s
+Device #2: Apple M1 Pro (OpenCL OpenCL 1.2)
+  entry                                       hashcat     RecoverKit    gain      amp cache
+  stored, 17 bytes                       3,391.7 MH/s   3,056.1 MH/s   0.90x   2,549.8 MH/s
+  stored, 453 bytes (as hashcat -b)        884.7 MH/s   2,707.8 MH/s   3.06x     667.4 MH/s
+  stored, 4 KB                             114.0 MH/s   1,331.3 MH/s  11.67x         failed
+  deflated, 1 KB text                    1,207.0 MH/s   1,129.2 MH/s   0.94x     862.6 MH/s
+  deflated, 16 KB text                   1,145.6 MH/s   1,096.5 MH/s   0.96x     829.1 MH/s
+```
+
+The "failed" run found a false positive and stopped (bench-zip now passes `--keep-guessing`).
+False positives are real with stored entries: a wrong password passes the check byte (1 in 128 or
+256) and the CRC-32 (1 in 2^32) about once in 5 * 10^11 candidates, so a brute-force run over
+billions of candidates per second reports one every few minutes. The 1,000-byte stored test entry
+above (password `ab1`) also opens with `TSHJNTER`: hashcat 8's own kernel, RecoverKit's kernel and
+an independent Python check agree. hashcat stops at the first such hit. Deflated entries are much
+safer, because the data must also inflate to the stored length.
+
+### NVIDIA and other GPUs
+
+Not measured here (no NVIDIA GPU). To measure on a PC with the GPU driver installed:
+
+```
+recoverkit-cli install-hashcat
+recoverkit-cli bench-zip
+```
+
+`bench-zip` lists the devices, then runs every entry size on every device (CUDA, OpenCL and
+Metal aliases separately) with hashcat's kernel, RecoverKit's kernel and RecoverKit's kernel with
+the amplifier cache, 10 seconds each, and prints a table per device. `--device 1`
+limits it to one device, `--seconds 20` makes the runs longer, `--quick` leaves out the
+amplifier-cache column. The GUI's Tools > Benchmark row "ZIP/Classic" (`hashcat -b -m 17210`) uses
+RecoverKit's kernel too. On Windows, an NVIDIA GPU appears as a CUDA device only after
+Tools > Download NVIDIA CUDA compiler (NVRTC) (or with the CUDA Toolkit installed); run
+`bench-zip` before and after to compare OpenCL and CUDA.
+
 ## When the built-in engine runs
 
 `NativeRunner.Plan()` picks it only when all of these hold:
@@ -170,7 +279,8 @@ Otherwise hashcat runs. With a GPU, hashcat runs everything.
 ## Reproducing
 
 - GUI: Tools > Benchmark, then "Save as HTML".
-- CLI: `RecoverKit.Cli bench-native` (built-in kernels) and `RecoverKit.Cli bench-prims`
-  (MD5/SHA-1/RC4 primitives).
+- CLI: `RecoverKit.Cli bench-native` (built-in kernels), `RecoverKit.Cli bench-prims`
+  (MD5/SHA-1/RC4 primitives) and `RecoverKit.Cli bench-zip` (ZIP GPU kernels, hashcat's against
+  RecoverKit's, per device).
 - To compare machines, compare the saved HTML files row by row; the report shows which engine
   produced each row. Enable the debug log (Preferences > Other) if numbers look wrong.

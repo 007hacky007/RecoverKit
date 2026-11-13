@@ -24,6 +24,15 @@ All notable changes to RecoverKit. Downloads are on the
     a password.
   - A file with several restrictions can be saved once without all of them.
 - PDF files encrypted with 40-bit RC4 at revision 3 get their own, faster password search.
+- Faster classic ZIP (ZipCrypto) recovery on GPUs: RecoverKit's own hashcat kernels for brute-force,
+  mask and dictionary attacks no longer slow down with the size of the attacked file. `recoverkit-cli bench-zip`
+  compares them with hashcat's on each device.
+- Windows: Tools > Download NVIDIA CUDA compiler (NVRTC) lets hashcat use CUDA on NVIDIA GPUs
+  without installing the CUDA Toolkit.
+
+### Changed
+- hashcat 8.0.0 instead of 7.1.2. On Macs, ZIP archives with compressed files now run on the GPU.
+  hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ## [1.3.0] - 2026-11-12
 
