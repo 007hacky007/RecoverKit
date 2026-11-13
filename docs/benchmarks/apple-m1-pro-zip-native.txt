@@ -1,0 +1,42 @@
+Apple M1 Pro (8P + 2E), 2026-11-13. Native API 8, zig 0.15.2 -O3.
+Release .NET 10.0.401 CLI; mode 17210, 7 characters, ?u?d?s charset.
+Each run: bench-native --mode 17210 --threads N --seconds 6.
+One-second warm-up excluded. Paths alternated each round, three rounds.
+Host throughput varied during this session. Compare the alternating final runs.
+
+Initial Release managed NEON baseline (10 threads):
+mode  17210: 304,089,806 p/s
+mode  17210: 314,238,892 p/s
+mode  17210: 343,456,746 p/s
+
+Final alternating comparison (candidates/s):
+10 threads, managed        : 106,621,172, 110,728,178, 101,929,156; median 106,621,172
+10 threads, arm-crc        : 163,181,530, 139,240,128, 155,240,106; median 155,240,106
+10 threads, neon           : 128,438,790, 120,105,169, 128,815,311; median 128,438,790
+10 threads, managed-scalar : 66,673,593, 65,234,230, 69,041,393; median 66,673,593
+10 threads, scalar         : 82,420,003, 82,252,392, 84,371,500; median 82,420,003
+ 1 threads, managed        : 15,657,438, 13,840,925, 14,167,472; median 14,167,472
+ 1 threads, arm-crc        : 20,860,403, 19,598,066, 17,592,374; median 19,598,066
+ 1 threads, neon           : 17,675,806, 15,441,122, 16,121,752; median 16,121,752
+ 1 threads, managed-scalar : 8,802,315, 8,802,991, 8,484,037; median 8,802,315
+ 1 threads, scalar         : 10,222,019, 10,274,709, 11,428,801; median 10,274,709
+
+Tuning (one thread, 4 s; short runs, changing host throughput):
+ARM CRC stream count: 4 = 14.96 M/s, 6 = 20.94 M/s, 8 = 19.92 M/s,
+12 = 17.06 M/s, 16 = 17.15 M/s. Repeated 6 vs 8: medians 32.82 vs
+32.16 M/s; within 2%, retain eight streams.
+Precompute post-last-character key table: 20.58, 23.70, 23.60 M/s
+(median 23.60); direct loop: 31.79, 32.16, 37.61 (median 32.16 M/s).
+NEON scalar lane table loads: 13.69 M/s; nibble TBL: 14.89 M/s.
+
+Correctness:
+Standalone bitwise CRC oracle: 1000 random headers/masks per native scalar,
+NEON and ARM CRC path, including all tail lengths 0-256. ASAN+UBSAN clean.
+Windows x64 DLL and macOS ARM64 dylib compiled with native/build.sh.
+Rosetta x64 standalone test: scalar passed; AVX2 not advertised.
+AVX2 and AVX-512 are compiled, unexecuted, opt-in on x86.
+Existing managed Verify and NativeEngine hit handling are unchanged.
+
+Requested Debug CLI check (10 threads, 6 seconds each; not a Release speedup):
+baseline: 27,888,492, 27,658,451, 27,207,534; median 27,658,451
+debug-after: 197,328,364, 197,784,962, 196,056,750; median 197,328,364

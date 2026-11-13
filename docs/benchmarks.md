@@ -93,6 +93,67 @@ Reproduce the built-in measurement:
 recoverkit-cli bench-native --mode 29331 --threads 8 --seconds 12
 ```
 
+## Native ZipCrypto CPU follow-up (Apple M1 Pro)
+
+Measured on 2026-11-13 with .NET 10.0.401 Release, mode 17210, the same seven-character
+`?u?d?s` charset as the earlier CPU results. Three six-second runs per path and thread count,
+alternating paths, one-second warm-up excluded. Other recovery work ran on the same host. Throughput varied: the initial
+managed NEON runs were 304.1, 314.2 and 343.5 M/s; the final alternating comparison below had a
+lower managed baseline. Use the paired measurements to compare implementations.
+
+| Search path | 1 thread, M/s | 10 threads, M/s | vs managed NEON, 10 threads |
+|---|---:|---:|---:|
+| Managed scalar | 8.80 | 66.7 | 0.63x |
+| Native scalar, four streams | 10.27 | 82.4 | 0.77x |
+| Managed NEON (before) | 14.17 | 106.6 | 1.00x |
+| Native NEON, four groups of four | 16.12 | 128.4 | 1.20x |
+| Native ARM CRC, eight streams (after) | **19.60** | **155.2** | **1.46x** |
+
+ARM CRC is the default on Apple silicon with CRC32 instructions; native NEON is the ARM fallback.
+x86 stays managed until measured there. Native AVX2 and AVX-512 share their round source and use
+CRC gathers and 32-bit multiplies. Both compile into the Windows DLL; neither executed here.
+Rosetta on this Mac advertised no AVX2 and ran only the native scalar differential test.
+
+The native loop receives keys after the shared prefix from the existing managed cache. Several
+independent candidates hide the CRC/key-update dependency chain. The final header byte needs no
+following key update. A precomputed table of keys after the last password character lost: median
+23.6 M/s versus 32.2 M/s for the direct loop in three short one-thread tuning runs. It adds table
+construction and loads without reusing those states across candidates. Six ARM CRC streams were
+within 2% of eight on repeated checks; four, twelve and sixteen were slower in the initial sweep.
+On NEON, scalar per-lane table loads measured 13.69 M/s versus 14.89 M/s for nibble-table `TBL`
+lookups. The keystream depends on key2's low 16 bits, but the CRC chains need their higher bytes
+for subsequent updates, and a one-byte check cannot reject a candidate before header byte 11.
+Verification and native-engine hit handling are unchanged.
+
+Reproduce with a Release build (PowerShell: set `$env:RECOVERKIT_ZIP_PATH` instead of an inline
+environment assignment):
+
+```sh
+recoverkit-cli bench-native --mode 17210 --threads 10 --seconds 6
+RECOVERKIT_ZIP_PATH=managed recoverkit-cli bench-native --mode 17210 --threads 10 --seconds 6
+RECOVERKIT_ZIP_PATH=avx2 recoverkit-cli bench-native --mode 17210 --threads 8 --seconds 6
+RECOVERKIT_ZIP_PATH=avx512 recoverkit-cli bench-native --mode 17210 --threads 16 --seconds 6
+```
+
+Each ZIP row names the path actually used. With the default x86 selection, the command prints
+both managed and native rows; forcing an unsupported native path prints the managed fallback.
+Other selectors: `managed-scalar`, `scalar`, `neon`, `arm-crc`, `auto`.
+The requested Debug CLI also ran three times before and after: median 27.66 M/s managed,
+197.3 M/s native ARM CRC. Debug penalizes the managed hot loop, so the Release comparisons above
+are the useful optimization result.
+Raw timings and tuning results: [Mac CPU measurements](benchmarks/apple-m1-pro-zip-native.txt).
+
+A real Info-ZIP `zip -0 -e` archive (17-byte stored entry, generated six-character password) was
+recovered with a fresh app home and no password cache, mask `--brute sd --min 6 --max 6`.
+CPU-only, ten threads, found it in 4.3 seconds, with a 207.8 M/s status sample. The hybrid
+visibility check used four total threads (three CPU workers after GPU startup), hashcat 8.0.0
+OpenCL, workload 1 and a 10% GPU duty cycle so its small ranges lasted long enough to print a
+combined status: GPU 316.7 M/s plus CPU 11.75 M/s (328.4 M/s total). hashcat found the fixture
+password after 67.8 seconds. The lower GPU duty cycle is for observing both engine rows, not a
+throughput recommendation. The returned password matched the generated fixture in both runs;
+password and archive hash are redacted in the [hybrid evidence](benchmarks/apple-m1-pro-zip-hybrid.txt).
+
+
 ## ZIP: Stay fast key search
 
 For ZipCrypto archives whose encryption headers come from Microsoft Visual C `rand()`,

@@ -41,6 +41,9 @@ public static class NativeKernels
                $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative: {native}";
     }
 
+    /// <summary>Selected ZIP search implementation, including managed fallback.</summary>
+    public static string ZipCryptoPath => ZipCryptoNative.PathName;
+
     /// <summary>Tests use this to exercise the vector kernels on machines without AVX2.</summary>
     internal static bool ForceVectorKernels { get; set; }
 

@@ -9,11 +9,11 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 7;
+    private const int RequiredVersion = 8;
 
-    /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits are the ARMv8 Crypto Extensions.</summary>
+    /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
-    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256, Avx512 = 512 }
+    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256, Avx512 = 512, ArmCrc = 1024 }
 
     [LibraryImport(Lib, EntryPoint = "rk_version")] private static partial int Version();
     [LibraryImport(Lib, EntryPoint = "rk_features")] private static partial int FeaturesRaw();
@@ -56,6 +56,13 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
     public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);
+
+    [LibraryImport(Lib, EntryPoint = "rk_zip_path")]
+    public static partial int ZipPath(int requested);
+
+    [LibraryImport(Lib, EntryPoint = "rk_zip_search")]
+    public static partial int ZipSearch(byte* header12, byte check1, byte check2, uint k0, uint k1, uint k2,
+        byte* last, int n, int* hits, int maxHits, int path);
 
     [LibraryImport(Lib, EntryPoint = "rk_bench")]
     public static partial double Bench(int which, int reps);
