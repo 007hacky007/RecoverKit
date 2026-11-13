@@ -335,9 +335,21 @@ public sealed class HashcatRunner(HashcatTool tool)
         }
     }
 
+    private Dictionary<int, int> OriginalDeviceIds(IReadOnlyList<string> args)
+    {
+        if (KnownDevices is not { Count: > 0 } known) return [];
+        var removed = known.Where(d => args.Contains("--backend-ignore-" + d.Backend.ToLowerInvariant())).ToList();
+        if (removed.Count == 0) return [];
+        return known.Where(d => !removed.Contains(d))
+            .ToDictionary(d => d.Id - removed.Count(skipped => skipped.Id < d.Id), d => d.Id);
+    }
+
     private async Task<RunResult> RunAttemptAsync(RunRequest r, OutfileConfirmer? confirm, Action<string> output, CancellationToken ct)
     {
         var args = BuildArguments(r);
+        // Older hashcat restores its saved command line, whose device settings come from this request.
+        var originalIds = OriginalDeviceIds(r.Restore && HashcatMajorVersion is > 0 and < 8
+            ? BuildArguments(r with { Restore = false }) : args);
         string outFile = OutFile(r.SessionDir, r.SessionName);
         OutputLine?.Invoke("hashcat " + string.Join(' ', args.Select(Quote)));
 
@@ -357,6 +369,14 @@ public sealed class HashcatRunner(HashcatTool tool)
             var st = HashcatStatus.TryParse(e.Data);
             if (st is not null)
             {
+                // Every consumer, including the guard and hybrid scheduler, uses the discovery ids.
+                if (originalIds.Count > 0)
+                    st = st.With(st.Devices.Select(d => originalIds.TryGetValue(d.Id, out int id)
+                        ? new DeviceSpeed
+                        {
+                            Id = id, Name = d.Name, Type = d.Type, Speed = d.Speed,
+                            Temperature = d.Temperature, Utilization = d.Utilization,
+                        } : d).ToList());
                 last = st;
                 GpuTemperature.Record(st);
                 StatusReceived?.Invoke(guard?.Adjust(st) ?? st);
