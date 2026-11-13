@@ -356,9 +356,19 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                 if (root && !(name is "hashcat" or "hashcat.hcstat2" or "RECOVERKIT_BUNDLE" || name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase))) continue;
                 if (name.EndsWith(".potfile", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".restore", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".pid", StringComparison.OrdinalIgnoreCase)) continue;
                 string dest = Path.Combine(destination, name);
+                // Reuse macOS's validation of immutable native binaries. New copies of hundreds of
+                // modules otherwise pay code-signature validation on every diagnostics run.
+                bool immutableBinary = name is "hashcat" || name.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
+                if (OperatingSystem.IsMacOS() && immutableBinary)
+                {
+                    if (name != "hashcat") { File.CreateSymbolicLink(dest, entry); continue; }
+                    if (Link(entry, dest) == 0) continue;
+                }
                 File.Copy(entry, dest, true);
                 if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(dest, File.GetUnixFileMode(entry));
             }
         }
     }
+    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static extern int Link(string existingPath, string newPath);
 }
