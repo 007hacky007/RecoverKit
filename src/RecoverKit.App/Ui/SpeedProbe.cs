@@ -39,13 +39,12 @@ internal static class SpeedProbe
         bool hybrid = UseHybrid(s, devices, mode);
         var args = HashcatRunner.DeviceArguments(s, devices, gpuOnly: hybrid);
         args.AddRange(["-w", s.Workload.ToString()]);
-        if (s.OptimizedKernels && (await hashcat.ModeInfoAsync(mode))?.HasOptimizedKernel == true) args.Add("-O");
-        if (!hybrid) return (await hashcat.BenchmarkAsync(mode, args, ct), false);
+        if (!hybrid) return (await hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels), false);
 
         // Both at once, as in an attack: they share cores, memory and power. The CPU keeps measuring
         // while hashcat runs (its start-up takes a while), and its last full measurement counts.
         using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var gpu = hashcat.BenchmarkAsync(mode, args, ct);
+        var gpu = hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels);
         int cpuThreads = HybridRunner.CpuThreads(s, devices, hashcatRunning: true);
         var cpu = Task.Run(() =>
         {

@@ -36,6 +36,8 @@ public sealed class SessionState
     public int ModeIndex { get; set; }
     public string HashcatSession { get; set; } = "";
     public bool Restorable { get; set; }
+    /// <summary>Kernel choice for the saved step/mode. Null in older sessions, which resume without -O.</summary>
+    public bool? UseOptimizedKernel { get; set; }
     public DateTime SavedUtc { get; set; }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
@@ -281,14 +283,14 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                                           (restore ? " - resuming" : $" - {attack.Keyspace:N0} candidates"));
                 foreach (var n in attack.Notes) Log?.Invoke(LogKind.Warning, n);
 
+                bool optimized = await SelectOptimizedKernelAsync(tool, mode, attack, settings.OptimizedKernels,
+                    restore, state.UseOptimizedKernel);
+                state.UseOptimizedKernel = optimized;
                 state.StepIndex = si;
                 state.ModeIndex = mi;
                 state.HashcatSession = session;
                 state.Restorable = attack.CanRestore;
                 state.Save(settings);
-
-                bool optimized = settings.OptimizedKernels && CanUseOptimizedKernel(mode, spec)
-                                 && (await tool.ModeInfoAsync(mode))?.HasOptimizedKernel == true;
 
                 var request = new RunRequest
                 {
@@ -299,7 +301,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     SessionDir = settings.SessionsDir,
                     Restore = restore,
                     Settings = settings,
-                    UseOptimizedKernel = optimized && !restore,
+                    UseOptimizedKernel = optimized,
                     VolumeCredentials = target.VolumeCredentials,
                     PasswordCachePath = potfile,
                     Guard = HashcatRunner.GuardFor(settings, Devices),
@@ -362,11 +364,14 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         string hashLine = target.HashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
         string? rc4 = settings.DontUseKeyCache ? null : KeyCache.Lookup(settings.KeyCachePath, hashLine);
 
-        async Task<RunResult?> Run(int mode, string file, PreparedAttack a, int subIndex, bool optimized)
+        async Task<RunResult?> Run(int mode, string file, PreparedAttack a, int subIndex)
         {
             string session = $"rk_{key}_{si}_k{subIndex}";
             bool restore = resume is not null && si == resume.StepIndex && resume.ModeIndex == subIndex && resume.Restorable
                            && File.Exists(HashcatRunner.RestoreFile(settings.SessionsDir, session));
+            bool optimized = await SelectOptimizedKernelAsync(tool, mode, a, settings.OptimizedKernels,
+                restore, state.UseOptimizedKernel);
+            state.UseOptimizedKernel = optimized;
             state.StepIndex = si;
             state.ModeIndex = subIndex;
             state.HashcatSession = session;
@@ -377,7 +382,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             var r = await runner.RunAsync(new RunRequest
             {
                 Mode = mode, HashFile = file, Attack = a, SessionName = session, SessionDir = settings.SessionsDir,
-                Restore = restore, Settings = settings, UseOptimizedKernel = optimized && !restore,
+                Restore = restore, Settings = settings, UseOptimizedKernel = optimized,
                 Guard = HashcatRunner.GuardFor(settings, Devices),
             }, ct);
             if (r.Outcome is RunOutcome.Cracked or RunOutcome.Exhausted) Cleanup(session);
@@ -388,7 +393,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             Log?.Invoke(LogKind.Info, "Encryption key for this document was recovered earlier; searching for a password that produces it.");
         else
         {
-            var r1 = await Run(modes.KeyMode, hashFile, attack, 0, true);
+            var r1 = await Run(modes.KeyMode, hashFile, attack, 0);
             switch (r1!.Outcome)
             {
                 case RunOutcome.Aborted: state.Save(settings); return new SessionResult { Outcome = SessionOutcome.Stopped };
@@ -408,7 +413,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         // Collider #2: a password that derives this key opens the document in its usual application.
         string file2 = Path.Combine(settings.SessionsDir, key + ".key.hash");
         await File.WriteAllTextAsync(file2, hashLine + ":" + rc4 + "\n", ct);
-        var r2 = await Run(modes.PasswordMode, file2, KeySearch.EquivalentPasswordAttack(modes.MaxPasswordLength), 1, true);
+        var r2 = await Run(modes.PasswordMode, file2, KeySearch.EquivalentPasswordAttack(modes.MaxPasswordLength), 1);
         switch (r2!.Outcome)
         {
             case RunOutcome.Cracked:
@@ -436,15 +441,30 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         Log?.Invoke(LogKind.Info, "GPU guard: " + string.Join("; ", parts) + ".");
     }
 
-    internal static bool CanUseOptimizedKernel(int mode, AttackSpec spec)
-        => spec.Kind != AttackKind.Dictionary && MaxLen(spec) <= (mode is 11600 or 23700 or 23800 ? 20 : 27);
-
-    private static int MaxLen(AttackSpec s) => s.Kind switch
+    /// <summary>
+    /// Selects the kernel once per attack, or reuses its saved choice on resume. A null attack
+    /// selects for hashcat's benchmark mask. Unknown limits and unbounded candidate sources use pure.
+    /// </summary>
+    public static async Task<bool> SelectOptimizedKernelAsync(HashcatTool tool, int mode, PreparedAttack? attack,
+        bool enabled, bool restore = false, bool? savedChoice = null)
     {
-        AttackKind.BruteForce when s.Mask.Length > 0 => s.Mask.Length,
-        AttackKind.Mask => Charsets.MaskPositions(s.HashcatMask, s.CustomCharsets).Count,
-        _ => s.MaxLength,
-    };
+        if (restore) return savedChoice ?? false;
+        if (!enabled) return false;
+        var info = await tool.ModeInfoAsync(mode, 3);
+        if (attack is null && info?.BenchmarkMask is { } mask)
+        {
+            attack = new PreparedAttack { Description = "Benchmark", Args = { "-a", "3" } };
+            if (info.BenchmarkCharset1 is { Length: > 0 } cs && cs != "N/A") attack.Args.AddRange(["-1", cs]);
+            attack.Args.Add(mask);
+        }
+        return attack is not null && CanUseOptimizedKernel(info, attack);
+    }
+
+    internal static bool CanUseOptimizedKernel(HashModeInfo? info, PreparedAttack attack)
+        => info is { HasOptimizedKernel: true, OptimizedPasswordLenMax: > 0 }
+           && attack.Stdin is null
+           && Native.MaskSpace.FromHashcatArgs(attack.Args) is { } mask
+           && mask.MaxLength <= info.OptimizedPasswordLenMax;
 
     private void Cleanup(string session)
     {

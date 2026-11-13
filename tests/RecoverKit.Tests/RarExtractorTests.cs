@@ -162,17 +162,22 @@ public class RarExtractorTests
     [InlineData(23700, 21, false)]
     [InlineData(23800, 20, true)]
     [InlineData(23800, 21, false)]
-    [InlineData(12500, 27, true)]
-    [InlineData(12500, 28, false)]
+    [InlineData(12500, 20, true)]
+    [InlineData(12500, 21, false)]
     public void UsesPureKernelForPasswordsBeyondOptimizedLimit(int mode, int length, bool expected)
     {
+        var info = new RecoverKit.Core.Hashcat.HashModeInfo { Mode = mode, HasOptimizedKernel = true, OptimizedPasswordLenMax = 20 };
         var attack = new AttackSpec { MaxLength = length };
-        Assert.Equal(expected, RecoverySession.CanUseOptimizedKernel(mode, attack));
+        bool CanUse() => RecoverySession.CanUseOptimizedKernel(info, AttackPlanner.Prepare(attack,
+            new HashTarget { FormatId = "TEST", FormatName = "test", Protection = "test", Modes = [mode], HashLines = "test" }, new()));
+        Assert.Equal(expected, CanUse());
         attack.Kind = AttackKind.Mask;
         attack.HashcatMask = new string('a', length);
-        Assert.Equal(expected, RecoverySession.CanUseOptimizedKernel(mode, attack));
+        Assert.Equal(expected, CanUse());
         attack.Kind = AttackKind.Dictionary;
-        Assert.False(RecoverySession.CanUseOptimizedKernel(mode, attack));
+        attack.Dictionaries[0] = "unused.txt";
+        Assert.False(RecoverySession.CanUseOptimizedKernel(info,
+            new PreparedAttack { Description = "Dictionary", Args = { "-a", "0", "unused.txt" } }));
     }
 
     [Theory]

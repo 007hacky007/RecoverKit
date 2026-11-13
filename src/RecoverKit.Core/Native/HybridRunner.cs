@@ -729,7 +729,7 @@ public sealed class HybridRunner
     private sealed class HashcatRange(HashcatTool tool, HashcatRunner runner, RunRequest template, string markovPath) : IGpuRange
     {
         public Task<long?> KeyspaceAsync(IReadOnlyList<string> maskArgs, CancellationToken ct)
-            => tool.KeyspaceAsync(template.Mode, maskArgs, ct);
+            => tool.KeyspaceAsync(template.Mode, maskArgs, ct, template.UseOptimizedKernel);
 
         public async Task<GpuRangeResult> RunAsync(HashcatOrder order, long skip, long count, IReadOnlyCollection<int> exclude,
             Action<HashcatStatus> onStatus, CancellationToken stop)
