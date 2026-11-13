@@ -132,9 +132,18 @@ public class MacHashcatTests
         var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
         // Unchecking another device builds -d from the devices hashcat actually uses.
         var s = new Settings { DisabledDevices = [99] };
-        Assert.Equal(["-d", "2"], HashcatRunner.DeviceArguments(s, devs));
+        Assert.Equal(["-d", "2", "--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(s, devs));
         // There is a GPU, so the GPU-first default adds nothing.
-        Assert.Empty(HashcatRunner.DeviceArguments(new Settings(), devs));
+        Assert.Equal(["--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(new Settings(), devs));
+    }
+
+    [Fact]
+    public void KeepGuessingRunsUseTheMetalDevice()
+    {
+        // Apple's OpenCL breaks hashcat's --keep-guessing after the first hit; Metal does not.
+        var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
+        Assert.Equal(["-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(new Settings(), devs, preferMetal: true));
+        Assert.Equal(["-D", "2", "-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(new Settings(), devs, gpuOnly: true, preferMetal: true));
     }
 
     [Fact]

@@ -57,10 +57,11 @@ public sealed class HashModeInfo
     public bool SlowHash { get; init; }
     public bool HasOptimizedKernel { get; init; }
     public int PasswordLenMax { get; init; }
+    public int? OptimizedPasswordLenMax { get; init; }
+    public string? BenchmarkMask { get; init; }
+    public string? BenchmarkCharset1 { get; init; }
     public string? ExampleHash { get; init; }
-    public string BenchmarkMask { get; init; } = "";
-    public string BenchmarkCharset1 { get; init; } = "";
-    public int BenchmarkLength => Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", BenchmarkCharset1, BenchmarkMask])?.MaxLength ?? 0;
+    public int BenchmarkLength => Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", BenchmarkCharset1 ?? "", BenchmarkMask ?? ""])?.MaxLength ?? 0;
 }
 
 /// <summary>Locates hashcat and runs its short informational commands.</summary>
@@ -72,7 +73,7 @@ public sealed partial class HashcatTool
     /// <summary>CPU worker threads for the OpenCL CPU runtime (0 = one per logical processor).</summary>
     public int MaxCpuThreads { get; set; }
 
-    private readonly Dictionary<int, HashModeInfo?> _modeInfo = new();
+    private readonly Dictionary<(string Version, int Mode, int AttackMode), HashModeInfo?> _modeInfo = new();
 
     private HashcatTool(string exe)
     {
@@ -359,30 +360,75 @@ public sealed partial class HashcatTool
 
     // ---------------------------------------------------------------- mode info
 
-    public async Task<HashModeInfo?> ModeInfoAsync(int mode)
+    public async Task<HashModeInfo?> ModeInfoAsync(int mode, int attackMode = 0)
     {
-        lock (_modeInfo) if (_modeInfo.TryGetValue(mode, out var c)) return c;
         HashModeInfo? info = null;
         try
         {
-            var (_, o, _) = await RunAsync(["--hash-info", "-m", mode.ToString(), "--machine-readable", "--quiet"], TimeSpan.FromSeconds(30));
-            using var doc = JsonDocument.Parse(o);
-            var e = doc.RootElement.GetProperty(mode.ToString());
-            info = new HashModeInfo
+            string version = await VersionAsync();
+            if (string.IsNullOrWhiteSpace(version)) return null;
+            var key = (version, mode, attackMode);
+            lock (_modeInfo) if (_modeInfo.TryGetValue(key, out var c)) return c;
+            var args = new List<string> { "--hash-info", "-m", mode.ToString(), "-a", attackMode.ToString(), "--machine-readable", "--quiet" };
+            var (code, pure, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+            if (code == 0)
             {
-                Mode = mode,
-                Name = e.GetProperty("name").GetString() ?? "",
-                SlowHash = e.TryGetProperty("slow_hash", out var sh) && sh.GetBoolean(),
-                HasOptimizedKernel = e.TryGetProperty("kernel_type", out var kt) && kt.EnumerateArray().Any(x => x.GetString() == "optimized"),
-                PasswordLenMax = e.TryGetProperty("password_len_max", out var pl) ? pl.GetInt32() : 256,
-                ExampleHash = e.TryGetProperty("example_hash", out var ex) ? ex.GetString() : null,
-                BenchmarkMask = e.TryGetProperty("benchmark_mask", out var bm) ? bm.GetString() ?? "" : "",
-                BenchmarkCharset1 = e.TryGetProperty("benchmark_charset1", out var bc) ? bc.GetString() ?? "" : "",
-            };
+                info = ParseModeInfo(mode, pure, null);
+                if (info.HasOptimizedKernel)
+                {
+                    // One --hash-info ignores -O. The detailed query selects the kernel and attack mode.
+                    args.Insert(0, "--hash-info");
+                    args.Add("-O");
+                    try
+                    {
+                        var (optCode, opt, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+                        if (optCode == 0) info = ParseModeInfo(mode, pure, opt);
+                    }
+                    catch (Exception ex) when (ex is TimeoutException or IOException or System.ComponentModel.Win32Exception) { }
+                }
+            }
+            lock (_modeInfo) _modeInfo[key] = info;
         }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or TimeoutException) { }
-        lock (_modeInfo) _modeInfo[mode] = info;
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException
+                                   or TimeoutException or IOException or System.ComponentModel.Win32Exception) { }
         return info;
+    }
+
+    internal static HashModeInfo ParseModeInfo(int mode, string pure, string? optimized)
+    {
+        using var doc = JsonDocument.Parse(pure);
+        var e = doc.RootElement.GetProperty(mode.ToString());
+        int? limit = null;
+        string? mask = null, charset = null;
+        if (optimized is not null)
+        {
+            try
+            {
+                using var optDoc = JsonDocument.Parse(optimized);
+                var opt = optDoc.RootElement.GetProperty(mode.ToString());
+                if (opt.TryGetProperty("kernel_type_filter", out var filter)
+                    && filter.EnumerateArray().Any(x => x.GetString() == "optimized")
+                    && opt.TryGetProperty("password_len_max", out var pl) && pl.TryGetInt32(out int max) && max > 0)
+                {
+                    limit = max;
+                    mask = opt.TryGetProperty("benchmark_mask", out var bm) ? bm.GetString() : null;
+                    charset = opt.TryGetProperty("benchmark_charset1", out var cs) ? cs.GetString() : null;
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
+        }
+        return new HashModeInfo
+        {
+            Mode = mode,
+            Name = e.GetProperty("name").GetString() ?? "",
+            SlowHash = e.TryGetProperty("slow_hash", out var sh) && sh.GetBoolean(),
+            HasOptimizedKernel = e.TryGetProperty("kernel_type", out var kt) && kt.EnumerateArray().Any(x => x.GetString() == "optimized"),
+            PasswordLenMax = e.TryGetProperty("password_len_max", out var pureMax) ? pureMax.GetInt32() : 256,
+            OptimizedPasswordLenMax = limit,
+            BenchmarkMask = mask ?? (e.TryGetProperty("benchmark_mask", out var pureMask) ? pureMask.GetString() : null),
+            BenchmarkCharset1 = charset ?? (e.TryGetProperty("benchmark_charset1", out var bc) ? bc.GetString() : null),
+            ExampleHash = e.TryGetProperty("example_hash", out var example) ? example.GetString() : null,
+        };
     }
 
     // ---------------------------------------------------------------- benchmark
@@ -392,19 +438,22 @@ public sealed partial class HashcatTool
     /// hashcat's --keyspace for an attack: for masks, the number of base words that --skip/--limit and
     /// restore points count (not candidates). Null when hashcat rejects the arguments.
     /// </summary>
-    public async Task<long?> KeyspaceAsync(int mode, IEnumerable<string> attackArgs, CancellationToken ct = default)
+    public async Task<long?> KeyspaceAsync(int mode, IEnumerable<string> attackArgs, CancellationToken ct = default, bool useOptimizedKernel = false)
     {
         var args = new List<string> { "-m", mode.ToString(), "--keyspace", "--quiet" };
         args.AddRange(attackArgs);
+        if (useOptimizedKernel) args.Add("-O");
         var (code, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60), ct: ct);
         var last = o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
         return code == 0 && long.TryParse(last, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var k) && k > 0 ? k : null;
     }
 
-    public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct)
+    public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct, bool optimizedKernels = true)
     {
         HashcatKernels.EnsureFor(this, mode);
-        var args = new List<string> { "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
+        // hashcat 8's -b forces -O; -B lets the shared decision select the kernel.
+        var args = new List<string> { MajorVersion >= 8 ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
+        if (await RecoverySession.SelectOptimizedKernelAsync(this, mode, null, optimizedKernels)) args.Add("-O");
         args.AddRange(deviceArgs);
         var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct);
         double total = 0;
@@ -440,6 +489,10 @@ public sealed partial class HashcatTool
 
     /// <summary>Returns passwords already recovered for these hashes (hashcat --show against the potfile).</summary>
     public async Task<List<string>> ShowAsync(int mode, string hashFile, string potfile, VolumeCredentials? credentials = null)
+        => (await ShowRawAsync(mode, hashFile, potfile)).Select(l => DecodePlain(l, credentials)).ToList();
+
+    /// <summary>Plaintexts hashcat --show reports for these hashes, exactly as it prints them ($HEX[...] kept).</summary>
+    public async Task<List<string>> ShowRawAsync(int mode, string hashFile, string potfile)
     {
         var args = new List<string> { "-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet" };
         // PIM options change salt_iter, so hashcat cannot match its own potfile when --show uses them.
@@ -450,7 +503,7 @@ public sealed partial class HashcatTool
         using var reader = new StringReader(o);
         while (reader.ReadLine() is { } line)
             if (!line.StartsWith("Hash '") && !line.Contains("Token length exception") && !line.StartsWith("No hashes loaded"))
-                passwords.Add(DecodePlain(line, credentials));
+                passwords.Add(line);
         return passwords;
     }
 

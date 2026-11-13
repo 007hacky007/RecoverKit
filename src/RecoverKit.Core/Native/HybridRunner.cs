@@ -94,13 +94,13 @@ public sealed class HybridRunner
     /// lets the CPU work next to the GPUs, and the built-in engine could run the step on its own.
     /// </summary>
     public static HybridPlan? Plan(int mode, string hashLines, PreparedAttack attack, Settings settings,
-        IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null)
+        IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null, ZipPartialTarget? partial = null)
     {
         if (settings.PerformanceChoice?.Engine is "cpu" or "gpu") return null;
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
         if (settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode)) return null;
-        if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials) is not { } p) return null;
+        if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials, partial) is not { } p) return null;
         // Every length must fit in 64 bits (hashcat's counters) and in hashcat's eight custom charsets.
         for (int l = p.Space.MinLength; l <= p.Space.MaxLength; l++)
         {
@@ -144,12 +144,16 @@ public sealed class HybridRunner
     /// <summary>Runs a hybrid step with hashcat as the GPU side.</summary>
     public Task<RunResult> RunAsync(HybridPlan plan, string hashLine, RunRequest r, HashcatTool tool, CancellationToken ct)
     {
-        var runner = new HashcatRunner(tool) { KnownDevices = Devices };
+        var runner = new HashcatRunner(tool) { KnownDevices = Devices, FalsePositives = FalsePositives };
         runner.OutputLine += l => OutputLine?.Invoke(l);
         GuardEvents?.Invoke(runner);
         var gpu = new HashcatRange(tool, runner, r, OrderedMarkov.Ensure(r.SessionDir));
         return RunAsync(plan, hashLine, r, gpu, ct);
     }
+
+    /// <summary>Hits rejected by the confirmation check on either side, over all runs of this runner (a session).</summary>
+    internal FalsePositiveLog FalsePositives => _falsePositives ??= new FalsePositiveLog(l => OutputLine?.Invoke(l));
+    private FalsePositiveLog? _falsePositives;
 
     /// <summary>Lets the caller subscribe to the temperature guard events of the hashcat runner used.</summary>
     public Action<HashcatRunner>? GuardEvents { get; init; }
@@ -220,7 +224,7 @@ public sealed class HybridRunner
                 {
                     case LengthOutcome.Found:
                         TryDelete(restoreFile);
-                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, hashLine, cpuPw)] : job.FoundByGpu;
+                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, hashLine, cpuPw, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
                         OutputLine?.Invoke(job.FoundByCpu is not null ? "Found by the built-in CPU engine." : "Found by hashcat.");
                         return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = pw, LastStatus = last };
                     case LengthOutcome.Stopped:
@@ -708,6 +712,8 @@ public sealed class HybridRunner
                     Threads = Threads(hashcatRunning),
                     Priority = NativeRunner.ThreadPriorityFor(_r.Settings.Priority),
                     ProgressInterval = TimeSpan.FromMilliseconds(500),
+                    Confirm = _r.ConfirmPassword,
+                    Rejected = pw => _owner.FalsePositives.Rejected(pw.Length, "the built-in CPU engine"),
                 };
                 engine.Progress += p => { lock (_lock) _batchDone = boxBefore + p.Done; };
                 var resumeAt = b == box0 && prefix0 > 0 ? new NativeResumePoint { Length = _len, PrefixIndex = prefix0 } : null;
@@ -734,7 +740,7 @@ public sealed class HybridRunner
     private sealed class HashcatRange(HashcatTool tool, HashcatRunner runner, RunRequest template, string markovPath) : IGpuRange
     {
         public Task<long?> KeyspaceAsync(IReadOnlyList<string> maskArgs, CancellationToken ct)
-            => tool.KeyspaceAsync(template.Mode, maskArgs, ct);
+            => tool.KeyspaceAsync(template.Mode, maskArgs, ct, template.UseOptimizedKernel);
 
         public async Task<GpuRangeResult> RunAsync(HashcatOrder order, long skip, long count, IReadOnlyCollection<int> exclude,
             Action<HashcatStatus> onStatus, CancellationToken stop)

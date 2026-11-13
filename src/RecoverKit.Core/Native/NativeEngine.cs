@@ -41,6 +41,12 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
     public event Action<NativeProgress>? Progress;
     public TimeSpan ProgressInterval { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>Second check a hit must pass besides the kernel's own (<see cref="Formats.HashTarget.ConfirmPassword"/>).</summary>
+    public Func<byte[], bool>? Confirm { get; init; }
+
+    /// <summary>A hit passed the kernel but not <see cref="Confirm"/>; the search went on. Called on worker threads.</summary>
+    public Action<byte[]>? Rejected { get; init; }
+
     public NativeResult Run(NativeResumePoint? resume, CancellationToken ct)
     {
         long testedTotal = 0;
@@ -54,6 +60,27 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
             if (r is not null) return new NativeResult { Outcome = r.Outcome, Password = r.Password, ResumeAt = r.ResumeAt, Tested = testedTotal };
         }
         return new NativeResult { Outcome = NativeOutcome.Exhausted, Tested = testedTotal };
+    }
+
+    /// <summary>
+    /// Searches the packed prefixes from flat candidate index <paramref name="from"/> (prefix * last.Length + last
+    /// index) on; returns the flat index of the first hit or -1.
+    /// </summary>
+    internal static int SearchFrom(KernelWorker worker, byte[] packed, int prefixLen, int count, ReadOnlySpan<byte> last, int from)
+    {
+        int n = last.Length;
+        int k = from / n, i = from % n;
+        if (i > 0)
+        {
+            int h = worker.Search(packed.AsSpan(k * prefixLen, prefixLen), last[i..]);
+            if (h >= 0) return k * n + i + h;
+            k++;
+        }
+        if (k >= count) return -1;
+        int rest = count - k;
+        int hit = rest == 1 ? worker.Search(packed.AsSpan(k * prefixLen, prefixLen), last)
+                            : worker.SearchBatch(packed.AsSpan(k * prefixLen, prefixLen * rest), rest, last);
+        return hit < 0 ? -1 : k * n + hit;
     }
 
     private NativeResult? RunLength(int len, long startPrefix, CancellationToken ct, out long tested)
@@ -119,19 +146,26 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                             prefix[i] = pos[i][0];
                         }
                     }
-                    int hit = count == 1 ? worker.Search(packed.AsSpan(0, prefixLen), last)
-                                         : worker.SearchBatch(packed.AsSpan(0, prefixLen * count), count, last);
-                    if (hit >= 0)
+                    // A rejected hit (a false positive) does not end the batch: the search goes on right after it.
+                    int from = 0;
+                    while (from < count * last.Length)
                     {
+                        int hit = SearchFrom(worker, packed, prefixLen, count, last, from);
+                        if (hit < 0) break;
                         var pw = new byte[len];
                         packed.AsSpan(hit / last.Length * prefixLen, prefixLen).CopyTo(pw);
                         pw[len - 1] = last[hit % last.Length];
                         if (kernel.Verify(pw))
                         {
-                            Interlocked.CompareExchange(ref found, pw, null);
-                            stop.Cancel();
-                            return;
+                            if (Confirm is null || Confirm(pw))
+                            {
+                                Interlocked.CompareExchange(ref found, pw, null);
+                                stop.Cancel();
+                                return;
+                            }
+                            Rejected?.Invoke(pw);
                         }
+                        from = hit + 1;
                     }
                     long before = p;
                     p += count;

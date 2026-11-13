@@ -449,6 +449,7 @@ static void Print(Detection d)
         Console.WriteLine($"Protection: {t.Protection}");
         Console.WriteLine($"Format id:  {t.FormatId}");
         Console.WriteLine($"Modes:      {string.Join(", ", t.Modes)}");
+        if (t.Notes is { } notes) Console.WriteLine($"Notes:      {notes}");
         Console.WriteLine($"HASH:       {(t.HashLines.Length > 300 ? t.HashLines[..300] + $"... ({t.HashLines.Length} chars)" : t.HashLines)}");
     }
     if (d.Message is not null) Console.WriteLine($"Message:    {d.Message}");

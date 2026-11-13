@@ -317,6 +317,26 @@ public class HybridTests
     }
 
     [Fact]
+    public async Task CpuSideRejectsAFalsePositiveAndGoesOn()
+    {
+        // The CPU's share is the top of the keyspace; its kernel "finds" a password the confirmation
+        // check rejects: the step must go on and test everything exactly once.
+        using var rig = new Rig();
+        var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "abcdefgh", "?1?d?1?1?d"])!;
+        var order = HashcatOrder.WithAmplifier(HashcatOrder.SortedPositions(space, 5), 2);
+        string wrong = S(order.Candidate(1, order.BaseCount - 1));
+        var kernel = new RecordingKernel(rig.Seen, wrong);
+        var request = rig.Request() with { ConfirmPassword = pw => S(pw) != wrong };
+        var runner = Rig.Runner(50_000);
+        var lines = new List<string>();
+        runner.OutputLine += l => { lock (lines) lines.Add(l); };
+        var res = await runner.RunAsync(new HybridPlan(kernel, space), "hash", request, new FakeGpu(rig.Seen, null, 20), CancellationToken.None);
+        Assert.Equal(RunOutcome.Exhausted, res.Outcome);
+        AssertExactlyOnce(rig.Seen, space);
+        Assert.Single(lines, l => l.StartsWith("False positive rejected"));
+    }
+
+    [Fact]
     public async Task StopAndResumeLosesNothing()
     {
         using var rig = new Rig();

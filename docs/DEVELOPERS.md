@@ -211,6 +211,69 @@ and OpenCL (and the random-archive test also with `RK_AMP_CACHE 1`).
 RecoverKit's on every device (CUDA, OpenCL and Metal aliases separately) for entries of 17 bytes to
 16 KB; see [benchmarks.md](benchmarks.md#zip-on-the-gpu).
 
+### Large entries
+
+If every usable encrypted entry exceeds hashcat's 320 KiB limit, `ZipExtractor` emits a type 1
+`$pkzip2$` hash with the first 256 KiB (including the encryption header). Full entries still take
+priority, with the selection rules below. The prefix crosses several stored deflate block headers;
+a short prefix ending inside the first block would admit too many wrong passwords. The unmodified
+module passes `data_type_enum == 1` to RecoverKit's kernels. They check the header, first deflate
+block and available inflate data without requiring end-of-stream or the full length. Full hashes
+retain the original inflate/CRC checks.
+
+`HashTarget.ZipPartial` keeps the archive path, entry offset, lengths, method and CRC. CPU `Verify`
+decrypts from that file through bounded streams and checks the entire output length, deflate end
+and CRC-32, without the old 64 MiB embedded-data limit. `ConfirmPassword` also runs the existing
+other-entry checks. Partial GPU runs always use outfile confirmation and keep guessing.
+
+Stored partials have only the header check (1 in 128 or 256 candidates), which overwhelms
+hashcat's one-hit-per-launch result buffer and can hide the real password. Recovery therefore
+uses the CPU for these entries. If replacement kernels are unavailable, partial deflated targets
+also use the CPU. Masks/brute-force and plain dictionaries are supported; CPU dictionary fallback
+does not interpret hashcat rule files or extra options and explains that limit before starting.
+The CLI and GUI Notes describe partial targets. GPU tests are opt-in through `RunSlowTests`.
+
+### False positives
+
+The hash covers one entry. For a stored entry a wrong password passes the check byte and the CRC-32
+about once in 5 * 10^11 candidates, a few minutes of GPU work; deflated entries must also inflate to
+the stored length, so they are far safer. `ZipExtractor` therefore attacks the smallest deflated
+entry unless a stored one is at least 8 times smaller (entries within hashcat's 320 KB limit first),
+and when the archive has other classic ZipCrypto entries it sets `HashTarget.ConfirmPassword`
+(`ZipPasswordConfirmer`): up to 16 other entries, each checked by its header's check byte and, for
+stored or deflated entries up to 1 MB (4 MB in all), by decrypting, inflating and comparing the
+CRC-32. A single stored entry gets a note to confirm the password by opening the archive.
+
+With a confirmation check:
+
+- Built-in engine and hybrid CPU side: a hit must pass `kernel.Verify` and the check. A rejected hit
+  is logged ("False positive rejected", length only, the first three per session) and the search
+  continues right after it in the same kernel call (`NativeEngine.SearchFrom`), so nothing is skipped.
+- hashcat: runs with `--keep-guessing --potfile-disable`. `HashcatRunner` reads the outfile while it
+  runs (every 0.5 s; hashcat writes it once per kernel launch), checks each plaintext ($HEX[...]
+  decoded) and stops hashcat gracefully at the first confirmed one, which counts as cracked. Without
+  one the step is exhausted, whatever hashcat's exit code. On macOS these runs use each GPU's Metal
+  device instead of the OpenCL alias hashcat picks: with Apple's OpenCL, hashcat 8 never clears a
+  hash's "shown" flag after a hit (the `clEnqueueFillBuffer` reset has no effect), so with
+  `--keep-guessing` it reports nothing after the first hit. On the M1 Pro a run that hit a false
+  positive at 1% missed the real password at 38% on OpenCL, with hashcat's kernel and with
+  RecoverKit's; on Metal both were reported.
+- Password cache: a confirmed password is written as `hash:$HEX[...]` by RecoverKit itself. On
+  reading, hashcat's `--show` (which prints one plaintext per hash, the last matching line) plus
+  RecoverKit's own lines for the hash are each checked again; false positives are dropped.
+
+Limitation: hashcat reports at most one hit per hash per kernel launch (the kernel's `hashes_shown`
+gate and a one-slot result buffer; `--keep-guessing` only resets the gate after the launch). When a
+false positive and the real password fall into the same launch, either may be the one reported, so
+the real password can be missed in that run. hashcat sizes a launch to about 0.1 s of GPU work, so
+for a stored entry this happens in roughly 1 run in 4,000 at 3 billion candidates per second (M1 Pro)
+and 1 in 400 at 30 billion; deflated entries are far less affected, the built-in engine not at all.
+
+`ZipFalsePositiveTests` uses a stored entry built so that a known wrong password passes its check byte
+and CRC-32 (header bytes and four content bytes searched, about 2^32 trials), checks the confirmation,
+the engine's continuation within a batch, hashcat's outfile handling (a Python stand-in for hashcat)
+and the cache filter; `HybridTests` checks the CPU side of a hybrid run.
+
 ## CUDA on NVIDIA (NVRTC)
 
 hashcat drives NVIDIA GPUs through CUDA or OpenCL. The OpenCL compiler is part of the driver, but

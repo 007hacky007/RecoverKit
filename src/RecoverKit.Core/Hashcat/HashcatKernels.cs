@@ -138,11 +138,9 @@ public static class HashcatKernels
         }
     }
 
-    /// <summary>For a mode the replacement kernels serve, <see cref="EnsureInstalled"/>; otherwise nothing.</summary>
-    public static void EnsureFor(HashcatTool tool, int mode)
-    {
-        if (Array.IndexOf(Modes, mode) >= 0) EnsureInstalled(tool.Directory);
-    }
+    /// <summary>Returns whether this mode and attack run the installed replacement kernels.</summary>
+    public static bool EnsureFor(HashcatTool tool, int mode, int attackMode = 3)
+        => Array.IndexOf(Modes, mode) >= 0 && attackMode is 0 or 3 && EnsureInstalled(tool.Directory);
 
     /// <summary>
     /// Installs the replacement kernels when every file to replace is hashcat 8.0.0's original or
@@ -171,7 +169,7 @@ public static class HashcatKernels
         foreach (var f in IncludeFiles)
             if (ReadNormalized(Path.Combine(dir, f)) != Sources[f]) WriteAtomic(Path.Combine(dir, f), Sources[f]);
         if (state != State.Installed) DebugLog.Info($"ZIP kernels: installed RecoverKit's kernels into {dir}");
-        return true;
+        return Inspect(hashcatDir, originals) == State.Installed;
     }
 
     /// <summary>Puts hashcat's original kernels back (benchmarks compare both). Returns false when there is nothing to restore.</summary>

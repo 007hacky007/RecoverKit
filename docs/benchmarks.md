@@ -186,6 +186,9 @@ zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attac
 
 ## ZIP on the GPU
 
+Large-entry recovery, outfile hit rates and the concurrent Metal comparison are recorded in
+[large ZIP measurements](benchmarks/apple-m1-pro-zip-large.txt).
+
 The starting point: on an NVIDIA RTX 4060 a commercial product reports 13.4 billion ZipCrypto
 passwords per second, while RecoverKit's benchmark (hashcat 7.1.2 `-b -m 17210`, OpenCL) reported
 1.4 to 1.6 billion. That hashcat figure depends on the archive: `-b` attacks hashcat's built-in

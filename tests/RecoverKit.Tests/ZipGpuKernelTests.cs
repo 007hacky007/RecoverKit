@@ -21,6 +21,28 @@ public class ZipGpuKernelTests
     }
 
     [Fact]
+    public void ReplacementAvailabilityRejectsAttackModesWithStockKernels()
+    {
+        using var t = new TempDir();
+        var ocl = Directory.CreateDirectory(Path.Combine(t.Path, "OpenCL")).FullName;
+        foreach (var (file, source) in HashcatKernels.Sources) File.WriteAllText(Path.Combine(ocl, file), source);
+        var exe = Path.Combine(t.Path, OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat");
+        File.WriteAllText(exe, "");
+        var tool = HashcatTool.Locate(exe, t.Path, t.Path)!;
+
+        Assert.True(HashcatKernels.EnsureFor(tool, 17200, 0));
+        Assert.True(HashcatKernels.EnsureFor(tool, 17200, 3));
+        Assert.False(HashcatKernels.EnsureFor(tool, 17200, 1));
+        Assert.False(HashcatKernels.EnsureFor(tool, 17200, 6));
+        Assert.False(HashcatKernels.EnsureFor(tool, 17200, 7));
+        Assert.False(HashcatKernels.EnsureFor(tool, 17200, 9));
+        Assert.False(HashcatKernels.EnsureFor(tool, 17230, 3));
+
+        File.WriteAllText(Path.Combine(ocl, "m17200_a3-pure.cl"), "// another version");
+        Assert.False(HashcatKernels.EnsureFor(tool, 17200, 3));
+    }
+
+    [Fact]
     public void KernelSourcesAreEmbeddedAndEveryReplacedFileHasAKnownOriginal()
     {
         Assert.True(HashcatKernels.Sources.ContainsKey(HashcatKernels.IncludeFile));
@@ -39,6 +61,27 @@ public class ZipGpuKernelTests
         // The settings the benchmark and the tests rewrite.
         Assert.Contains("#define RK_AMP_CACHE 0", HashcatKernels.Sources[HashcatKernels.IncludeFile]);
         Assert.Matches(@"#define RK_QUEUE \d+", HashcatKernels.Sources[HashcatKernels.IncludeFile]);
+    }
+
+    [Fact]
+    public void PartialKernelsCheckDeflatePrefixesAndKeepFullEntryChecks()
+    {
+        foreach (var attack in new[] { 0, 3 })
+        {
+            var deflate = HashcatKernels.Sources[$"m17200_a{attack}-pure.cl"];
+            Assert.Contains("hash.data_type_enum == 1", deflate);
+            Assert.Contains("TINFL_FLAG_FLUSH_WINDOW | TINFL_FLAG_HAS_MORE_INPUT", deflate);
+            Assert.Contains("status == TINFL_STATUS_NEEDS_MORE_INPUT", deflate);
+            Assert.Contains("status == TINFL_STATUS_DONE", deflate);
+            Assert.Contains("&& rk_in == data_length - 12", deflate);
+            Assert.Contains("check_inflate_code1", deflate);
+            Assert.Contains("check_inflate_code2", deflate);
+            Assert.Contains("ret == MZ_STREAM_END && infstream.total_out ==", deflate);
+            var stored = HashcatKernels.Sources[$"m17210_a{attack}-pure.cl"];
+            Assert.Contains("hash.data_type_enum == 1", stored);
+            Assert.Contains("(r0) = search0", stored);
+            Assert.Contains("(r0) = ~rk_crc", stored);
+        }
     }
 
     private static (string Dir, Dictionary<string, string> Originals) FakeHashcat(string root, bool crlf = false)

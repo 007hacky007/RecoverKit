@@ -52,14 +52,99 @@ public static class ZipExtractor
         var aes = enc.Where(e => e.AesStrength > 0).OrderBy(e => e.CompSize).FirstOrDefault();
         if (aes is not null) { d.Target = WinZipAes(s, aes, delta, d); return; }
 
-        var classic = enc.Where(e => e.Method is 0 or 8 && e.CompSize > 12).OrderBy(e => e.CompSize).FirstOrDefault();
+        var classic = ChooseClassic(enc);
         if (classic is null)
         {
             d.Message = "Encrypted entries use a compression method that hashcat cannot verify (only stored/deflate are supported).";
             return;
         }
-        d.Target = Pkzip(s, classic, delta, d);
+        var confirmer = BuildConfirmer(s, enc, classic, delta);
+        d.Target = Pkzip(s, classic, delta, d, confirmer is null && classic.Method == 0
+            ? "The archive has only one encrypted file and it is stored (not compressed): very rarely a wrong password " +
+              "passes its check. Open the archive with the recovered password to make sure it is the right one."
+            : null);
+        if (confirmer is not null)
+        {
+            d.Target.ConfirmPassword = confirmer.Confirm;
+            d.Add("Also checked against", $"{confirmer.Entries} other encrypted file(s)" +
+                  (confirmer.FullChecks < confirmer.Entries ? $" ({confirmer.FullChecks} with their whole data)" : ""));
+        }
+        if (d.Target.ZipPartial is { } partial)
+        {
+            var kernel = Native.Kernels.ZipCryptoKernel.TryParse(d.Target.HashLines, partial)
+                ?? throw new FormatException("The ZIP entry cannot be checked from the archive.");
+            d.Target.ConfirmPassword = password => (confirmer?.Confirm(password) ?? true) && kernel.Verify(password);
+        }
         d.Target.StayZip = CollectStayTarget(s, enc, delta);
+    }
+
+    /// <summary>
+    /// The entry the hash is made from. A wrong password passes a stored entry's check byte and CRC-32
+    /// about once in 5 * 10^11 candidates; a deflated entry must also inflate to the stored length, which
+    /// random data practically never does, so false positives are far rarer. The GPU kernels verify
+    /// only the candidates that pass the check byte, so the entry size costs little speed. So the
+    /// smallest deflated entry is preferred, and a stored one only when it is much smaller (a large
+    /// entry makes a long hash line and a slower full check); the other entries then still confirm
+    /// each hit (<see cref="ZipPasswordConfirmer"/>). Entries within hashcat's limit for the embedded
+    /// data (320 KB, module 17200/17210) come first.
+    /// </summary>
+    private static ZipEntry? ChooseClassic(List<ZipEntry> enc)
+    {
+        var usable = enc.Where(e => e.Method is 0 or 8 && e.CompSize > 12).ToList();
+        var fits = usable.Where(e => e.CompSize <= HashcatMaxData).ToList();
+        if (fits.Count > 0) usable = fits;
+        var deflated = usable.Where(e => e.Method == 8).MinBy(e => e.CompSize);
+        var stored = usable.Where(e => e.Method == 0).MinBy(e => e.CompSize);
+        if (deflated is null || stored is null) return deflated ?? stored;
+        return stored.CompSize * 8 <= deflated.CompSize ? stored : deflated;
+    }
+
+    private const long HashcatMaxData = 320 * 1024;
+    // Crosses at least three 65535-byte stored deflate blocks; shorter prefixes admit too many header survivors.
+    private const int PartialPrefixLength = 256 * 1024;
+
+    // Limits for the confirmation entries: how many, and how much data is kept for full checks.
+    private const int MaxConfirmEntries = 16;
+    private const long MaxFullCheckEntry = 1 << 20;
+    private const long FullCheckBudget = 4 << 20;
+
+    /// <summary>
+    /// The archive's other classic ZipCrypto entries, as a second check for candidates that pass the
+    /// hash (null when there are none). Small stored and deflated entries are checked with their whole
+    /// data, the others by the check byte of their encryption header only.
+    /// </summary>
+    private static ZipPasswordConfirmer? BuildConfirmer(Stream s, List<ZipEntry> enc, ZipEntry attacked, long delta)
+    {
+        var others = enc.Where(e => e != attacked && e.LocalOffset != attacked.LocalOffset && e.AesStrength == 0 && e.CompSize >= 12)
+            .OrderBy(e => e.Method is 0 or 8 && e.CompSize <= MaxFullCheckEntry ? 0 : 1)
+            .ThenBy(e => e.CompSize)
+            .ToList();
+        var checks = new List<ZipPasswordConfirmer.Check>();
+        long budget = FullCheckBudget;
+        foreach (var e in others)
+        {
+            if (checks.Count >= MaxConfirmEntries) break;
+            try
+            {
+                bool full = e.Method is 0 or 8 && e.CompSize <= Math.Min(MaxFullCheckEntry, budget);
+                byte[] data = full ? ReadEntryData(s, e, delta) : Bin.ReadAt(s, EntryDataOffset(s, e, delta), 12);
+                if (data.Length < 12) continue;
+                Native.Kernels.ZipCryptoKernel? kernel = null;
+                if (full)
+                {
+                    kernel = Native.Kernels.ZipCryptoKernel.TryParse(PkzipLine(e, data));
+                    budget -= e.CompSize;
+                }
+                byte crcCheck = (byte)(e.Crc >> 24);
+                byte timeCheck = (e.Flags & 8) != 0 ? (byte)(e.ModTime >> 8) : crcCheck;
+                checks.Add(new ZipPasswordConfirmer.Check(e.Name, data[..12], crcCheck, timeCheck, kernel));
+            }
+            catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException or OverflowException or ArgumentOutOfRangeException)
+            {
+                // a truncated/corrupt entry cannot confirm anything; skip it
+            }
+        }
+        return checks.Count == 0 ? null : new ZipPasswordConfirmer(checks);
     }
 
     /// <summary>
@@ -78,7 +163,7 @@ public static class ZipExtractor
                 entries.Add(new ZipStayEntry
                 {
                     Name = e.Name,
-                    StoredHeader = ReadEntryData(s, e, delta)[..12],
+                    StoredHeader = Bin.ReadAt(s, EntryDataOffset(s, e, delta), 12),
                     Crc = e.Crc,
                     Flags = e.Flags,
                     Method = e.Method,
@@ -120,31 +205,48 @@ public static class ZipExtractor
         };
     }
 
-    private static HashTarget Pkzip(Stream s, ZipEntry e, long delta, Detection d)
+    private static HashTarget Pkzip(Stream s, ZipEntry e, long delta, Detection d, string? notes)
     {
-        var data = ReadEntryData(s, e, delta);
-        int checksumFromCrc = (int)(e.Crc >> 16);
-        // The header's check byte is the CRC's high byte, or the modification time's high byte when
-        // the entry uses a data descriptor (flag bit 3). Emitting the time checksum only in that case
-        // lets hashcat and the built-in engine test one byte instead of two (half the false positives).
-        int checksumFromTime = (e.Flags & 8) != 0 ? e.ModTime : checksumFromCrc;
+        bool partial = e.CompSize > HashcatMaxData;
+        long offset = EntryDataOffset(s, e, delta);
+        if (offset < 0 || e.CompSize > s.Length - offset) throw new FormatException("ZIP entry is truncated.");
+        var data = partial ? Bin.ReadAt(s, offset, PartialPrefixLength) : ReadEntryData(s, e, delta);
         int mode = e.Method == 8 ? 17200 : 17210;
         d.TypeName = "ZIP archive (ZipCrypto)";
         d.Add("Attacked entry", $"{e.Name} ({e.CompSize:N0} bytes, {(e.Method == 8 ? "deflate" : "stored")})");
-        string hash = string.Join('*',
-            "$pkzip2$1", "1", "2", "0",
-            e.CompSize.ToString("x"), e.UncompSize.ToString("x"), e.Crc.ToString("x8"),
-            "0", "0", e.Method.ToString(), data.Length.ToString("x"),
-            checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
         return new HashTarget
         {
             FormatId = "ZIPC",
             FormatName = "ZIP archive (ZipCrypto)",
             Protection = "ZipCrypto (PKZIP 2.0)",
             Modes = [mode],
-            HashLines = hash,
+            HashLines = PkzipLine(e, data, partial),
             Speed = SpeedClass.VeryFast,
+            ZipPartial = partial ? new(d.FilePath, offset, e.CompSize, e.UncompSize, e.Crc, e.Method) : null,
+            Notes = partial
+                ? e.Method == 0
+                    ? "Only the beginning of the file fits the GPU check; this uncompressed file uses the CPU to avoid missing the password."
+                    : "Only the beginning of the file is given to the GPU; passwords are checked against the whole file."
+                : notes,
         };
+    }
+
+    /// <summary>hashcat's $pkzip2$ line for one entry, with full data or a bounded prefix.</summary>
+    private static string PkzipLine(ZipEntry e, byte[] data, bool partial = false)
+    {
+        int checksumFromCrc = (int)(e.Crc >> 16);
+        // The header's check byte is the CRC's high byte, or the modification time's high byte when
+        // the entry uses a data descriptor (flag bit 3). Emitting the time checksum only in that case
+        // lets hashcat and the built-in engine test one byte instead of two (half the false positives).
+        int checksumFromTime = (e.Flags & 8) != 0 ? e.ModTime : checksumFromCrc;
+        if (partial)
+            return string.Join('*', "$pkzip2$1", "1", "1", "0", e.Method.ToString(), data.Length.ToString("x"),
+                checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
+        return string.Join('*',
+            "$pkzip2$1", "1", "2", "0",
+            e.CompSize.ToString("x"), e.UncompSize.ToString("x"), e.Crc.ToString("x8"),
+            "0", "0", e.Method.ToString(), data.Length.ToString("x"),
+            checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
     }
 
     private static void ExtractOdf(Stream s, List<ZipEntry> entries, long delta, Detection d)

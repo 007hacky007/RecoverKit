@@ -1,0 +1,141 @@
+Large ZipCrypto entries and Metal reliability, 2026-11-13
+Apple M1 Pro, 16-core GPU, bundled hashcat 8.0.0 copied to a writable scratch folder.
+All archives and passwords were synthetic. Hashes and passwords are omitted here.
+
+Partial mode
+============
+Entries that fit 320 KiB still take priority. Otherwise the hash carries 256 KiB,
+including the 12-byte encryption header, with data_type_enum == 1. The stock
+module accepts it; RecoverKit's kernels check the available deflate stream and
+require it to consume the prefix. CPU confirmation streams the original entry
+and checks the complete deflate stream, uncompressed length and CRC-32, along
+with the existing checks against other entries. Stored partials run on the CPU.
+
+Outfile rates
+=============
+Metal device 1, attack 3, mask ?d?d?d?d?d?d?d?d?d?d, --keep-guessing,
+--potfile-disable. Each run exhausted exactly 10,000,000,000 candidates.
+The correct password was outside the mask. Random 4,000,000-byte input, with a
+stored first deflate block; the same encrypted content was used for both prefixes.
+
+  Deflated, 16 KiB prefix:   79 false reports in 15.24 s (5.18/s).
+  Deflated, 256 KiB prefix:   0 false reports in 15.53 s.
+  Stored, 256 KiB prefix:    39 reports in 6.27 s (6.22/s).
+
+The stored fixture has one check byte: about 39 million header survivors are
+expected in 10 billion candidates. Only one result per hash per kernel launch
+is reported, so a low outfile rate does not make that search reliable. A real
+Metal dictionary run containing 1,000 independently checked wrong header
+survivors, followed by the right password, reported one wrong candidate and
+missed the right one. There is no sound extra content filter for arbitrary
+uncompressed data without its full CRC. CPU routing prevents this loss.
+
+An initial partial-inflate implementation also accepted a wrong stream ending
+early inside the prefix. Requiring full prefix consumption removed those hits.
+GPU regression cases reject early stream ends, bad first block types and corrupt
+stored-block NLEN fields, and accept truncated dynamic/stored deflate streams.
+
+Concurrent Metal comparison
+==========================
+Original and replacement kernels used the same full mode 17200 example hash,
+device 1, ten decimal mask positions, --keep-guessing --potfile-disable, and
+--runtime 25. Three pairs of concurrent processes per kernel variant:
+
+  hashcat originals: 0 Metal failures / 6 processes, 32.35-33.86 s wall each.
+  RecoverKit:        0 Metal failures / 6 processes, 28.73-30.16 s wall each.
+
+Every process exited 4 at its runtime limit. These short trials did not reproduce
+the reported hc_mtl4_commit_and_wait / MTL4CommandQueueErrorDomain failure and do
+not establish its cause. There is no evidence here for disabling the replacement
+on Metal. Failed attempts to start a second executable path before GPU work were
+excluded. The original bundled installation was unchanged.
+
+Retry behavior
+==============
+HashcatRunner retries runtime execution errors from Metal, OpenCL, CUDA and HIP,
+with a cancellable 100 ms pause. Three retries are allowed without progress;
+new high-water candidate progress or a later restore checkpoint resets the budget.
+The current step/range keeps its arguments and uses its restore checkpoint. If no
+checkpoint exists, or candidates come from a non-seekable generator, it replays
+the step. The same outfile confirmer retains rejected candidates and a confirmed
+hit wins even if hashcat subsequently fails. Hash/parser, argument, self-test,
+build, allocation and missing-device failures are not retried. Fake-process tests
+exercise these paths; no actual Metal fault occurred in the comparison above.
+
+Real CLI checks
+===============
+For every row, RUN_HOME was a fresh directory and the command prefix was:
+  RECOVERKIT_HOME="$RUN_HOME" dotnet "$CLI" crack "$ARCHIVE" \
+    --hashcat "$HASHCAT" --new --no-stay <attack arguments>
+CLI = src/RecoverKit.Cli/bin/Debug/net10.0/recoverkit-cli.dll
+HASHCAT = the writable copy of the bundled hashcat 8.0.0 executable.
+DOTNET_ROOT = the installed .NET 10.0.401 libexec folder.
+
+Archive       Attack arguments                         Output           Wall
+Camera.zip    --dict "$DICT"                            RESULT: Found    4.30 s
+Camera.zip    --brute sd --min 1 --max 4                 RESULT: Found    2.97 s
+Stored.zip    --dict "$DICT"                            RESULT: Found    0.87 s
+Stored.zip    --brute sd --min 1 --max 3 --threads 2     RESULT: Found    1.01 s
+Streamed.zip  --dict "$DICT"                            RESULT: Found    2.18 s
+Mixed.zip     --dict "$DICT"                            RESULT: Found    2.34 s
+Camera.zip    --hcmask '?d?d?d?d?d?d' --no-hybrid         RESULT: NotFound 3.11 s
+Camera.zip    --dict "$DICT", ZIP kernels disabled      RESULT: Found    0.85 s
+Camera.zip    --hcmask 'ab?d', ZIP kernels disabled      RESULT: Found    0.97 s
+
+Found runs exited 0 and returned the fixture password, checked by the harness.
+NotFound exited 1 and returned no password. The wrong mask exhausted 1,000,000
+candidates on the GPU. DICT contained two wrong words and the fixture password.
+ZIP kernels disabled means RECOVERKIT_HASHCAT_ZIP_KERNELS=0 for that process;
+neither disabled-kernel attack started hashcat search.
+
+Camera's dictionary, streamed dictionary and mixed dictionary used Metal device 1
+and the replacement kernels, with --keep-guessing and CPU confirmation. Default
+Camera brute force selected HybridRunner; the tiny lengths stayed on the CPU.
+An additional actual hybrid run used --brute sd --min 3 --max 3 --threads 2 and
+conservative saved estimates CpuSpeedByMode[17200]=1000, GpuSpeedByMode[17200]=2000,
+GpuStartupByMode[17200]=0.01 to force both sides to start. It selected Metal,
+printed "Hybrid CPU + GPU", ran a bounded GPU range and returned Found in 2.50 s.
+These seeded estimates exercise scheduling and are not benchmark measurements.
+
+Stored.zip was made with zip -0 -P and has 900,012/700,012-byte encrypted entries.
+Streamed.zip was made by piping 700,000 random bytes to zip -q -P <password> - -;
+its 700,122-byte encrypted entry has a data descriptor. The CRC and time check
+bytes differ. Camera also uses descriptors and attacks its 700,122-byte deflated
+entry. Mixed.zip attacks its complete 45-byte encrypted small.txt rather than its
+900,152-byte deflated entry. All four also passed:
+  RECOVERKIT_HOME="$EXTRACT_HOME" dotnet "$CLI" extract "$ARCHIVE"
+Partial targets print the one-line Notes explanation and a type 1 hash. Mixed
+prints a full type 2 hash and chooses small.txt.
+
+The first CLI attempt ran inside the filesystem sandbox, where Metal and OpenCL
+are unavailable, and therefore used CPU fallbacks. It is excluded from the GPU
+evidence above. The successful matrix ran with real GPU access.
+
+Build and test validation
+=========================
+  dotnet build -nodeReuse:false -p:UseSharedCompilation=false
+  dotnet test tests/RecoverKit.Tests -nodeReuse:false -p:UseSharedCompilation=false
+
+Final default run: 838 passed, 0 failed, 0 skipped, 8 s test runtime. New/changed
+tests were all below 2 s; the slowest was the fake Apple GPU-refusal integration
+case at 1.817 s. This includes the >64 MiB inflated-output verification test and
+extraction of a sparse encrypted entry larger than 64 MiB. The separate real GPU
+regression run passed 3 methods in 49 s on Metal and OpenCL, with a0/a3 partial
+stored, dynamic/stored deflate, malformed data and full dictionary/rules cases.
+
+The solution build succeeded with no new warnings; the unchanged
+src/RecoverKit.App/Ui/Snapshots.cs:151 still emits CS0618 for Bitmap.Save.
+NUGET_HTTP_CACHE_PATH pointed to a writable cache and AVALONIA_TELEMETRY_OPTOUT=1
+kept the build inside its allowed filesystem paths. Tests used RECOVERKIT_HOME
+with a writable bundled hashcat copy in engines/hashcat-8.0.0, since Homebrew's
+default --show session directory is read-only in the sandbox. No dependencies
+were added. Search/SearchBatch and native/rknative.c were unchanged.
+
+Limits
+======
+Windows, NVIDIA/CUDA and AMD/HIP hardware were not available. Their diagnostics,
+backend selection and retry behavior are covered by unit tests using exact source
+messages. Stop waits for a current whole-file confirmation to finish. Existing
+full-data single-stored-entry CRC collisions remain subject to the documented
+cross-entry confirmation limitations. The CPU dictionary fallback supports plain
+words and generated word streams, not hashcat rule files or extra options.

@@ -48,6 +48,15 @@ All notable changes to RecoverKit. Downloads are on the
   hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ### Fixed
+- Large classic ZIP entries now use a bounded GPU prefix and streamed whole-file password checks.
+  Uncompressed large entries and installations without the ZIP GPU kernels use the built-in CPU engine.
+- Optional HIP/CUDA startup advice no longer obscures hashcat's actual failure; NVIDIA OpenCL fallback
+  points to the CUDA compiler download in Tools.
+- GPU runtime failures resume the current attack from its checkpoint, with up to three retries
+  without progress, including the GPU side of hybrid attacks.
+- Resumed hashcat attacks keep their original optimized-kernel choice, even after Preferences change.
+- Optimized kernels use hashcat's reported limit for each mode and attack, avoiding skipped long masks.
+  Unknown limits, dictionaries and rule attacks use pure kernels; benchmarks share the same decision.
 - "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP
   RTC library" (or no devices). hashcat now skips the GPU-only CUDA and HIP interfaces in that mode,
   and RecoverKit explains the missing CPU runtime and offers to download it.
@@ -55,6 +64,11 @@ All notable changes to RecoverKit. Downloads are on the
 - Resuming a built-in CPU engine attack could skip candidates the threads had in hand at the stop.
 - On macOS the built-in engine ran on the efficiency cores at the default priority (up to four times
   slower).
+- Classic ZIP (ZipCrypto): a wrong password that happened to pass the check of the one attacked file
+  (with fast GPUs, about every few minutes for a stored file) stopped the attack and was reported as
+  the password. Every hit is now checked against the archive's other encrypted files, and the search
+  goes on when it fails; cached passwords are checked the same way. For an archive with a single
+  stored file the information pane says to confirm the password by opening the archive.
 
 ## [1.3.0] - 2026-11-12
 

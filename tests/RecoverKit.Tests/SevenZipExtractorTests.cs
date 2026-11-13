@@ -192,7 +192,9 @@ public class SevenZipExtractorTests
     [InlineData(21, false)]
     public void RespectsOptimizedKernelPasswordLimit(int length, bool optimized)
     {
-        Assert.Equal(optimized, RecoverySession.CanUseOptimizedKernel(11600, new AttackSpec { MaxLength = length }));
+        Assert.Equal(optimized, RecoverySession.CanUseOptimizedKernel(
+            new RecoverKit.Core.Hashcat.HashModeInfo { Mode = 11600, HasOptimizedKernel = true, OptimizedPasswordLenMax = 20 },
+            new PreparedAttack { Description = "test", Args = { "-a", "3", new string('a', length) } }));
     }
 
     [Fact]
