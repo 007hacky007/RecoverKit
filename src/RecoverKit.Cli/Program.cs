@@ -50,8 +50,23 @@ try
             if (argv.Contains("--force-vector")) RecoverKit.Core.Native.NativeKernels.ForceVectorKernels = true;
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
-                Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
+            {
+                void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
                     (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" : ""));
+                Measure();
+                // Include the experimental native row on CPUs whose default stays managed.
+                if (Math.Abs(mode) is 17200 or 17210 && RecoverKit.Core.Native.RkNative.Available &&
+                    RecoverKit.Core.Native.Kernels.ZipCryptoNative.RequestedPath == 0 &&
+                    RecoverKit.Core.Native.Kernels.ZipCryptoNative.Path < 0)
+                {
+                    try
+                    {
+                        RecoverKit.Core.Native.Kernels.ZipCryptoNative.RequestedPath = RecoverKit.Core.Native.RkNative.ZipPath(0);
+                        Measure();
+                    }
+                    finally { RecoverKit.Core.Native.Kernels.ZipCryptoNative.RequestedPath = 0; }
+                }
+            }
             return 0;
         }
         case "bench-zip":

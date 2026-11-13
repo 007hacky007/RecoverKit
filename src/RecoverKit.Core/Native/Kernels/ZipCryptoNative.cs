@@ -18,8 +18,12 @@ internal static class ZipCryptoNative
         get
         {
             if (RequestedPath < 0 || !RkNative.Available) return -1;
-            // Unmeasured x86 paths stay opt-in until a remote comparison against managed AVX2.
-            if (RequestedPath == 0) return -1;
+            // ARM CRC and NEON win on the M1 Pro. Unmeasured x86 paths stay opt-in for comparison.
+            if (RequestedPath == 0)
+            {
+                var f = RkNative.Features;
+                return (f & RkNative.Feature.ArmCrc) != 0 ? 5 : (f & RkNative.Feature.Neon) != 0 ? 2 : -1;
+            }
             return RkNative.ZipPath(RequestedPath);
         }
     }

@@ -99,6 +99,8 @@ public class ZipCryptoNativeTests
                         int miss = scalar.Search(prefix, last);
                         ZipCryptoNative.RequestedPath = path;
                         Assert.Equal(miss, worker.Search(prefix, last));
+                        byte[] packed = prefix.Concat(password[..^1]).ToArray();
+                        Assert.Equal(last.Length + want, worker.SearchBatch(packed, 2, last));
                         prefix[^1] ^= 1;
                         Assert.Equal(want, worker.Search(prefix, last));
                     }
@@ -125,6 +127,34 @@ public class ZipCryptoNativeTests
             for (int path = 2; path <= 5; path++) Assert.Equal(-1, RkNative.ZipPath(path));
         }
         finally { RkNative.LimitFeatures((RkNative.Feature)~0); }
+    }
+
+    [Fact]
+    public void AutomaticSelectionKeepsMeasuredWinnerAndManagedFallback()
+    {
+        int saved = ZipCryptoNative.RequestedPath;
+        bool disabled = RkNative.Disabled;
+        try
+        {
+            ZipCryptoNative.RequestedPath = 0;
+            var f = RkNative.Features;
+            int want = (f & RkNative.Feature.ArmCrc) != 0 ? 5 : (f & RkNative.Feature.Neon) != 0 ? 2 : -1;
+            Assert.Equal(want, ZipCryptoNative.Path);
+            if (RkNative.Available)
+            {
+                RkNative.LimitFeatures(RkNative.Feature.Neon);
+                Assert.Equal((f & RkNative.Feature.Neon) != 0 ? 2 : -1, ZipCryptoNative.Path);
+            }
+            RkNative.Disabled = true;
+            Assert.Equal(-1, ZipCryptoNative.Path);
+            Assert.Equal(2, ZipCryptoKernel.TryParse(NativeEngineTests.Pkzip17210)!.CreateWorker().Search("hashca"u8, "xyt"u8));
+        }
+        finally
+        {
+            RkNative.Disabled = disabled;
+            RkNative.LimitFeatures((RkNative.Feature)~0);
+            ZipCryptoNative.RequestedPath = saved;
+        }
     }
 
     private static void Step(ref uint a, ref uint b, ref uint c, byte plain)
