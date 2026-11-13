@@ -33,6 +33,14 @@ public sealed class HashTarget
     /// <summary>Classic ZipCrypto entries (stored headers) for Stay's header-RNG attack, when applicable.</summary>
     public ZipStayTarget? StayZip { get; set; }
 
+    /// <summary>
+    /// A second check for candidates that passed the hash: a password is reported (or taken from the
+    /// password cache) only when this also returns true for its bytes. Set for ZIP archives whose other
+    /// encrypted entries can be checked too (see <see cref="ZipPasswordConfirmer"/>); the hash covers one
+    /// entry, so a wrong password passes it now and then. Null when the hash alone decides.
+    /// </summary>
+    public Func<byte[], bool>? ConfirmPassword { get; set; }
+
     public string? Notes { get; init; }
 }
 
