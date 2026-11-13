@@ -100,7 +100,9 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (r.UseOptimizedKernel) a.Add("-O");
         if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
-            a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            // The persisted, length-checked decision owns -O, including on resume.
+            a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(x => x is not ("-O" or "--optimized-kernel-enable")));
         a.AddRange(HwmonArguments(s, r.Guard));
         if (r.Restore) a.Add("--restore-position");
         return a;

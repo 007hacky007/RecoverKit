@@ -46,6 +46,9 @@ All notable changes to RecoverKit. Downloads are on the
   hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ### Fixed
+- Resumed hashcat attacks keep their original optimized-kernel choice, even after Preferences change.
+- Optimized kernels use hashcat's reported limit for each mode and attack, avoiding skipped long masks.
+  Unknown limits, dictionaries and rule attacks use pure kernels; benchmarks share the same decision.
 - "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP
   RTC library" (or no devices). hashcat now skips the GPU-only CUDA and HIP interfaces in that mode,
   and RecoverKit explains the missing CPU runtime and offers to download it.
