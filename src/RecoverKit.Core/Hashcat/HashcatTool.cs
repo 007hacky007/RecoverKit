@@ -402,6 +402,10 @@ public sealed partial class HashcatTool
 
     /// <summary>Returns passwords already recovered for these hashes (hashcat --show against the potfile).</summary>
     public async Task<List<string>> ShowAsync(int mode, string hashFile, string potfile, VolumeCredentials? credentials = null)
+        => (await ShowRawAsync(mode, hashFile, potfile)).Select(l => DecodePlain(l, credentials)).ToList();
+
+    /// <summary>Plaintexts hashcat --show reports for these hashes, exactly as it prints them ($HEX[...] kept).</summary>
+    public async Task<List<string>> ShowRawAsync(int mode, string hashFile, string potfile)
     {
         var args = new List<string> { "-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet" };
         // PIM options change salt_iter, so hashcat cannot match its own potfile when --show uses them.
@@ -412,7 +416,7 @@ public sealed partial class HashcatTool
         using var reader = new StringReader(o);
         while (reader.ReadLine() is { } line)
             if (!line.StartsWith("Hash '") && !line.Contains("Token length exception") && !line.StartsWith("No hashes loaded"))
-                passwords.Add(DecodePlain(line, credentials));
+                passwords.Add(line);
         return passwords;
     }
 
