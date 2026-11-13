@@ -76,20 +76,24 @@ public class OptimizedKernelTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task SessionSavesChoiceBeforeRunAndHonoursItOnResume(bool enabled)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task SessionSavesChoiceBeforeRunAndHonoursItOnResume(bool enabled, bool keySearch)
     {
         if (OperatingSystem.IsWindows()) return;
         using var t = new TempDir();
-        var tool = FakeTool(t.Path);
-        var settings = new Settings { SessionsDir = t.Path, DontUsePasswordCache = true, UseNativeCpuEngine = false, OptimizedKernels = enabled };
-        var target = new HashTarget { FormatId = "TEST", FormatName = "test", Protection = "test", Modes = [12500], HashLines = "test" };
+        int mode = keySearch ? 9710 : 12500;
+        var tool = FakeTool(t.Path, mode);
+        var settings = new Settings { SessionsDir = t.Path, DontUsePasswordCache = true, DontUseKeyCache = true, UseNativeCpuEngine = false, OptimizedKernels = enabled };
+        var target = new HashTarget { FormatId = keySearch ? "972K" : "TEST", FormatName = "test", Protection = "test", Modes = [mode], HashLines = "test" };
         var session = new RecoverySession(tool, settings);
-        var attack = new AttackSpec { Kind = AttackKind.Mask, HashcatMask = "?d?d?d" };
+        var attack = new AttackSpec { Kind = keySearch ? AttackKind.KeySearch : AttackKind.Mask, HashcatMask = "?d?d?d" };
         Assert.Equal(SessionOutcome.Stopped, (await session.RunAsync(target, "fixture", [attack], null, default)).Outcome);
         var state = SessionState.Load(settings, target)!;
         Assert.Equal(enabled, state.UseOptimizedKernel);
+        Assert.Equal(enabled, JsonNode.Parse(File.ReadAllText(Path.Combine(t.Path, "state-at-start.json")))!["UseOptimizedKernel"]!.GetValue<bool>());
         Assert.Equal(enabled, File.ReadAllLines(Path.Combine(t.Path, "run.args")).Contains("-O"));
         settings.OptimizedKernels = !enabled;
         Assert.Equal(SessionOutcome.Stopped, (await session.RunAsync(target, "fixture", [], state, default)).Outcome);
@@ -156,10 +160,10 @@ public class OptimizedKernelTests
         Assert.Contains("--force", args);
     }
 
-    private static HashcatTool FakeTool(string dir)
+    private static HashcatTool FakeTool(string dir, int mode = 12500)
     {
-        File.WriteAllText(Path.Combine(dir, "pure.json"), Pure);
-        File.WriteAllText(Path.Combine(dir, "optimized.json"), Optimized);
+        File.WriteAllText(Path.Combine(dir, "pure.json"), Pure.Replace("12500", mode.ToString()));
+        File.WriteAllText(Path.Combine(dir, "optimized.json"), Optimized.Replace("12500", mode.ToString()));
         File.WriteAllText(Path.Combine(dir, "version"), "v8.0.0");
         string exe = Path.Combine(dir, "hashcat");
         File.WriteAllText(exe, """
@@ -176,6 +180,7 @@ public class OptimizedKernelTests
                 exit;;
             esac
             printf '%s\n' "$@" > run.args
+            for state in *.session.json; do test -f "$state" && cp "$state" state-at-start.json; done
             while [ "$#" -gt 0 ]; do
               if [ "$1" = "--restore-file-path" ]; then shift; touch "$1"; fi
               shift
