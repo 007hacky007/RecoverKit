@@ -51,6 +51,11 @@ All notable changes to RecoverKit. Downloads are on the
 - Resuming a built-in CPU engine attack could skip candidates the threads had in hand at the stop.
 - On macOS the built-in engine ran on the efficiency cores at the default priority (up to four times
   slower).
+- Classic ZIP (ZipCrypto): a wrong password that happened to pass the check of the one attacked file
+  (with fast GPUs, about every few minutes for a stored file) stopped the attack and was reported as
+  the password. Every hit is now checked against the archive's other encrypted files, and the search
+  goes on when it fails; cached passwords are checked the same way. For an archive with a single
+  stored file the information pane says to confirm the password by opening the archive.
 
 ## [1.3.0] - 2026-11-12
 
