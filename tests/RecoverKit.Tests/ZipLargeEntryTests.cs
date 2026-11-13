@@ -87,23 +87,23 @@ public sealed class ZipLargeEntryTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void EntriesBeyond64MiBCanBeExtractedWithoutEmbeddingThem(bool withSmallEntry)
+    [InlineData(65L * 1024 * 1024, false)]
+    [InlineData(65L * 1024 * 1024, true)]
+    [InlineData(3_000_000_000L, true)]
+    public void LargeSparseEntriesPreserveExtractionAndStaySizeLimits(long encryptedLength, bool withSmallEntry)
     {
-        // A sparse synthetic payload tests file-size handling without allocating or encrypting 65 MiB.
+        // A sparse synthetic payload tests size limits without allocating or encrypting the large body.
         ZipCryptoSample.Entry large = new("large.bin", RandomData(400_000), false);
         byte[] original = ZipCryptoSample.Archive(withSmallEntry
             ? [new("small.txt", "small"u8.ToArray(), false), large] : [large], "ab1"u8, new Random(7));
-        const int encryptedLength = 65 * 1024 * 1024;
         int directory = (int)BitConverter.ToUInt32(original, original.Length - 6);
         byte[] tail = original[directory..];
         int largeRecord = withSmallEntry ? 46 + "small.txt".Length : 0;
-        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 20), encryptedLength);
-        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 24), encryptedLength - 12);
+        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 20), (uint)encryptedLength);
+        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 24), (uint)(encryptedLength - 12));
         int dataOffset = (int)BitConverter.ToUInt32(tail, largeRecord + 42) + 30 + "large.bin".Length;
-        int newDirectory = dataOffset + encryptedLength;
-        BitConverter.TryWriteBytes(tail.AsSpan(tail.Length - 6), newDirectory);
+        long newDirectory = dataOffset + encryptedLength;
+        BitConverter.TryWriteBytes(tail.AsSpan(tail.Length - 6), (uint)newDirectory);
         string path = Path.Combine(_dir, "sparse.zip");
         using (var file = File.Create(path))
         {
@@ -115,9 +115,13 @@ public sealed class ZipLargeEntryTests : IDisposable
         using (var file = File.OpenRead(path)) ZipExtractor.Extract(file, detection);
         if (withSmallEntry)
         {
-            var payload = detection.Target!.StayZip!;
-            Assert.Equal(2, payload.Entries.Count);
-            Assert.Equal(encryptedLength, payload.Entries.Single(e => e.Name == "large.bin").CompSize);
+            if (encryptedLength > int.MaxValue) Assert.Null(detection.Target!.StayZip);
+            else
+            {
+                var payload = detection.Target!.StayZip!;
+                Assert.Equal(2, payload.Entries.Count);
+                Assert.Equal(encryptedLength, payload.Entries.Single(e => e.Name == "large.bin").CompSize);
+            }
             Assert.Null(detection.Target.ZipPartial); // the small entry remains the normal password target
         }
         else Assert.Equal(encryptedLength, detection.Target!.ZipPartial!.CompressedLength);
