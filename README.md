@@ -193,6 +193,9 @@ quickest guesses.
   second password. Exodus wallets are recognized but not supported yet. Always confirm a found
   password in the wallet itself.
 - **Android backups:** RecoverKit finds the backup password; it does not unpack the backup.
+- **CPU and GPU together:** brute-force and mask attacks on ZIP, Office 97-2003, PDF, RAR 3 and
+  TrueCrypt (Whirlpool) use all your GPUs and the processor at the same time, each on its own part
+  of the passwords. Preferences > Performance can turn this off.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers

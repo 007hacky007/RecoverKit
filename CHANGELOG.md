@@ -12,6 +12,16 @@ All notable changes to RecoverKit. Downloads are on the
 - Cryptocurrency wallets: Ethereum keystore files, Electrum, MetaMask vaults and Blockchain.com
   wallet backups.
 - Encrypted Android backups (.ab) made with adb or Helium.
+- Hybrid CPU + GPU: brute-force and mask attacks on formats with a built-in kernel run hashcat on
+  every GPU and the built-in CPU engine at the same time, on separate parts of the passwords, with
+  rebalancing and exact resume (on by default, Preferences > Performance, CLI `--no-hybrid`).
+  Optional: hashcat's CPU device next to the GPUs for other formats (`--hashcat-cpu`).
+
+### Fixed
+- GPUs that hashcat uses through CUDA or HIP were not recognized as GPUs.
+- Resuming a built-in CPU engine attack could skip candidates the threads had in hand at the stop.
+- On macOS the built-in engine ran on the efficiency cores at the default priority (up to four times
+  slower).
 
 ## [1.3.0] - 2026-11-12
 

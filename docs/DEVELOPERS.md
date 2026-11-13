@@ -11,8 +11,9 @@ AMD (HIP/OpenCL) and Intel Arc (OpenCL) backends. RecoverKit owns format parsing
 scenarios, the wizard GUI and session management.
 
 For formats where hashcat's CPU kernels are slow, a built-in CPU engine runs brute-force and mask
-attacks when no GPU is used: managed .NET kernels plus a small native C library
-(`native/rknative.c`, built with `zig cc`). See [benchmarks.md](benchmarks.md).
+attacks: managed .NET kernels plus a small native C library (`native/rknative.c`, built with
+`zig cc`). Without a GPU it runs them alone; with a GPU it runs next to hashcat on another part of
+the keyspace (hybrid CPU + GPU, below). See [benchmarks.md](benchmarks.md).
 
 ## Layout
 
@@ -159,10 +160,15 @@ recoverkit-cli crack vol.hc --volume vc --kdf sha512,ripemd160 --cascade 1,2,3
 recoverkit-cli crack vol.hc --volume vc --keyfile "first key.bin" --keyfile second.bin --pim 7 --dict words.txt
 recoverkit-cli crack vol.tc --volume tc --keyfile key.bin --dict words.txt
 recoverkit-cli crack hash.txt --hash-mode 13000 --dict words.txt   # any hashcat mode
+recoverkit-cli crack file.pdf --hcmask '?l?l?l?l?l' --no-hybrid    # hashcat alone on the GPUs
 recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an MS Office file
 ```
 
 `--new` ignores a saved session and starts over; `--no-potfile` disables the cache.
+`--strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly` picks the CPU/GPU strategy, `--no-hybrid` turns the
+hybrid CPU + GPU mode off, `--hashcat-cpu` adds hashcat's CPU device next to the GPUs for formats
+without a built-in kernel and `--threads N` limits the CPU threads, all for one run. The status
+lines list each device's speed in hybrid runs.
 `--temp-limit 85 [--temp-hysteresis 10]` turns on the GPU temperature guard and `--gpu-duty 50`
 the GPU load limit for one run, `--power-limit <watts>` the NVIDIA power limit (see GPU temperature
 guard below; the CLI prints the explanation and asks y/n/c before the system prompt).
@@ -209,6 +215,93 @@ charset, `/u:` user charset, `/l:` national alphabet, `/m:` mask, `/ms:` mask sy
 `/min:` `/max:` lengths, `/1:`..`/8:` custom mask charsets, `/r:` rules (`*1s *1a *1c *2s
 *2a *3s` or a file), `/d:` dictionary (up to four; `*default` = configured default dictionary).
 
+
+## Devices
+
+hashcat runs on every GPU it can use: discrete and integrated, each physical device once (a GPU
+seen through CUDA or HIP and again through OpenCL is used through CUDA/HIP, the OpenCL alias is
+skipped, as hashcat does; on Apple silicon the OpenCL device is used and the Metal one skipped).
+`hashcat -I` prints no `Type` for CUDA and HIP devices; they are GPUs, and before this was handled
+a GPU used through CUDA or HIP counted as "no GPU" (its OpenCL alias being skipped), so the GPU list
+stayed empty and the built-in engine ran alone. Devices the user unchecks are remembered by backend,
+name and position (`Settings.DisabledDeviceKeys`), not only by hashcat's id, which shifts when a
+driver adds or removes a backend. `Memory.Unified` marks integrated GPUs.
+
+## Hybrid CPU + GPU
+
+With a GPU, brute-force and mask attacks on formats with a built-in kernel run on both engines at
+once (`HybridRunner`; on by default, Preferences > Performance, `--no-hybrid`): hashcat on the GPUs
+(`-D 2`, never on the CPU) and the built-in engine on the CPU, on disjoint parts of the keyspace.
+Strategies "Keep one CPU thread free for each GPU" (default) and "Use all CPU threads" use it; the
+first leaves one thread per active GPU to hashcat's host thread, and Preferences' thread limit is
+respected. "Avoid the CPU" and "CPU only" do not.
+
+Numbering. In a mask attack hashcat counts base words, not candidates (`HashcatOrder`): the first
+positions of the mask form the amplifier, which the kernel runs through for every base word, and the
+rest form the base word, numbered as a mixed-radix number whose least significant digit is the
+first base position. `--skip`, `--limit` (a count when `--skip` is given) and restore points use
+that number. Each position's characters are ordered by hashcat's Markov table, so RecoverKit passes
+its own table (`--markov-hcstat2`, `Native/Resources/ordered.hcstat2`, made by the script next to
+it) in which every count differs and the order is ascending byte value. How many positions form the
+amplifier depends on the mode and mask; it is derived from `hashcat --keyspace` for each length (the
+base word count is the product of the base positions). For any range of base words,
+`HashcatOrder.Boxes` gives mask spaces for the built-in engine that hold exactly its candidates:
+one digit runs over a sub-range, the lower digits and the amplifier are free, the higher ones fixed.
+`HybridHashcatTests` (category `Slow`) checks the numbering against a real hashcat for a fast mode
+with one and three amplifier positions, a UTF-16 mode and an iterated mode.
+
+Split. Lengths run one after another (hashcat refuses `--skip` with `--increment`). hashcat takes
+base words from the bottom, the CPU takes batches of about 3 s from the top, so what is left is
+always one interval plus at most one unfinished CPU batch. The last character is hashcat's most
+significant digit, while the built-in kernels run through the last character themselves and are
+fastest with all of it (RAR 3: 4,600/s with ten last characters, 2,200/s with one, M1 Pro); so when
+one value of the last character is at most a minute of CPU work, batches and the split point fall
+on whole values of it. Until hashcat reports its first speed the CPU uses half its threads, because
+hashcat's self-test and autotune need the processor. The first split makes both sides finish
+together, counting hashcat's start-up (self-test, autotune; measured per run and remembered per
+mode, about 25-75 s on an M1 Pro), from the speeds remembered from the last hybrid attack or the
+Benchmark (`GpuSpeedByMode`, `CpuSpeedByMode`). A length the CPU finishes in less than two hashcat
+start-ups stays on the CPU. Rebalancing: when the CPU runs out of work while hashcat still needs
+more than three start-ups, or once hashcat's speed is known it would finish more than five start-ups
+after the CPU, hashcat is stopped, its restore point read from its `.restore` file
+(`restore_data_t.words_cur`, offset 272) and the rest split again. When hashcat finishes first it
+starts again on what the CPU has not taken. If hashcat fails (or quits on its own), the CPU takes
+everything left and later lengths stay on the CPU; if the CPU engine fails, its unfinished batch
+goes back to hashcat. A find on either side stops both and is reported once; a CPU find is written
+to the password cache in hashcat's format.
+
+Resume. `<session>.hybrid.json` holds the length, hashcat's restore point, the CPU batch and the
+box and prefix inside it. Nothing is skipped; work that was in flight at the stop is redone, as
+hashcat and the built-in engine each do on their own.
+
+Status. One status per second: summed speed, progress and time left for the length, hashcat's
+device rows plus a "CPU (built-in engine)" row. While the temperature guard pauses hashcat the CPU
+keeps working. The Benchmark window and the wizard's speed measurement run hashcat's benchmark on
+the GPUs and the built-in benchmark on the CPU at the same time and add them.
+
+Integrated GPU only (Apple silicon): the CPU and GPU share one power budget and memory, so a busy
+CPU slows the GPU. RAR 3 on an M1 Pro: the GPU ran 8,000-11,000/s next to the CPU engine instead of
+11,500-14,000/s alone, and the CPU added about 1,700/s. When every GPU in use is integrated and the
+last hybrid attack on a mode measured the CPU below a quarter of hashcat's speed, later attacks on
+that mode run hashcat alone (logged; `HybridRunner.CpuAddsTooLittle`). PDF R6, where the CPU is
+five times faster than this GPU, keeps both.
+
+Integrated GPU next to a discrete one: it ties up a CPU thread (hashcat's host thread) and shares
+the processor's power budget. Once hashcat reports its speed, an integrated GPU slower than one CPU
+thread of the built-in engine is left out of the next hashcat runs of that attack and its thread
+goes back to the CPU engine (logged). Faster integrated GPUs, and Apple silicon's only GPU, stay in.
+
+Other formats: Preferences "For other formats, also give hashcat the CPU next to the GPUs" (off;
+`HashcatCpuWithGpu`, `--hashcat-cpu`) adds `-D 1,2` when hashcat sees a CPU device. hashcat's CPU
+kernels are far slower than a GPU and compete with the threads that feed the GPUs, so expect a few
+percent at best; it was not measured (the Mac used for this work has no OpenCL CPU device).
+
+Priority on macOS: a niced process, and "Idle" is nice 19, runs on the efficiency cores, and an
+unprivileged process cannot raise its priority again; lowered thread priorities do the same as
+soon as anything else runs. Measured on an M1 Pro: PDF R6 at "Idle" 10,000-16,000/s instead of
+55,000/s, RAR 3 at "below normal" 1,800/s instead of 4,400/s, and a niced hashcat next to the CPU
+engine fed the GPU at 2,500 instead of 9,600/s. So on macOS neither the built-in engine nor hashcat
+lowers its priority; the setting applies on Windows.
 
 ## GPU temperature guard and load limit
 
