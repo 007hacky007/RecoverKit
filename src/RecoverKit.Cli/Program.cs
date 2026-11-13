@@ -2,6 +2,7 @@ using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Diagnostics;
 
 // recoverkit-cli: headless front-end for the same engine the GUI uses.
 //   recoverkit-cli extract <file> [--volume tc|vc --kdf sha512,ripemd160 --cascade 1,2,3 --hidden --boot --keyfile path --pim N]
@@ -28,6 +29,30 @@ try
             if (argv.Contains("--full")) { if (d.Target is not null) Console.WriteLine(d.Target.HashLines); }
             else Print(d);
             return d.Target is null ? 2 : 0;
+        }
+        case "bench-full":
+        {
+            var settings = Settings.Load();
+            var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath);
+            var devices = new List<BackendDevice>(); // Diagnostics enumerates its isolated engine copy.
+            using var cts = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+            Console.CancelKeyPress += cancel;
+            try
+            {
+                var runner = new DetailedBenchmarkRunner(tool, settings, devices)
+                {
+                    Seconds = int.TryParse(Opt(argv, "--seconds"), out int seconds) ? Math.Clamp(seconds, 3, 60) : 6,
+                };
+                var progress = new Progress<DiagnosticProgress>(p => Console.Error.WriteLine($"{p.Section}: {p.Step} ({p.Elapsed:mm\\:ss} elapsed, about {p.EstimatedRemaining.TotalMinutes:F0} min remaining)"));
+                var report = await runner.RunAsync(Opt(argv, "--sections")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), progress, cts.Token);
+                string output = Opt(argv, "--out") ?? $"RecoverKit-performance-{DateTime.Now:yyyy-MM-dd}.html";
+                await File.WriteAllTextAsync(output, DiagnosticHtml.Render(report));
+                Console.WriteLine(DiagnosticHtml.Summary(report));
+                Console.WriteLine("Report saved.");
+                return report.Cancelled ? 2 : 0;
+            }
+            finally { Console.CancelKeyPress -= cancel; }
         }
         case "bench-prims":
         {

@@ -12,6 +12,7 @@ public sealed class BackendDevice
     public int? AliasOf { get; init; }
     public string Backend { get; init; } = "";
     public string BackendVersion { get; init; } = "";
+    public string DriverVersion { get; init; } = "";
     public string Type { get; init; } = "";
     public string Vendor { get; init; } = "";
     public string Name { get; init; } = "";
@@ -150,6 +151,29 @@ public sealed partial class HashcatTool
     /// hashcat's major version from <c>--version</c> (v8.0.0 -> 8), cached; 0 when it cannot be read.
     /// hashcat 8 no longer runs the command stored in a restore file (see <see cref="HashcatRunner.BuildArguments"/>).
     /// </summary>
+    private string? _fullVersion;
+
+    /// <summary>The complete hashcat version for performance-profile invalidation, cached after the first read.</summary>
+    public string FullVersion
+    {
+        get
+        {
+            if (_fullVersion is not null) return _fullVersion;
+            try
+            {
+                using var process = Process.Start(StartInfo(["--version"]));
+                if (process is null) return _fullVersion = "unknown";
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(20_000)) { process.Kill(true); return _fullVersion = "unknown"; }
+                _ = stderr.GetAwaiter().GetResult();
+                return _fullVersion = stdout.GetAwaiter().GetResult().Trim();
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+            { return _fullVersion = "unknown"; }
+        }
+    }
+
     public int MajorVersion
     {
         get
@@ -164,6 +188,7 @@ public sealed partial class HashcatTool
                 {
                     var o = p.StandardOutput.ReadToEnd();
                     p.WaitForExit(20_000);
+                    _fullVersion = o.Trim();
                     v = ParseMajorVersion(o);
                 }
             }
@@ -235,7 +260,7 @@ public sealed partial class HashcatTool
     public async Task<string> VersionAsync()
     {
         var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20));
-        return o.Trim();
+        return _fullVersion = o.Trim();
     }
 
     // ---------------------------------------------------------------- devices
@@ -249,14 +274,15 @@ public sealed partial class HashcatTool
     public static List<BackendDevice> ParseDevices(string text)
     {
         var list = new List<BackendDevice>();
-        string backend = "", backendVersion = "";
+        string backend = "", backendVersion = "", driverVersion = "";
         var lines = text.Replace("\r", "").Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
             var l = lines[i].Trim();
             var api = ApiHeader().Match(l);
-            if (api.Success) { backend = api.Groups[1].Value; backendVersion = ""; continue; }
+            if (api.Success) { backend = api.Groups[1].Value; backendVersion = ""; driverVersion = ""; continue; }
             var ver = Field().Match(l);
+            if (ver.Success && ver.Groups[1].Value == "Driver.Version") driverVersion = ver.Groups[2].Value.Trim();
             if (ver.Success && ver.Groups[1].Value is "CUDA.Version" or "HIP.Version" or "Metal.Version" or "Metal.Runtime.Version" or "Version" && !lines[Math.Max(0, i - 1)].Contains("Backend Device"))
             {
                 if (backendVersion == "") backendVersion = ver.Groups[2].Value.Trim();
@@ -279,6 +305,7 @@ public sealed partial class HashcatTool
                 AliasOf = dev.Groups[2].Success ? int.Parse(dev.Groups[2].Value) : null,
                 Backend = backend,
                 BackendVersion = f.GetValueOrDefault("Version") ?? backendVersion,
+                DriverVersion = f.GetValueOrDefault("Driver.Version") ?? driverVersion,
                 // hashcat -I prints no "Type" for CUDA and HIP devices; those backends only expose GPUs.
                 Type = f.GetValueOrDefault("Type") ?? (backend is "CUDA" or "HIP" ? "GPU" : ""),
                 Vendor = f.GetValueOrDefault("Vendor") ?? "",
