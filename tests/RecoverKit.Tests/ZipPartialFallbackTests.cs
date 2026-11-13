@@ -12,7 +12,7 @@ public sealed class ZipPartialFallbackTests : IDisposable
     public void Dispose() => Directory.Delete(_dir, true);
 
     private async Task<SessionResult> Run(bool deflate, AttackSpec attack, bool native = true, bool kernels = false,
-        Action<HashTarget>? configure = null, SessionState? resume = null, CancellationToken ct = default, bool gpuRefusal = false)
+        Action<HashTarget>? configure = null, SessionState? resume = null, CancellationToken ct = default, bool gpuRefusal = false, bool gpuProfile = false)
     {
         var data = new byte[330_000];
         new Random(74).NextBytes(data);
@@ -43,6 +43,7 @@ public sealed class ZipPartialFallbackTests : IDisposable
             SessionsDir = _dir, DontUsePasswordCache = true, UseNativeCpuEngine = native,
             MaxCpuThreads = 1,
         };
+        if (gpuProfile) settings.PerformanceChoice = new RecoverKit.Core.Diagnostics.PerformanceDecision { Engine = "gpu", Mode = 17210 };
         var session = new RecoverySession(tool, settings)
         {
             Devices = [new BackendDevice { Id = 1, Type = "GPU", Vendor = "Apple", Backend = "Metal" }],
@@ -90,10 +91,12 @@ public sealed class ZipPartialFallbackTests : IDisposable
         Assert.Empty(result.Passwords);
     }
 
-    [Fact]
-    public async Task StoredPartialUsesCpuEvenWithReplacementKernels()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoredPartialUsesCpuEvenWithReplacementKernels(bool gpuProfile)
     {
-        var result = await Run(false, new AttackSpec { Kind = AttackKind.Mask, HashcatMask = "ab?d" }, kernels: true);
+        var result = await Run(false, new AttackSpec { Kind = AttackKind.Mask, HashcatMask = "ab?d" }, kernels: true, gpuProfile: gpuProfile);
         Assert.Equal(SessionOutcome.Found, result.Outcome);
     }
 

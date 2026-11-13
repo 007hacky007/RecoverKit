@@ -85,6 +85,7 @@ public sealed class HybridRunner
     /// <summary>Starting estimates (candidates per second); 0 = remembered or derived.</summary>
     internal double InitialGpuSpeed { get; init; }
     internal double InitialCpuSpeed { get; init; }
+    internal bool ForceGpu { get; init; }
     internal int? ThreadsOverride { get; init; }
 
     public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".hybrid.json");
@@ -96,9 +97,10 @@ public sealed class HybridRunner
     public static HybridPlan? Plan(int mode, string hashLines, PreparedAttack attack, Settings settings,
         IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null, ZipPartialTarget? partial = null)
     {
+        if (settings.PerformanceChoice?.Engine is "cpu" or "gpu") return null;
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
-        if (CpuAddsTooLittle(settings, devices, mode)) return null;
+        if (settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode)) return null;
         if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials, partial) is not { } p) return null;
         // Every length must fit in 64 bits (hashcat's counters) and in hashcat's eight custom charsets.
         for (int l = p.Space.MinLength; l <= p.Space.MaxLength; l++)
@@ -130,6 +132,10 @@ public sealed class HybridRunner
     /// </summary>
     public static int CpuThreads(Settings s, IReadOnlyList<BackendDevice>? devices, bool hashcatRunning, IReadOnlyCollection<int>? excluded = null)
     {
+        if (s.MaxCpuThreads == 0 && s.PerformanceChoice is { Engine: "hybrid", Threads: > 0 } choice)
+            return Math.Clamp(choice.Threads, 1, Environment.ProcessorCount);
+        if (!hashcatRunning && s.MaxCpuThreads == 0 && s.CpuPerformanceChoice is { Threads: > 0 } cpuChoice)
+            return Math.Clamp(cpuChoice.Threads, 1, Environment.ProcessorCount);
         int total = s.MaxCpuThreads > 0 ? Math.Min(s.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
         if (!hashcatRunning || s.Strategy == DeviceStrategy.GpuAndCpu) return Math.Max(1, total);
         int gpus = Math.Max(1, HashcatRunner.ActiveGpus(s, devices).Count(d => excluded?.Contains(d.Id) != true));
@@ -191,7 +197,7 @@ public sealed class HybridRunner
                 var sorted = HashcatOrder.SortedPositions(space, len);
                 HashcatOrder? order = null;
                 // A length the CPU finishes before hashcat would be up and running stays on the CPU.
-                bool worthGpu = gpuAlive && (double)space.Keyspace(len) / cpuSpeed > 2 * _startup;
+                bool worthGpu = gpuAlive && (ForceGpu || (double)space.Keyspace(len) / cpuSpeed > 2 * _startup);
                 if (worthGpu)
                 {
                     long? baseCount = await gpu.KeyspaceAsync(HashcatOrder.MaskArgs(sorted)!, ct);

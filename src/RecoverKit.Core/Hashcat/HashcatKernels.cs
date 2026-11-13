@@ -192,6 +192,35 @@ public static class HashcatKernels
         return any;
     }
 
+    /// <summary>Applies a measured ZIP kernel for one run, then restores every source byte.</summary>
+    public static IDisposable? ApplyProfile(HashcatTool tool, int mode, string? variant)
+    {
+        if (Disabled || !Modes.Contains(mode) || variant is not ("hashcat" or "amplifier-cache") || Inspect(tool.Directory) == State.Unsupported) return null;
+        var paths = Sources.Keys.Select(name => Path.Combine(tool.Directory, "OpenCL", name)).ToList();
+        var saved = paths.ToDictionary(path => path, path => File.Exists(path) ? File.ReadAllBytes(path) : null);
+        var restore = new SourceRestore(saved);
+        try
+        {
+            if (variant == "hashcat") Restore(tool.Directory);
+            else
+            {
+                Install(tool.Directory);
+                WriteAtomic(Path.Combine(tool.Directory, "OpenCL", IncludeFile), Sources[IncludeFile].Replace("#define RK_AMP_CACHE 0", "#define RK_AMP_CACHE 1"));
+            }
+            return restore;
+        }
+        catch { restore.Dispose(); throw; }
+    }
+
+    private sealed class SourceRestore(Dictionary<string, byte[]?> saved) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var (path, content) in saved)
+                if (content is null) File.Delete(path); else File.WriteAllBytes(path, content);
+        }
+    }
+
     private static void WriteAtomic(string path, string text)
     {
         var tmp = path + ".rk-tmp";

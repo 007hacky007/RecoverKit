@@ -33,6 +33,57 @@ docs/                 benchmarks, screenshots, this file
 Everything is cross-platform .NET. The GUI is written in C# against Avalonia 12 (code only, no
 XAML) and uses the system menu bar on macOS and an in-window menu elsewhere.
 
+## Detailed performance diagnostics
+
+`recoverkit-cli bench-full --out report.html` runs the same Core diagnostics as **Tools >
+Benchmark > Detailed performance test**. `--sections system,cpu,gpu,zip,hybrid` selects sections.
+The quick benchmark keeps its existing speed-cache behavior. Detailed measurements use synthetic
+targets, isolate hashcat work, retain partial results on cancellation, and write a self-contained
+HTML report with embedded JSON. Compare only rows with the same target and candidate length;
+hashcat's built-in benchmark and the native microbenchmarks are separate workloads.
+
+The performance profile lives beside settings under `RECOVERKIT_HOME` when set. Its decisions
+require correctness and repeated measurements with at least a 5% margin; explicit user settings
+win. CPU and GPU fingerprints allow driver changes to invalidate GPU choices without discarding
+CPU path measurements. The default has 115 seconds of work plus 5 seconds reserved for cleanup:
+system/setup 8, CPU 28, GPU 45, ZIP kernels 24, finite hybrid checks 10. The full step list is planned
+before running. Each step and section has an enforced timeout; omitted or timed-out work is listed
+as "not measured, run the thorough test". All CPU paths get correctness gates first, then selectable
+paths get one one-second timing at the logical-thread count. Representative backend probes cover
+PDF R3 and RAR 5; an alternative must win both by 10% to apply across other modes. Main-format GPU
+rates use that backend only. Stored/deflated kernel probes and predicted-worker finite hybrid checks
+follow. Short CPU samples exclude a half-second warmup within their two-second slots. Unconfirmed
+CPU choices stay eligible for the six-second lazy calibration; GPU/kernel/execution choices retain
+their current defaults until a confirmed detailed measurement.
+One isolated engine directory and kernel cache serve the whole test. Progress uses planned budgets
+and actual durations. `--thorough` / **Thorough (slower)** retains the full repeated sweep, including
+all eleven modes on each backend, pure kernels, repeats, worker sweeps and integrated-GPU comparisons.
+Preferences exposes automatic calibration and profile reset.
+
+Comparison targets come from `BenchmarkTestFiles`: deterministic real ZipCrypto archives (stored
+17/453/4096 bytes with one/two-byte checks, deflated 1024/16384 bytes with/without descriptors),
+WinZip AES-256 AE-2, PDF R3/R6 and encrypted OOXML Office 2007/2013 documents. The generators use
+only the standard library and existing cryptographic helpers. Their passwords are outside the
+lowercase-plus-digits length-seven comparison mask. Export passwords appear only in readme.txt;
+HTML/JSON contains metadata and rates, never file bytes, hashes or passwords. Rates are matched
+by exact synthetic file, attack and length, not by format alone. The report permits only a fixed
+list of synthetic export names through its filename scrubber. RAR 3/5 remain hashes only and are
+called out in the readme. `--export-tests <folder>` and the GUI Save test files action use the
+same catalog. Existing export files are never overwritten.
+
+Automatic calibration currently measures CPU variants and worker counts, with a six-second budget,
+only for masks of up to ten characters whose estimated duration is at least twelve seconds. It
+keeps the engine strategy until a detailed finite comparison is available. Detailed whole-job
+engine comparisons cover RAR 5 and stored ZipCrypto; other formats retain their existing engine
+strategy. GPU backend choices are measured per physical device, never by adding aliases. The finite jobs
+compare the current backend with any repeatable backend winner found earlier in the test.
+ZIP GPU source variants are applied when a single physical GPU runs the job; a mixed-device
+process keeps the replacement default because it shares one kernel source tree and kernel flag.
+If a temperature or duty guard is active, the raw hashcat benchmark and ZIP comparison are skipped;
+the finite jobs use the normal guarded runner. A requested power cap must already be active.
+All skipped or unavailable cases remain visible in the report. Native CPU checks and timings
+run in short-lived child processes; a native fault is recorded and remaining steps continue.
+
 ## Building
 
 Requires the .NET 10 SDK, and [zig](https://ziglang.org) 0.15.2 for the native kernels.

@@ -14,7 +14,7 @@ using RecoverKit.Core.Native;
 namespace RecoverKit.App.Views;
 
 /// <summary>
-/// Benchmarking: it starts as soon as it opens, reports each format as Type / Protection / Engine /
+/// Quick and detailed benchmarking. The quick test reports each format as Type / Protection / Engine /
 /// Password recovery rate, and can save the report as HTML. The most common formats come first.
 /// Measured speeds are stored for the wizard's time estimates.
 /// </summary>
@@ -108,10 +108,19 @@ public sealed class BenchmarkWindow : Window
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
         root.Children.Add(new Border { Background = Palette.PaneBrush, Child = _scroll });
-        Content = root;
+        var quick = L.Button("Quick benchmark", () => { Content = root; _ = RunAsync(); }, 220);
+        var detailed = L.Button("Detailed performance test", async () =>
+            await new DetailedBenchmarkWindow(_hashcat, _settings, _devices).ShowDialog(this), 220);
+        var choices = L.Column(18,
+            L.Text("Benchmark", bold: true, size: 24),
+            L.Group("Quick benchmark", L.Column(10,
+                L.Text("Measures the usual formats and updates recovery time estimates.", wrap: true), quick)),
+            L.Group("Detailed performance test", L.Column(10,
+                L.Text("Measures every engine and device in detail so the developers can tune RecoverKit for this PC.", wrap: true),
+                L.Text("Choose the sections and see the estimated time before starting. Save one report to send back.", dim: true, wrap: true), detailed)));
+        Content = new Border { Padding = new Thickness(24), Child = choices };
 
         Closing += (_, _) => { if (_running) _cts.Cancel(); };
-        Opened += async (_, _) => await RunAsync();
     }
 
     private IEnumerable<string> GpuNames() => _devices.Where(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))

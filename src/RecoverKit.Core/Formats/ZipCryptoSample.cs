@@ -13,7 +13,7 @@ namespace RecoverKit.Core.Formats;
 public static class ZipCryptoSample
 {
     /// <param name="Header">The first 10 bytes of the encryption header (random when null), for fixed test archives.</param>
-    public sealed record Entry(string Name, byte[] Content, bool Deflate, bool DataDescriptor = false, byte[]? Header = null);
+    public sealed record Entry(string Name, byte[] Content, bool Deflate, bool DataDescriptor = false, byte[]? Header = null, bool TwoCheckBytes = false);
 
     private static readonly uint[] Crc = BuildCrc();
 
@@ -82,11 +82,12 @@ public static class ZipCryptoSample
             body[11] = keys.Encrypt((byte)(check >> 8));
             for (int j = 0; j < comp.Length; j++) body[12 + j] = keys.Encrypt(comp[j]);
 
+            ushort version = (ushort)(e.TwoCheckBytes ? 10 : 20);
             ushort flags = (ushort)(e.DataDescriptor ? 0x0009 : 0x0001);
             ushort method = (ushort)(e.Deflate ? 8 : 0);
             var name = Encoding.UTF8.GetBytes(e.Name);
             long offset = ms.Position;
-            w.Write(0x04034b50u); w.Write((ushort)20); w.Write(flags); w.Write(method);
+            w.Write(0x04034b50u); w.Write(version); w.Write(flags); w.Write(method);
             w.Write(dosTime); w.Write(dosDate);
             w.Write(e.DataDescriptor ? 0u : crc);
             w.Write(e.DataDescriptor ? 0u : (uint)body.Length);
@@ -95,7 +96,7 @@ public static class ZipCryptoSample
             w.Write(body);
             if (e.DataDescriptor) { w.Write(0x08074b50u); w.Write(crc); w.Write((uint)body.Length); w.Write((uint)e.Content.Length); }
 
-            cw.Write(0x02014b50u); cw.Write((ushort)20); cw.Write((ushort)20); cw.Write(flags); cw.Write(method);
+            cw.Write(0x02014b50u); cw.Write(version); cw.Write(version); cw.Write(flags); cw.Write(method);
             cw.Write(dosTime); cw.Write(dosDate); cw.Write(crc); cw.Write((uint)body.Length); cw.Write((uint)e.Content.Length);
             cw.Write((ushort)name.Length); cw.Write((ushort)0); cw.Write((ushort)0); cw.Write((ushort)0); cw.Write((ushort)0);
             cw.Write(0u); cw.Write((uint)offset); cw.Write(name);

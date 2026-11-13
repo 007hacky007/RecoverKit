@@ -46,6 +46,13 @@ public sealed class Settings
     /// </summary>
     public bool HashcatCpuWithGpu { get; set; }
     public string ExtraArguments { get; set; } = "";
+    public bool AutomaticPerformanceCalibration { get; set; } = true;
+    public bool PerformanceStrategyExplicit { get; set; }
+    public bool PerformanceThreadsExplicit { get; set; }
+    [JsonIgnore] public Diagnostics.PerformanceDecision? PerformanceChoice { get; set; }
+    [JsonIgnore] public Diagnostics.PerformanceDecision? CpuPerformanceChoice { get; set; }
+    [JsonIgnore] public Diagnostics.PerformanceDecision? GpuPerformanceChoice { get; set; }
+    [JsonIgnore] public Diagnostics.PerformanceDecision? ZipGpuPerformanceChoice { get; set; }
 
     // GPU temperature guard and load limit (all off by default)
     public bool GpuTempGuard { get; set; }                    // pause hashcat when the hottest GPU reaches the limit

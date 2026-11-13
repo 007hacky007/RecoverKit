@@ -33,8 +33,9 @@ public sealed class NativeRunner
     {
         // Extra hashcat options can change candidate interpretation (for example TrueCrypt keyfiles).
         if (credentials is not null || !settings.UseNativeCpuEngine || attack.Stdin is not null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
+        if (!ignoreGpu && settings.PerformanceChoice?.Engine is "gpu" or "hybrid") return null;
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
-        if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly) return null;
+        if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length != 1) return null;
         var space = MaskSpace.FromHashcatArgs(attack.Args);
@@ -53,7 +54,7 @@ public sealed class NativeRunner
             try { resume = JsonSerializer.Deserialize<NativeResumePoint>(await File.ReadAllTextAsync(restoreFile, ct)); }
             catch (JsonException) { }
 
-        int threads = s.MaxCpuThreads > 0 ? Math.Min(s.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
+        int threads = s.MaxCpuThreads == 0 && (s.PerformanceChoice?.Engine == "cpu" ? s.PerformanceChoice.Threads : s.CpuPerformanceChoice?.Threads) is > 0 and var measured ? measured : s.MaxCpuThreads > 0 ? Math.Min(s.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
         OutputLine?.Invoke($"Built-in CPU engine: {kernel.Name}, {threads} thread(s), lengths {space.MinLength}-{space.MaxLength}" +
                            (resume is not null ? $", resuming at length {resume.Length}" : ""));
         DebugLog.Info($"Native engine: {kernel.Name}, mode {r.Mode}, threads {threads}, priority {s.Priority}, " +

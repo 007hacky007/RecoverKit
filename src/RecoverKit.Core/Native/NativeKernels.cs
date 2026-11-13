@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using RecoverKit.Core.Formats;
 using RecoverKit.Core.Native.Kernels;
+using RecoverKit.Core.Formats;
 
 namespace RecoverKit.Core.Native;
 
@@ -42,6 +42,13 @@ public static class NativeKernels
                $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative: {native}";
     }
 
+    /// <summary>Loaded native library API version, or zero when it is unavailable.</summary>
+    public static int NativeApiVersion => RkNative.ApiVersion;
+
+    /// <summary>Applies a measured ZIP variant; an explicit environment selector still wins.</summary>
+    public static void SelectZipProfileVariant(string? variant) => ZipCryptoNative.ProfilePath =
+        Diagnostics.CpuDiagnostics.Variants.FirstOrDefault(v => v.Name == variant && v.Supported)?.Selector;
+
     /// <summary>Selected ZIP search implementation, including managed fallback.</summary>
     public static string ZipCryptoPath => ZipCryptoNative.PathName;
 
@@ -56,6 +63,8 @@ public static class NativeKernels
         // A small stored entry (the cputest.zip sample, password "zq7", data descriptor so the check byte
         // is the time's), a typical small-file sample: with large entries the cost of
         // confirming false positives dominates.
+        [17200] = ZipCryptoSample.Extract(ZipCryptoSample.Archive(
+            [new("synthetic.dat", ZipCryptoSample.Text(1024, new Random(17200)), true)], "hashcat"u8, new Random(17200))).HashLines,
         [17210] = "$pkzip2$1*1*2*0*29*1d*972eca9f*0*0*0*29*5220*5220*b3118b537bee6e1d72a8f76e6050fed3dca090b2ffbcade89854b9278e640b3abe76b02ac2a710c944*$/pkzip2$",
         [29331] = "$truecrypt$cf53d4153414b63285e701e52c2d99e148c6ccc4508132f82cb41862d0a0ac9ea16274285ac261c339c1508eec9fea54c33e382458662913678f2a88a84959a6$78e238973985ec670d50252677430587ee28b72bfa5edfb2f79c40b734ba8a54a3662642a6ab067e75f41154688ad4adb5d6decd891462dd537188195a51e06fa5baf22b69d0f472cfeeae77ab9a90091731863af1d8b5b380da179fa7d5227ef031732b1ae06e0fe34c0b28b7a64eac34e5a08e09d7001394b3afc804ac69bf819cdd2d383fe96a721f7c683628da8e529d84bdaa68d702573d8f7ef26f75d1bd5c91efa88cb33b1e9c006b87981c55ed3b8063ab7068f8e99b128bc56ea3e883efa55d6f340b2681e50405d91f5f6d76cdbeac404944164d329d3ee01311de0bc6547310f126b5a4c0e9fb74825f91faefa60b7ac828819d4544c1872ff5041e61d5cf093553f427358b2181046376d7b876e1bccf0774d5d251b7c922c214bb5c70c715165d028e1dca73e7adeca3396d77f6e597a10dd4c58f37fdbbdc1d04cd8890ba4c5025776a88a349bb925add13193becf1ca10fe32536db0c0b06a1ef799fb692e304b3716ca5a8a80859c4012ca3e06701b46b5a32f4d10e285a0cdaf6c24e0d98139e7f306e52503c9b503aa28f1fbbb236284907068074fcb3e267e3c4aab2bd3b79b24a7a08106bb55850fa2bb8e2f6d9919a6743cb822c164",
         [9700] = "$oldoffice$0*55045061647456688860411218030058*e7e24d163fbd743992d4b8892bf3f2f7*493410dbc832557d3fe1870ace8397e2",
@@ -135,7 +144,7 @@ public static class NativeKernels
     /// Measures a kernel's speed (candidates/s) on all threads with a mask that does not contain the
     /// password, after a short warm-up.
     /// </summary>
-    public static double Benchmark(int mode, int threads, TimeSpan duration, CancellationToken ct = default, int length = 0)
+    public static double Benchmark(int mode, int threads, TimeSpan duration, CancellationToken ct = default, int length = 0, ThreadPriority priority = ThreadPriority.Normal)
     {
         if (!BenchmarkHashes.TryGetValue(mode, out var hash) || TryCreate(Math.Abs(mode), hash) is not { } kernel) return 0;
         // Seven characters (like hashcat's example password) from upper-case + digits + specials: never
@@ -145,7 +154,7 @@ public static class NativeKernels
         var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", Math.Clamp(length, 3, 16)))])!;
         var started = Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = ThreadPriority.Normal, ProgressInterval = TimeSpan.FromSeconds(0.5) };
+        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = priority, ProgressInterval = TimeSpan.FromSeconds(0.5) };
         // Average rate between the end of a one-second warm-up and the end of the run.
         double t0 = 0, t1 = 0;
         long d0 = -1, d1 = 0;

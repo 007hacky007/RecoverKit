@@ -148,7 +148,7 @@ internal static class Snapshots
         var size = new PixelSize((int)(w.ClientSize.Width * 2), (int)(w.ClientSize.Height * 2));
         using var bmp = new RenderTargetBitmap(size, new Vector(192, 192));
         bmp.Render(w);
-        bmp.Save(path);
+        bmp.Save(path, PngBitmapEncoderOptions.Default);
     }
 }
 #endif

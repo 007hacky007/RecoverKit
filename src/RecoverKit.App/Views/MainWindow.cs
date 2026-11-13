@@ -138,6 +138,15 @@ public sealed partial class MainWindow : Window
                 Position = new PixelPoint(100, 100);   // the saved position is on a monitor that is gone
             _opened = true;
             await InitHashcatAsync();
+#if DEBUG
+            if (Environment.GetEnvironmentVariable("RECOVERKIT_DETAILED_TEST") is { Length: > 0 } reportDirectory)
+            {
+                var diagnostics = new DetailedBenchmarkWindow(_hashcat, _settings, _devices);
+                diagnostics.Show(this);
+                await diagnostics.DebugRunAsync(reportDirectory, Environment.GetEnvironmentVariable("RECOVERKIT_DETAILED_SECTIONS"));
+                Environment.Exit(0);
+            }
+#endif
             if (_pendingOpen is { } f) { _pendingOpen = null; await OpenFileAsync(f); }
         };
         Closing += OnClosing;
@@ -1376,6 +1385,7 @@ public sealed partial class MainWindow : Window
             $"1. Open a protected file (File > Open, {Platform.Shortcut("O")}, or drag & drop).\n" +
             "2. Choose an attack in the Password Recovery Wizard: a scenario, brute-force, brute-force with extended mask, or dictionary.\n" +
             "3. Watch progress in the status pane; Stop interrupts and the attack can be continued later.\n\n" +
+            "If the developers ask for a detailed performance report: Tools > Benchmark > Detailed performance test, then Save report and send the file.\n\n" +
             "TrueCrypt/VeraCrypt volumes and raw hashes: File > Open As.\n" +
             $"GPU selection and workload: Options > GPU Configuration ({Platform.Shortcut("G")}).\n\n" +
             "More: https://github.com/007hacky007/RecoverKit",

@@ -73,6 +73,8 @@ internal static unsafe partial class RkNative
     /// <summary>Test and benchmark switch; also set by RECOVERKIT_NO_NATIVE_LIB=1.</summary>
     internal static bool Disabled { get; set; } = Environment.GetEnvironmentVariable("RECOVERKIT_NO_NATIVE_LIB") == "1";
 
+    public static int ApiVersion => Available ? Version() : 0;
+
     public static bool Available => !Disabled && _available.Value;
 
     public static Feature Features => Available ? (Feature)FeaturesRaw() : 0;

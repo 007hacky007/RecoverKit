@@ -12,6 +12,7 @@ public sealed class BackendDevice
     public int? AliasOf { get; init; }
     public string Backend { get; init; } = "";
     public string BackendVersion { get; init; } = "";
+    public string DriverVersion { get; init; } = "";
     public string Type { get; init; } = "";
     public string Vendor { get; init; } = "";
     public string Name { get; init; } = "";
@@ -60,6 +61,8 @@ public sealed class HashModeInfo
     public string? BenchmarkMask { get; init; }
     public string? BenchmarkCharset1 { get; init; }
     public string? ExampleHash { get; init; }
+    public int PureBenchmarkLength { get; init; }
+    public int BenchmarkLength => Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", BenchmarkCharset1 ?? "", BenchmarkMask ?? ""])?.MaxLength ?? 0;
 }
 
 /// <summary>Locates hashcat and runs its short informational commands.</summary>
@@ -153,6 +156,29 @@ public sealed partial class HashcatTool
     /// hashcat's major version from <c>--version</c> (v8.0.0 -> 8), cached; 0 when it cannot be read.
     /// hashcat 8 no longer runs the command stored in a restore file (see <see cref="HashcatRunner.BuildArguments"/>).
     /// </summary>
+    private string? _fullVersion;
+
+    /// <summary>The complete hashcat version for performance-profile invalidation, cached after the first read.</summary>
+    public string FullVersion
+    {
+        get
+        {
+            if (_fullVersion is not null) return _fullVersion;
+            try
+            {
+                using var process = Process.Start(StartInfo(["--version"]));
+                if (process is null) return _fullVersion = "unknown";
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(20_000)) { process.Kill(true); return _fullVersion = "unknown"; }
+                _ = stderr.GetAwaiter().GetResult();
+                return _fullVersion = stdout.GetAwaiter().GetResult().Trim();
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+            { return _fullVersion = "unknown"; }
+        }
+    }
+
     public int MajorVersion
     {
         get
@@ -167,6 +193,7 @@ public sealed partial class HashcatTool
                 {
                     var o = p.StandardOutput.ReadToEnd();
                     p.WaitForExit(20_000);
+                    _fullVersion = o.Trim();
                     v = ParseMajorVersion(o);
                 }
             }
@@ -203,15 +230,18 @@ public sealed partial class HashcatTool
     }
 
     /// <summary>Runs hashcat to completion and returns (exit code, stdout, stderr).</summary>
-    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default)
+    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default, ProcessPriority? priority = null, bool redactOutput = false)
     {
         var psi = StartInfo(args, stdin is not null);
-        // Potfile and mode info queries include plaintexts: keep them out of the debug log.
-        bool redact = psi.ArgumentList.Contains("--show") || psi.ArgumentList.Contains("--hash-info");
+        // --show prints recovered plaintexts: keep them out of the debug log.
+        bool redact = redactOutput || psi.ArgumentList.Contains("--show") || psi.ArgumentList.Contains("--hash-info");
         int logId = DebugLog.ProcessStart(psi);
         var sw = Stopwatch.StartNew();
         using var p = new Process { StartInfo = psi };
         p.Start();
+        if (priority is { } selectedPriority && Native.NativeRunner.LowersProcessPriority)
+            try { p.PriorityClass = Native.NativeRunner.ProcessClassFor(selectedPriority); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
         var outTask = p.StandardOutput.ReadToEndAsync(ct);
         var errTask = p.StandardError.ReadToEndAsync(ct);
         if (stdin is not null)
@@ -225,20 +255,23 @@ public sealed partial class HashcatTool
         catch (OperationCanceledException)
         {
             try { p.Kill(true); } catch (InvalidOperationException) { }
+            await p.WaitForExitAsync(CancellationToken.None);
+            try { await Task.WhenAll(outTask, errTask); } catch (OperationCanceledException) { }
+            ct.ThrowIfCancellationRequested();
             DebugLog.Warn($"#{logId} timed out after {timeout.TotalSeconds:F0} s and was killed");
             throw new TimeoutException("hashcat did not finish in time.");
         }
         var (o, e) = (await outTask, await errTask);
         DebugLog.ProcessText(logId, "stdout", o, redact);
-        DebugLog.ProcessText(logId, "stderr", e);
+        DebugLog.ProcessText(logId, "stderr", e, redact);
         DebugLog.ProcessExit(logId, p.ExitCode, sw.Elapsed);
         return (p.ExitCode, o, e);
     }
 
-    public async Task<string> VersionAsync()
+    public async Task<string> VersionAsync(CancellationToken ct = default)
     {
-        var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20));
-        return o.Trim();
+        var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20), ct: ct);
+        return _fullVersion = o.Trim();
     }
 
     // ---------------------------------------------------------------- devices
@@ -252,14 +285,15 @@ public sealed partial class HashcatTool
     public static List<BackendDevice> ParseDevices(string text)
     {
         var list = new List<BackendDevice>();
-        string backend = "", backendVersion = "";
+        string backend = "", backendVersion = "", driverVersion = "";
         var lines = text.Replace("\r", "").Split('\n');
         for (int i = 0; i < lines.Length; i++)
         {
             var l = lines[i].Trim();
             var api = ApiHeader().Match(l);
-            if (api.Success) { backend = api.Groups[1].Value; backendVersion = ""; continue; }
+            if (api.Success) { backend = api.Groups[1].Value; backendVersion = ""; driverVersion = ""; continue; }
             var ver = Field().Match(l);
+            if (ver.Success && ver.Groups[1].Value == "Driver.Version") driverVersion = ver.Groups[2].Value.Trim();
             if (ver.Success && ver.Groups[1].Value is "CUDA.Version" or "HIP.Version" or "Metal.Version" or "Metal.Runtime.Version" or "Version" && !lines[Math.Max(0, i - 1)].Contains("Backend Device"))
             {
                 if (backendVersion == "") backendVersion = ver.Groups[2].Value.Trim();
@@ -282,6 +316,7 @@ public sealed partial class HashcatTool
                 AliasOf = dev.Groups[2].Success ? int.Parse(dev.Groups[2].Value) : null,
                 Backend = backend,
                 BackendVersion = f.GetValueOrDefault("Version") ?? backendVersion,
+                DriverVersion = f.GetValueOrDefault("Driver.Version") ?? driverVersion,
                 // hashcat -I prints no "Type" for CUDA and HIP devices; those backends only expose GPUs.
                 Type = f.GetValueOrDefault("Type") ?? (backend is "CUDA" or "HIP" ? "GPU" : ""),
                 Vendor = f.GetValueOrDefault("Vendor") ?? "",
@@ -326,17 +361,17 @@ public sealed partial class HashcatTool
 
     // ---------------------------------------------------------------- mode info
 
-    public async Task<HashModeInfo?> ModeInfoAsync(int mode, int attackMode = 0)
+    public async Task<HashModeInfo?> ModeInfoAsync(int mode, int attackMode = 0, CancellationToken ct = default)
     {
         HashModeInfo? info = null;
         try
         {
-            string version = await VersionAsync();
+            string version = await VersionAsync(ct);
             if (string.IsNullOrWhiteSpace(version)) return null;
             var key = (version, mode, attackMode);
             lock (_modeInfo) if (_modeInfo.TryGetValue(key, out var c)) return c;
             var args = new List<string> { "--hash-info", "-m", mode.ToString(), "-a", attackMode.ToString(), "--machine-readable", "--quiet" };
-            var (code, pure, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+            var (code, pure, _) = await RunAsync(args, TimeSpan.FromSeconds(30), ct: ct);
             if (code == 0)
             {
                 info = ParseModeInfo(mode, pure, null);
@@ -347,7 +382,7 @@ public sealed partial class HashcatTool
                     args.Add("-O");
                     try
                     {
-                        var (optCode, opt, _) = await RunAsync(args, TimeSpan.FromSeconds(30));
+                        var (optCode, opt, _) = await RunAsync(args, TimeSpan.FromSeconds(30), ct: ct);
                         if (optCode == 0) info = ParseModeInfo(mode, pure, opt);
                     }
                     catch (Exception ex) when (ex is TimeoutException or IOException or System.ComponentModel.Win32Exception) { }
@@ -385,14 +420,15 @@ public sealed partial class HashcatTool
         }
         return new HashModeInfo
         {
+            PureBenchmarkLength = Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", e.TryGetProperty("benchmark_charset1", out var pcs) ? pcs.GetString() ?? "" : "", e.TryGetProperty("benchmark_mask", out var pm) ? pm.GetString() ?? "" : ""])?.MaxLength ?? 0,
             Mode = mode,
             Name = e.GetProperty("name").GetString() ?? "",
             SlowHash = e.TryGetProperty("slow_hash", out var sh) && sh.GetBoolean(),
             HasOptimizedKernel = e.TryGetProperty("kernel_type", out var kt) && kt.EnumerateArray().Any(x => x.GetString() == "optimized"),
             PasswordLenMax = e.TryGetProperty("password_len_max", out var pureMax) ? pureMax.GetInt32() : 256,
             OptimizedPasswordLenMax = limit,
-            BenchmarkMask = mask,
-            BenchmarkCharset1 = charset,
+            BenchmarkMask = mask ?? (e.TryGetProperty("benchmark_mask", out var pureMask) ? pureMask.GetString() : null),
+            BenchmarkCharset1 = charset ?? (e.TryGetProperty("benchmark_charset1", out var bc) ? bc.GetString() : null),
             ExampleHash = e.TryGetProperty("example_hash", out var example) ? example.GetString() : null,
         };
     }

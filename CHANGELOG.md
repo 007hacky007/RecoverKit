@@ -6,6 +6,12 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- Exportable synthetic benchmark files with matched comparison rates, exact attack instructions
+  and a results template, available from Save test files and `bench-full --export-tests`.
+- Two-minute detailed performance test with enforced section/step budgets, short samples, shared
+  GPU kernel cache and a Thorough option for the full sweep.
+- Detailed performance test with selectable sections, live progress, partial reports and a
+  privacy-scrubbed HTML/JSON report; measured performance profiles and automatic calibration.
 - Native ZipCrypto CPU header filters, with measured ARM CRC acceleration on Apple silicon and
   selectable AVX-512, AVX2, NEON and scalar paths for testing and benchmarks.
 - 7-Zip archives (.7z), with visible or encrypted file names, solid or not, and self-extracting.

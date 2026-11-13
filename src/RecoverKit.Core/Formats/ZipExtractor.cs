@@ -14,7 +14,7 @@ public static class ZipExtractor
     internal sealed class ZipEntry
     {
         public string Name = "";
-        public ushort Flags, Method, ModTime, ModDate;
+        public ushort Flags, Method, ModTime, ModDate, VersionNeeded;
         public uint Crc;
         public long CompSize, UncompSize, LocalOffset;
         public int AesStrength;     // 0 = not AES
@@ -239,11 +239,12 @@ public static class ZipExtractor
         // the entry uses a data descriptor (flag bit 3). Emitting the time checksum only in that case
         // lets hashcat and the built-in engine test one byte instead of two (half the false positives).
         int checksumFromTime = (e.Flags & 8) != 0 ? e.ModTime : checksumFromCrc;
+        string checkBytes = e.VersionNeeded is > 0 and < 20 && (e.Flags & 8) == 0 ? "2" : "1";
         if (partial)
-            return string.Join('*', "$pkzip2$1", "1", "1", "0", e.Method.ToString(), data.Length.ToString("x"),
+            return string.Join('*', "$pkzip2$1", checkBytes, "1", "0", e.Method.ToString(), data.Length.ToString("x"),
                 checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
         return string.Join('*',
-            "$pkzip2$1", "1", "2", "0",
+            "$pkzip2$1", checkBytes, "2", "0",
             e.CompSize.ToString("x"), e.UncompSize.ToString("x"), e.Crc.ToString("x8"),
             "0", "0", e.Method.ToString(), data.Length.ToString("x"),
             checksumFromCrc.ToString("x4"), checksumFromTime.ToString("x4"), Bin.Hex(data), "$/pkzip2$");
@@ -372,6 +373,7 @@ public static class ZipExtractor
         {
             var ze = new ZipEntry
             {
+                VersionNeeded = Bin.U16(cd, p + 6),
                 Flags = Bin.U16(cd, p + 8),
                 Method = Bin.U16(cd, p + 10),
                 ModTime = Bin.U16(cd, p + 12),

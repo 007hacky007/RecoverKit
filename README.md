@@ -143,6 +143,33 @@ are tested at **17 million passwords per second**, so the same search takes 4 se
 
 All measurements, and how they were made: [docs/benchmarks.md](docs/benchmarks.md).
 
+### Detailed performance report
+
+If the developers ask for a detailed performance report: **Tools > Benchmark > Detailed
+performance test**, then **Save report** and send the file. Select which sections to run;
+the default has a two-minute total budget, including engine startup. Unfinished measurements are
+listed as "not measured, run the thorough test".
+**Thorough (slower)** runs the full sweep for developers. The test uses synthetic targets and keeps completed results if
+you abandon it. The HTML report includes the measurements and a **Copy summary** button.
+Use **Save test files** beside Save report to compare the same work with another program, or run
+`recoverkit-cli bench-full --export-tests <folder>`. Choose an empty folder. It contains synthetic
+ZIP, PDF and Office files, `readme.txt` with the exact attack and verification passwords, and
+`results.csv` for entering the other program's rates. Unmeasured files are marked explicitly;
+**Thorough (slower)** measures the full comparison set. RAR diagnostics have reference hashes only,
+so no RAR archive is exported.
+
+The measurements also build a performance profile for this PC. RecoverKit keeps the current
+method unless a correctness-checked alternative wins by at least 5% in repeated measurements.
+On a PC without measurements, a longer attack can run a short automatic calibration first.
+**Preferences > Performance** shows the profile, with **Reset**, **Run detailed test**, and
+**Measure the fastest method automatically**. Your explicit settings take priority.
+
+The automatic check measures CPU paths and worker counts. Run the detailed test to compare GPU
+backends and finite CPU/GPU/hybrid jobs. Whole-job engine comparisons currently cover RAR 5 and
+classic stored ZIP. Other formats keep their existing engine strategy. Temperature and power
+limits are respected; some GPU comparisons are skipped when those limits cannot be enforced.
+
+
 ## Getting started
 
 1. **Download** from the [Releases page](https://github.com/007hacky007/RecoverKit/releases/latest):

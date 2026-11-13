@@ -6,6 +6,7 @@ using Avalonia.Media;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Diagnostics;
 
 namespace RecoverKit.App.Views;
 
@@ -13,6 +14,11 @@ namespace RecoverKit.App.Views;
 public sealed class PreferencesWindow : Window
 {
     private readonly Settings _s;
+    private readonly DeviceStrategy _loadedStrategy;
+    private bool _threadsEdited;
+    private bool _strategyEdited;
+    private readonly CheckBox _automaticCalibration = Check("Measure the fastest method automatically");
+    private readonly TextBlock _profileStatus = L.Text("", dim: true, wrap: true);
     private readonly HashcatTool? _hashcat;
     private List<BackendDevice> _devices;
     public bool HashcatChanged { get; private set; }
@@ -79,6 +85,7 @@ public sealed class PreferencesWindow : Window
     public PreferencesWindow(Settings s, HashcatTool? hashcat, List<BackendDevice> devices, int tab)
     {
         _s = s;
+        _loadedStrategy = s.Strategy;
         _hashcat = hashcat;
         _devices = devices;
         Title = Platform.IsMac ? "Settings" : "Preferences";
@@ -111,6 +118,8 @@ public sealed class PreferencesWindow : Window
         root.Children.Add(tabs);
         Content = root;
         LoadValues();
+        _maxThreads.ValueChanged += (_, _) => _threadsEdited = true;
+        _strategy.SelectionChanged += (_, _) => _strategyEdited = true;
         // Apply stays disabled until something changes.
         TrackChanges(tabs, () => _apply.IsEnabled = true);
     }
@@ -176,7 +185,30 @@ public sealed class PreferencesWindow : Window
         return L.Column(16,
             L.Group("CPU/GPU performance strategy", StrategyBox()),
             L.Group("", grid),
-            L.Group("Recovery engines", hc));
+            L.Group("Recovery engines", hc),
+            L.Group("Performance profile", ProfileBox()));
+    }
+
+    private Control ProfileBox()
+    {
+        RefreshProfile();
+        var reset = L.Button("Reset", () => { PerformanceProfiles.Reset(); RefreshProfile(); }, 90);
+        var run = L.Button("Run detailed test", async () =>
+        {
+            await new DetailedBenchmarkWindow(_hashcat, _s, _devices).ShowDialog(this);
+            RefreshProfile();
+        }, 150);
+        return L.Column(8, _profileStatus, _automaticCalibration,
+            L.Text("A short measurement on the first longer attack chooses a correct method for this PC. Very short attacks start immediately. Your engine, device, thread and power choices take priority.", dim: true, wrap: true),
+            L.Row(reset, run));
+    }
+
+    private void RefreshProfile()
+    {
+        var profile = PerformanceProfiles.Load();
+        _profileStatus.Text = profile.MeasuredAt is { } at
+            ? $"Performance profile: measured on {at.LocalDateTime:yyyy-MM-dd} ({profile.Source}), {profile.Decisions.Select(d => d.Mode).Distinct().Count()} formats"
+            : "Performance profile: no measurements yet";
     }
 
     /// <summary>What adding the CPU to hashcat can be expected to bring, or why it is unavailable here.</summary>
@@ -422,6 +454,7 @@ public sealed class PreferencesWindow : Window
     private void LoadValues()
     {
         _strategy.SelectedIndex = (int)_s.Strategy;
+        _automaticCalibration.IsChecked = _s.AutomaticPerformanceCalibration;
         _priority.SelectedIndex = (int)_s.Priority;
         // 0 means "one per logical processor"; show the number it resolves to.
         _maxThreads.Value = _s.MaxCpuThreads <= 0 ? _maxThreads.Maximum : Math.Clamp(_s.MaxCpuThreads, 1, (int)_maxThreads.Maximum);
@@ -485,6 +518,9 @@ public sealed class PreferencesWindow : Window
     private void Apply()
     {
         _s.Strategy = (DeviceStrategy)Math.Max(0, _strategy.SelectedIndex);
+        if (_strategyEdited || _s.Strategy != _loadedStrategy) _s.PerformanceStrategyExplicit = true;
+        if (_threadsEdited) _s.PerformanceThreadsExplicit = true;
+        _s.AutomaticPerformanceCalibration = _automaticCalibration.IsChecked == true;
         _s.Priority = (ProcessPriority)Math.Max(0, _priority.SelectedIndex);
         _s.MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue();
         _s.OptimizedKernels = _optimized.IsChecked == true;

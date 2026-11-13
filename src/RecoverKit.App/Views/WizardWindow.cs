@@ -686,7 +686,7 @@ public sealed class WizardWindow : Window
     {
         var count = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
         var time = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-        var speed = new TextBox { Text = _settings.SpeedFor(_target.Modes[0]).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
+        var speed = new TextBox { Text = RecoverKit.Core.Diagnostics.ProfileSettings.EstimatedSpeed(_settings, _devices, _target.Modes[0]).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
         t.Put(Lb("Passwords to process:"), row, 0);
         t.Put(count, row, 1, 3);
         t.Put(Lb("Estimated time:"), row + 1, 0);

@@ -1,5 +1,6 @@
 using System.Text;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Diagnostics;
 
 namespace RecoverKit.Core.Hashcat;
 
@@ -24,8 +25,12 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
 
     /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
     public int Seconds { get; init; } = 10;
+    public ProcessPriority? Priority { get; init; }
+    internal bool Optimized { get; init; }
+    internal bool BoundedTuning { get; init; }
 
     /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
+    internal string? Charset1 { get; init; }
     public string Mask { get; init; } = "?a?a?a?a?a?a?a?a";
 
     public event Action<string>? Progress;
@@ -77,6 +82,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
                 {
                     ct.ThrowIfCancellationRequested();
                     var file = Path.Combine(dir, $"{s.Mode}-{rows.Count}.hash");
+                    DebugLog.RegisterHashes(s.HashLine);
                     await File.WriteAllTextAsync(file, s.HashLine + "\n", ct);
                     HashcatKernels.Restore(tool.Directory);
                     Progress?.Invoke($"Device #{dev.Id}, {s.Label}: hashcat's kernel ...");
@@ -105,6 +111,22 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
         return rows;
     }
 
+    internal async Task<double> MeasureAsync(Sample sample, BackendDevice device, string variant, CancellationToken ct)
+    {
+        var directory = Directory.CreateTempSubdirectory("rk-zip-sample-").FullName;
+        try
+        {
+            string file = Path.Combine(directory, "synthetic.hash");
+            DebugLog.RegisterHashes(sample.HashLine);
+            await File.WriteAllTextAsync(file, sample.HashLine + "\n", ct);
+            HashcatKernels.EnsureFor(tool, sample.Mode);
+            using var selection = HashcatKernels.ApplyProfile(tool, sample.Mode, variant);
+            using var tuning = BoundedTuning ? DiagnosticGpuTuning.Apply(tool, [device]) : null;
+            return await SpeedAsync(sample.Mode, file, device.Id, ct);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     /// <summary>Median speed (H/s) over the status updates of one run, the first two (warm-up) left out.</summary>
     private async Task<double> SpeedAsync(int mode, string hashFile, int device, CancellationToken ct)
     {
@@ -114,17 +136,25 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             "--runtime", Seconds.ToString(), "--status", "--status-json", "--status-timer", "1",
             // ZipCrypto has false positives: about one candidate in 2^39 passes the check byte and the
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
-            "--keep-guessing", "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
+            "--keep-guessing", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
-        var (_, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
-        var speeds = o.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
-            .Where(st => st.Status == 3).Select(st => st.TotalSpeed).Where(v => v > 0).ToList();
-        if (speeds.Count == 0)
-        {
-            var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);
-            Progress?.Invoke("  no speed reported: " + string.Join(" / ", why));
-            return 0;
-        }
+        if (Charset1 is not null) args.AddRange(["-1", Charset1]);
+        if (Optimized) args.Add("-O");
+        var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
+        double speed = ParseSpeed(code, o);
+        if (speed > 0) return speed;
+        var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);
+        Progress?.Invoke($"  no valid speed reported (exit {code}): " + string.Join(" / ", why));
+        return 0;
+    }
+
+    internal static double ParseSpeed(int exitCode, string output)
+    {
+        // Runtime expiry (4) is normal here; errors or a manual stop invalidate earlier samples.
+        if (exitCode is not (0 or 1 or 4)) return 0;
+        var speeds = output.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
+            .Where(st => st.Status == 3).Select(st => st.TotalSpeed).Where(v => v > 0 && double.IsFinite(v)).ToList();
+        if (speeds.Count == 0) return 0;
         var tail = speeds.Count > 3 ? speeds.Skip(2).ToList() : speeds;
         tail.Sort();
         return tail[tail.Count / 2];

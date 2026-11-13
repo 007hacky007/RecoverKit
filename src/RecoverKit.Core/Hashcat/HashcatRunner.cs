@@ -177,6 +177,12 @@ public sealed class HashcatRunner(HashcatTool tool)
                     else if (s.HashcatCpuWithGpu && cpuDevice) a.AddRange(["-D", "1,2"]);
                     break;
             }
+        var measuredKeys = (s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys);
+        if (measuredKeys is { Count: > 0 } && known is not null)
+        {
+            var selected = known.Where(d => d.IsGpu && measuredKeys.Contains(d.Key) && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
+            if (selected.Count > 0) { a.AddRange(["-d", string.Join(',', selected.Select(d => d.Id))]); AddBackendIgnores(); return a; }
+        }
         bool anyOff = s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0 || exclude is { Count: > 0 };
         if (preferMetal && known is not null && known.Any(d => d.IsMetal && d.IsSkippedAlias && d.AliasOf is int))
         {
@@ -238,7 +244,11 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     /// <summary>The GPUs hashcat will run on with these settings (not skipped as an alias, not unchecked).</summary>
     public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
-        => known is null ? [] : known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d)).ToList();
+    {
+        if (known is null) return [];
+        var measured = s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys;
+        return known.Where(d => d.IsGpu && !IsDisabled(s, d) && (measured is { Count: > 0 } ? measured.Contains(d.Key) : !d.IsSkippedAlias)).ToList();
+    }
 
     /// <summary>
     /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
@@ -297,6 +307,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         bool kernelsReady = HashcatKernels.EnsureFor(tool, r.Mode, attackMode);
         if (r.RequiresPartialZipKernel && !kernelsReady)
             return new RunResult { Outcome = RunOutcome.Error, Error = "This partial ZIP target requires RecoverKit's ZIP kernel and a supported dictionary or mask attack. Check the hashcat installation and kernel settings." };
+        using var zipProfile = HashcatKernels.ApplyProfile(tool, r.Mode, r.RequiresPartialZipKernel ? null : r.Settings.ZipGpuPerformanceChoice?.Variant);
         string outFile = OutFile(r.SessionDir, r.SessionName);
         if (!r.Restore && File.Exists(outFile)) File.Delete(outFile);
         var confirm = r.ConfirmPassword is { } cf ? new OutfileConfirmer(outFile, cf, FalsePositives) : null;

@@ -2,6 +2,7 @@ using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Diagnostics;
 
 // recoverkit-cli: headless front-end for the same engine the GUI uses.
 //   recoverkit-cli extract <file> [--volume tc|vc --kdf sha512,ripemd160 --cascade 1,2,3 --hidden --boot --keyfile path --pim N]
@@ -9,8 +10,11 @@ using RecoverKit.Core.Hashcat;
 //     attacks: --scenario "Name" | --brute csde --min 1 --max 6 [--mask "pass????"] |
 //              --hcmask "?u?l?l?d" [-1 chars ..] | --dict file [--rules simple|advanced|complex|two|two-adv|three|file.rule]
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
+//   recoverkit-cli bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]
 //   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
+if (args.Length > 0 && args[0] == FiniteDiagnosticWorker.Command) return FiniteDiagnosticWorker.Run(args);
+if (args.Length > 0 && args[0] == CpuDiagnosticWorker.Command) return CpuDiagnosticWorker.Run(args);
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();
 // The elevated NVIDIA power limit helper (started by RecoverKit itself, see PowerLimiter).
@@ -28,6 +32,32 @@ try
             if (argv.Contains("--full")) { if (d.Target is not null) Console.WriteLine(d.Target.HashLines); }
             else Print(d);
             return d.Target is null ? 2 : 0;
+        }
+        case "bench-full":
+        {
+            var settings = Settings.Load();
+            var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath);
+            var devices = new List<BackendDevice>(); // Diagnostics enumerates its isolated engine copy.
+            using var cts = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+            Console.CancelKeyPress += cancel;
+            try
+            {
+                var runner = new DetailedBenchmarkRunner(tool, settings, devices)
+                {
+                    Seconds = int.TryParse(Opt(argv, "--seconds"), out int seconds) ? Math.Clamp(seconds, 3, 60) : 3,
+                    Thorough = argv.Contains("--thorough"),
+                };
+                var progress = new Progress<DiagnosticProgress>(p => Console.Error.WriteLine($"{p.Section}: {p.Step} ({p.Elapsed:mm\\:ss} elapsed, about {p.EstimatedRemaining.TotalMinutes:F0} min remaining)"));
+                var report = await runner.RunAsync(Opt(argv, "--sections")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), progress, cts.Token);
+                if (Opt(argv, "--export-tests") is { } testFolder) BenchmarkTestFiles.Export(testFolder, report);
+                string output = Opt(argv, "--out") ?? $"RecoverKit-performance-{DateTime.Now:yyyy-MM-dd}.html";
+                await File.WriteAllTextAsync(output, DiagnosticHtml.Render(report));
+                Console.WriteLine(DiagnosticHtml.Summary(report));
+                Console.WriteLine("Report saved.");
+                return report.Cancelled ? 2 : 0;
+            }
+            finally { Console.CancelKeyPress -= cancel; }
         }
         case "bench-prims":
         {
@@ -214,12 +244,12 @@ try
             if (Opt(argv, "--temp-hysteresis") is { } th) settings.GpuTempHysteresis = int.Parse(th);
             if (Opt(argv, "--gpu-duty") is { } gd) settings.GpuDutyPercent = int.Parse(gd);
             int? powerLimit = Opt(argv, "--power-limit") is { } pl ? int.Parse(pl) : null;
-            if (Opt(argv, "--strategy") is { } strat) settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true);
+            if (Opt(argv, "--strategy") is { } strat) { settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true); settings.PerformanceStrategyExplicit = true; }
             // Hybrid CPU + GPU (on by default) and hashcat's CPU device next to the GPUs (off by default).
-            if (argv.Contains("--no-hybrid")) settings.HybridCpuGpu = false;
-            if (argv.Contains("--hybrid")) settings.HybridCpuGpu = true;
+            if (argv.Contains("--no-hybrid")) { settings.HybridCpuGpu = false; settings.PerformanceStrategyExplicit = true; }
+            if (argv.Contains("--hybrid")) { settings.HybridCpuGpu = true; settings.PerformanceStrategyExplicit = true; }
             if (argv.Contains("--hashcat-cpu")) settings.HashcatCpuWithGpu = true;
-            if (Opt(argv, "--threads") is { } thr) settings.MaxCpuThreads = int.Parse(thr);
+            if (Opt(argv, "--threads") is { } thr) { settings.MaxCpuThreads = int.Parse(thr); settings.PerformanceThreadsExplicit = true; }
             // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
             if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
                 Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
@@ -441,6 +471,7 @@ static void Print(Detection d)
 static int Usage()
 {
     Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir] | bench-zip [--device N] [--seconds S]");
+    Console.WriteLine("Detailed test: bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
