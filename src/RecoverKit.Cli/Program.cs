@@ -50,7 +50,8 @@ try
             if (argv.Contains("--force-vector")) RecoverKit.Core.Native.NativeKernels.ForceVectorKernels = true;
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
-                Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s");
+                Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
+                    (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" : ""));
             return 0;
         }
         case "bench-zip":

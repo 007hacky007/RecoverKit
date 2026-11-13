@@ -182,9 +182,29 @@ public sealed class ZipCryptoKernel : NativeKernel
         public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last)
         {
             PrefixKeys(prefix, out uint a0, out uint a1, out uint a2);
-            if (Avx2.IsSupported) return SearchAvx2(prefix, last, a0, a1, a2);
-            if (AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefix, last, a0, a1, a2);
+            int path = ZipCryptoNative.Path;
+            if (path > 0)
+            {
+                int result = SearchNative(prefix, last, a0, a1, a2, path);
+                if (result != -2) return result;
+            }
+            if (ZipCryptoNative.RequestedPath != -2 && Avx2.IsSupported) return SearchAvx2(prefix, last, a0, a1, a2);
+            if (ZipCryptoNative.RequestedPath != -2 && AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefix, last, a0, a1, a2);
             return SearchScalar(prefix, last, a0, a1, a2);
+        }
+
+        private unsafe int SearchNative(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint a0, uint a1, uint a2, int path)
+        {
+            Span<int> hits = last.Length <= 256 ? stackalloc int[last.Length] : new int[last.Length];
+            int count;
+            fixed (byte* header = k._header, chars = last)
+            fixed (int* output = hits)
+                count = RkNative.ZipSearch(header, k._check1, k._twoBytes ? k._check1 : k._check2,
+                    a0, a1, a2, chars, last.Length, output, hits.Length, path);
+            if (count < 0 || count > hits.Length) return -2;
+            for (int i = 0; i < count; i++)
+                if (Confirm(prefix, last[hits[i]])) return hits[i];
+            return -1;
         }
 
         /// <summary>k1 = (k1 + (k0 &amp; 0xff)) * 134775813 + 1, with the multiply as shifts and adds (2^27+2^19+2^15+2^10+2^2+1).</summary>
