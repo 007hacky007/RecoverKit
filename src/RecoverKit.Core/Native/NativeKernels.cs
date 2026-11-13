@@ -41,6 +41,13 @@ public static class NativeKernels
                $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative: {native}";
     }
 
+    /// <summary>Loaded native library API version, or zero when it is unavailable.</summary>
+    public static int NativeApiVersion => RkNative.ApiVersion;
+
+    /// <summary>Applies a measured ZIP variant; an explicit environment selector still wins.</summary>
+    public static void SelectZipProfileVariant(string? variant) => ZipCryptoNative.ProfilePath =
+        Diagnostics.CpuDiagnostics.Variants.FirstOrDefault(v => v.Name == variant && v.Supported)?.Selector;
+
     /// <summary>Selected ZIP search implementation, including managed fallback.</summary>
     public static string ZipCryptoPath => ZipCryptoNative.PathName;
 

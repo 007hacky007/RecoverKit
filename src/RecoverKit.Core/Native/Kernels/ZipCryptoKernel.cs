@@ -188,8 +188,8 @@ public sealed class ZipCryptoKernel : NativeKernel
                 int result = SearchNative(prefix, last, a0, a1, a2, path);
                 if (result != -2) return result;
             }
-            if (ZipCryptoNative.RequestedPath != -2 && Avx2.IsSupported) return SearchAvx2(prefix, last, a0, a1, a2);
-            if (ZipCryptoNative.RequestedPath != -2 && AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefix, last, a0, a1, a2);
+            if (ZipCryptoNative.EffectiveRequestedPath != -2 && Avx2.IsSupported) return SearchAvx2(prefix, last, a0, a1, a2);
+            if (ZipCryptoNative.EffectiveRequestedPath != -2 && AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefix, last, a0, a1, a2);
             return SearchScalar(prefix, last, a0, a1, a2);
         }
 
