@@ -1,0 +1,145 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Reflection;
+using System.Text.Json;
+using RecoverKit.Core.Native;
+
+namespace RecoverKit.Core.Diagnostics;
+
+/// <summary>A native kernel fault ends one worker process while the main diagnostics keeps its results.</summary>
+public static class CpuDiagnosticWorker
+{
+    public const string Command = "--rk-cpu-diagnostic-worker";
+    public sealed record WorkerResult(CpuDiagnostics.CorrectnessResult Check, double Speed, double ElapsedSeconds, string ActualPath, string? Error = null);
+
+    public static int Run(string[] args)
+    {
+        if (args.Length != 9 || args[0] != Command || !int.TryParse(args[1], out int mode)
+            || !int.TryParse(args[3], out int threads) || !Enum.TryParse<ProcessPriority>(args[4], out var priority)
+            || !int.TryParse(args[5], out int repeat) || !int.TryParse(args[6], out int length)
+            || !int.TryParse(args[7], out int seconds) || threads < 1 || threads > Environment.ProcessorCount
+            || repeat < 0 || length is < 1 or > 10 || seconds is < -1 or > 60) return 2;
+        WorkerResult result;
+        try
+        {
+            string variant = args[2];
+            if (!NativeKernels.BenchmarkHashes.ContainsKey(mode) || !KernelVariants.Supported(mode, variant))
+                result = Failed("Requested CPU variant is unsupported.");
+            else
+            {
+                using var selection = KernelVariants.Select(mode, variant);
+                var check = Math.Abs(mode) is 17200 or 17210 ? CpuDiagnostics.CheckZipVariant(variant) : CpuDiagnostics.CheckKernel(mode);
+                string path = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : variant;
+                if (!check.Passed) result = new(check with { Error = DiagnosticHtml.Scrub(check.Error ?? "Correctness check failed.") }, 0, 0, path);
+                else
+                {
+                    var timer = Stopwatch.StartNew();
+                    double speed;
+                    if (seconds == -1)
+                    {
+                        var kernel = NativeKernels.TryCreate(Math.Abs(mode), NativeKernels.BenchmarkHashes[mode])!;
+                        var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", length))])!;
+                        using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(650));
+                        var measured = new NativeEngine(kernel, space) { Threads = threads, Priority = NativeRunner.ThreadPriorityFor(priority) }.Run(null, sample.Token);
+                        speed = timer.Elapsed.TotalSeconds > 0 ? measured.Tested / timer.Elapsed.TotalSeconds : 0;
+                    }
+                    else speed = seconds == 0 ? 0 : NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), length: length,
+                        priority: NativeRunner.ThreadPriorityFor(priority));
+                    result = new(check, speed, timer.Elapsed.TotalSeconds, path);
+                }
+            }
+        }
+        catch (Exception ex) { result = Failed($"CPU worker step failed ({ex.GetType().Name})."); }
+        try { File.WriteAllText(args[8], JsonSerializer.Serialize(result)); return 0; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 3; }
+    }
+
+    public static async Task<CpuDiagnostics.CorrectnessResult> CheckAsync(int mode, string variant, CancellationToken ct = default)
+        => (await ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct)).Check;
+
+    public static Task<WorkerResult> MeasureAsync(int mode, string variant, int threads, ProcessPriority priority, int repeat, CancellationToken ct = default)
+        => ExecuteAsync(mode, variant, threads, priority, repeat, 7, 3, ct);
+
+    public static Task<WorkerResult> MeasureAutomaticAsync(int mode, string variant, int threads, int length, ProcessPriority priority, CancellationToken ct = default)
+        => ExecuteAsync(mode, variant, threads, priority, 1, length, -1, ct);
+
+    private static async Task<WorkerResult> ExecuteAsync(int mode, string variant, int threads, ProcessPriority priority, int repeat, int length, int seconds, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        string? directory = null;
+        try
+        {
+            directory = Directory.CreateTempSubdirectory("rk-cpu-worker-").FullName;
+            string output = Path.Combine(directory, "result.json");
+            var start = SelfStartInfo();
+            foreach (var arg in new[] { Command, mode.ToString(CultureInfo.InvariantCulture), variant, threads.ToString(CultureInfo.InvariantCulture), priority.ToString(),
+                repeat.ToString(CultureInfo.InvariantCulture), length.ToString(CultureInfo.InvariantCulture), seconds.ToString(CultureInfo.InvariantCulture), output }) start.ArgumentList.Add(arg);
+            return await RunProcessAsync(start, output, TimeSpan.FromSeconds(seconds + 30), ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        { return Failed($"CPU worker could not start ({ex.GetType().Name})."); }
+        finally
+        {
+            if (directory is not null)
+                try { Directory.Delete(directory, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    private static ProcessStartInfo SelfStartInfo()
+    {
+        string process = Environment.ProcessPath ?? throw new InvalidOperationException("The application executable is unavailable.");
+        var start = new ProcessStartInfo(process);
+        if (Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            string entry = Assembly.GetEntryAssembly()?.Location ?? "";
+            if (entry.Length == 0) throw new InvalidOperationException("The managed application entrypoint is unavailable.");
+            start.ArgumentList.Add(entry);
+        }
+        return start;
+    }
+
+    internal static async Task<WorkerResult> RunProcessAsync(ProcessStartInfo start, string output, TimeSpan timeout, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+        using var process = new Process { StartInfo = start };
+        process.Start();
+        // Drain both pipes without retaining process diagnostics, which can include runtime paths.
+        var stdout = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+        var stderr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(timeout);
+        try { await process.WaitForExitAsync(deadline.Token); }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            await process.WaitForExitAsync(CancellationToken.None);
+            await Task.WhenAll(stdout, stderr);
+            ct.ThrowIfCancellationRequested();
+            return Failed("CPU worker exceeded its time limit.");
+        }
+        await Task.WhenAll(stdout, stderr);
+        string json = File.Exists(output) && new FileInfo(output).Length <= 1_000_000 ? await File.ReadAllTextAsync(output, ct) : "";
+        return ReadResult(process.ExitCode, json);
+    }
+
+    internal static WorkerResult ReadResult(int exitCode, string json)
+    {
+        if (exitCode != 0) return Failed($"CPU worker terminated (exit {exitCode}); the variant was not timed further.");
+        try
+        {
+            var result = JsonSerializer.Deserialize<WorkerResult>(json);
+            if (result is null || result.Check is null || result.Check.Passed && result.Check.Cases <= 0
+                || !double.IsFinite(result.Speed) || result.Speed < 0 || !double.IsFinite(result.ElapsedSeconds) || result.ElapsedSeconds < 0)
+                return Failed("CPU worker returned an invalid result.");
+            return result;
+        }
+        catch (JsonException) { return Failed("CPU worker returned invalid JSON."); }
+    }
+
+    private static WorkerResult Failed(string message) => new(new(false, 0, message), 0, 0, "", message);
+}

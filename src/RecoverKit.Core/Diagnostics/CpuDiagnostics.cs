@@ -48,60 +48,48 @@ public static class CpuDiagnostics
         }
     }
 
-    public static Task RunAsync(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings = null)
-        => Task.Run(() => Run(add, progress, ct, settings), CancellationToken.None);
-
-    private static void Run(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings)
+    public static async Task RunAsync(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings = null)
     {
-        int savedPath = ZipCryptoNative.RequestedPath;
-        try
+        ct.ThrowIfCancellationRequested();
+        int limit = settings?.MaxCpuThreads is > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
+        int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
+        foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
         {
             ct.ThrowIfCancellationRequested();
-            int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Select(n => Math.Min(n, settings?.MaxCpuThreads is > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount)).Distinct().Order().ToArray();
-            foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
+            foreach (var variant in KernelVariants.ForMode(mode))
             {
-                ct.ThrowIfCancellationRequested();
-                var variants = KernelVariants.ForMode(mode);
-                foreach (var variant in variants)
+                if (!variant.Supported) continue;
+                progress($"Mode {mode}: checking {variant.Name}");
+                var check = await CpuDiagnosticWorker.CheckAsync(mode, variant.Name, ct);
+                if (!check.Passed)
                 {
-                    if (!variant.Supported) continue;
-                    progress($"Mode {mode}: checking {variant.Name}");
-                    using var selection = KernelVariants.Select(mode, variant.Name);
-                    var check = Math.Abs(mode) is 17200 or 17210 ? CheckZipVariant(variant.Name) : CheckKernel(mode);
-                    if (!check.Passed)
-                    {
-                        add(new DiagnosticMeasurement { Section = "cpu", Step = "Correctness FAIL", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name, Correct = false, Error = check.Error, Target = Target(mode), Length = 7 });
-                        continue;
-                    }
-                    foreach (int threads in counts)
+                    add(new DiagnosticMeasurement { Section = "cpu", Step = "Correctness FAIL", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name,
+                        Correct = false, Error = check.Error, Target = Target(mode), Length = 7 });
+                    continue;
+                }
+                bool failed = false;
+                foreach (int threads in counts)
+                {
+                    if (failed) break;
                     for (int repeat = 1; repeat <= 2; repeat++)
                     {
                         ct.ThrowIfCancellationRequested();
                         progress($"Mode {mode}, {variant.Name}, {threads} workers, repeat {repeat}/2");
-                        var timer = Stopwatch.StartNew();
-                        try
+                        var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, threads, settings?.Priority ?? ProcessPriority.Normal, repeat, ct);
+                        add(new DiagnosticMeasurement
                         {
-                            var result = CheckThenMeasure(() => check,
-                                () => NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(3), ct, length: 7, priority: NativeRunner.ThreadPriorityFor(settings?.Priority ?? ProcessPriority.Normal)));
-                            ct.ThrowIfCancellationRequested();
-                            add(new DiagnosticMeasurement
-                            {
-                                Section = "cpu", Step = "Correctness PASS; timed", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name,
-                                Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
-                                ElapsedSeconds = timer.Elapsed.TotalSeconds, Target = Target(mode), Length = 7,
-                                Details = new() { ["correctness cases"] = check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : variant.Name },
-                            });
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            add(new DiagnosticMeasurement { Section = "cpu", Step = "Timing failed", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = true, Error = ex.Message, Target = Target(mode), Length = 7 });
-                        }
+                            Section = "cpu", Step = result.Check.Passed ? "Correctness PASS; timed" : "Worker failed; variant skipped", Mode = Math.Abs(mode),
+                            Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
+                            Error = result.Error ?? result.Check.Error ?? (result.Speed <= 0 ? "No CPU benchmark rate was reported." : null),
+                            ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = 7,
+                            Details = new() { ["correctness cases"] = result.Check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = result.ActualPath,
+                                ["Isolation"] = "Separate process for each correctness check and timing sample." },
+                        });
+                        if (!result.Check.Passed) { failed = true; break; }
                     }
                 }
             }
         }
-        finally { ZipCryptoNative.RequestedPath = savedPath; }
     }
 
     private static string Target(int mode) => mode switch

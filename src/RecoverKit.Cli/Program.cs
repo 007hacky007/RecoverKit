@@ -12,6 +12,7 @@ using RecoverKit.Core.Diagnostics;
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
 //   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
+if (args.Length > 0 && args[0] == CpuDiagnosticWorker.Command) return CpuDiagnosticWorker.Run(args);
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();
 // The elevated NVIDIA power limit helper (started by RecoverKit itself, see PowerLimiter).
@@ -239,12 +240,12 @@ try
             if (Opt(argv, "--temp-hysteresis") is { } th) settings.GpuTempHysteresis = int.Parse(th);
             if (Opt(argv, "--gpu-duty") is { } gd) settings.GpuDutyPercent = int.Parse(gd);
             int? powerLimit = Opt(argv, "--power-limit") is { } pl ? int.Parse(pl) : null;
-            if (Opt(argv, "--strategy") is { } strat) settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true);
+            if (Opt(argv, "--strategy") is { } strat) { settings.Strategy = Enum.Parse<DeviceStrategy>(strat, ignoreCase: true); settings.PerformanceStrategyExplicit = true; }
             // Hybrid CPU + GPU (on by default) and hashcat's CPU device next to the GPUs (off by default).
-            if (argv.Contains("--no-hybrid")) settings.HybridCpuGpu = false;
-            if (argv.Contains("--hybrid")) settings.HybridCpuGpu = true;
+            if (argv.Contains("--no-hybrid")) { settings.HybridCpuGpu = false; settings.PerformanceStrategyExplicit = true; }
+            if (argv.Contains("--hybrid")) { settings.HybridCpuGpu = true; settings.PerformanceStrategyExplicit = true; }
             if (argv.Contains("--hashcat-cpu")) settings.HashcatCpuWithGpu = true;
-            if (Opt(argv, "--threads") is { } thr) settings.MaxCpuThreads = int.Parse(thr);
+            if (Opt(argv, "--threads") is { } thr) { settings.MaxCpuThreads = int.Parse(thr); settings.PerformanceThreadsExplicit = true; }
             // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
             if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
                 Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
