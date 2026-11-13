@@ -6,6 +6,8 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- Native ZipCrypto CPU header filters, with measured ARM CRC acceleration on Apple silicon and
+  selectable AVX-512, AVX2, NEON and scalar paths for testing and benchmarks.
 - 7-Zip archives (.7z), with visible or encrypted file names, solid or not, and self-extracting.
 - KeePass databases: KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx, including KDBX 4 with
   Argon2), with an optional keyfile.

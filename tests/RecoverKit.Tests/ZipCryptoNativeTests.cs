@@ -84,7 +84,7 @@ public class ZipCryptoNativeTests
                 var scalar = kernel.CreateWorker();
                 int want = scalar.Search(prefix, last);
                 Assert.Equal(password[^1], want);
-                foreach (int path in Paths())
+                foreach (int path in Paths().Prepend(-1))
                 {
                     ZipCryptoNative.RequestedPath = path;
                     var worker = kernel.CreateWorker();
@@ -107,7 +107,7 @@ public class ZipCryptoNativeTests
                 }
             }
             foreach (string fixture in new[] { NativeEngineTests.Pkzip17200, NativeEngineTests.Pkzip17210 })
-            foreach (int path in Paths())
+            foreach (int path in Paths().Prepend(-1))
             {
                 ZipCryptoNative.RequestedPath = path;
                 Assert.Equal(2, ZipCryptoKernel.TryParse(fixture)!.CreateWorker().Search("hashca"u8, "xytzt"u8));

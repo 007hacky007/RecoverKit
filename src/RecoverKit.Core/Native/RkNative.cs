@@ -11,7 +11,7 @@ internal static unsafe partial class RkNative
     private const string Lib = "rknative";
     private const int RequiredVersion = 8;
 
-    /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits are the ARMv8 Crypto Extensions.</summary>
+    /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
     public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256, Avx512 = 512, ArmCrc = 1024 }
 

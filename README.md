@@ -227,6 +227,11 @@ quickest guesses.
 Building from source, the command-line tool and the scenario file format are described in
 [docs/DEVELOPERS.md](docs/DEVELOPERS.md).
 
+The native ZipCrypto CPU paths are measured on Apple silicon (ARM CRC and NEON). Native AVX2
+and AVX-512 are experimental, compiled but unexecuted here; x86 keeps managed search by default.
+`bench-native` includes a native comparison row for remote measurements. See the
+[CPU results and path selectors](docs/benchmarks.md#native-zipcrypto-cpu-follow-up-apple-m1-pro).
+
 ## License
 
 RecoverKit is free software under the MIT License (see [LICENSE](LICENSE)). Components it downloads

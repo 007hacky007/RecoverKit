@@ -349,6 +349,33 @@ folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13
 iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's PBKDF2. The kernel
 is offered when the library has a vector path (AVX2 or NEON).
 
+ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 8 adds `rk_zip_search` and
+`rk_zip_path`. The managed worker keeps its prefix-key cache and passes the three keys after the
+prefix plus the final-position charset. The C filter returns all header survivors in candidate
+order, then the existing managed `Verify` checks the entry. It deliberately filters only the last
+header byte, including for two-check-byte archives; `Verify` handles the other byte. No password
+packing, heap allocation or prefix re-hashing is needed in the native loop.
+
+`native/zip_lanes.h` supplies the same rounds for AVX-512 (three groups of 16), AVX2 (three groups
+of 8), NEON (four groups of 4, nibble-table lookups), and scalar (four interleaved candidates).
+AVX2 and AVX-512 use the same source with width-specific gathers from the 1 KB CRC table and
+32-bit multiplies. On ARM with CRC32 instructions (feature bit 1024), eight independent scalar
+candidates use `CRC32B` for both key updates. The last header byte needs no following key update.
+ARM CRC is the measured automatic choice on the M1 Pro, with native NEON as the ARM fallback.
+x86 CPUs keep managed search by default; native x86 and scalar are opt-in for comparison. AVX2 and
+AVX-512 were cross-compiled but not executed here. Rosetta exposed only scalar on this Mac.
+
+For testing and comparison, set `RECOVERKIT_ZIP_PATH` to `managed`, `managed-scalar`, `scalar`,
+`neon`, `arm-crc`, `avx2`, or `avx512` (`auto` or unset restores the default). Unsupported native
+requests fall back to managed search. `RECOVERKIT_NO_NATIVE_LIB=1` still disables the entire
+library. `bench-native --mode 17210` labels the selected path and adds a separate native comparison
+row when automatic selection stays managed. Use a Release build for throughput measurements.
+`ZipCryptoNativeTests` checks every native path available on the host against a bitwise CRC
+reference and managed scalar search, including partial groups, ordered hits, feature masking,
+prefix changes, 64-byte passwords, stored/deflated entries and one/two-check-byte hashes.
+`native/tests/zip_test.c` is an independent standalone differential test suitable for sanitizer
+builds; its first comment gives build commands.
+
 ## Hybrid CPU + GPU
 
 With a GPU, brute-force and mask attacks on formats with a built-in kernel run on both engines at

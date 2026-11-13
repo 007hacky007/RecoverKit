@@ -1,0 +1,41 @@
+Info-ZIP zip -0 -e (password supplied without terminal prompts); 6-character lower-case/digit mask; 4-thread limit; workload 1; GPU duty 10%; fresh app home
+Using hashcat v8.0.0
+File:       fixture.zip
+Type:       ZIP archive (ZipCrypto)
+  File size: 217 bytes
+  Entries: 1
+  Attacked entry: payload.txt (29 bytes, stored)
+Protection: ZipCrypto (PKZIP 2.0)
+Format id:  ZIPC
+Modes:      17210
+HASH: [redacted]
+Device #1: Apple M1 Pro (GPU, Metal, integrated, skipped by hashcat)
+Device #2: Apple M1 Pro (GPU, OpenCL, integrated)
+[Info] GPU guard: lets the GPU work 10% of the time.
+[Step] Step 1/1: Brute-force: smalls + digits, length 6-6 - 2,176,782,336 candidates
+[Info] Hybrid CPU + GPU: hashcat on the GPUs, built-in CPU engine (ZipCrypto) on 3 thread(s), lengths 6-6
+  Running: 11,599,971/2,176,782,336 (0.5%) 10,738,271 H/s, length 6
+  Running: 74,799,813/2,176,782,336 (3.4%) 12,159,016 H/s, length 6
+  Running: 1,168,324,641/2,176,782,336 (53.7%) 328,412,153 H/s, length 6 [Apple M1 Pro 316,662,659, CPU (built-in engine) 11,749,493], GPU 54 °C
+  Running: 1,216,123,520/2,176,782,336 (55.9%) 8,764,278 H/s, length 6
+  Running: 1,236,523,520/2,176,782,336 (56.8%) 4,878,403 H/s, length 6
+  Running: 1,257,395,456/2,176,782,336 (57.8%) 4,338,794 H/s, length 6
+  Running: 1,279,548,928/2,176,782,336 (58.8%) 4,431,235 H/s, length 6
+  Running: 1,300,022,784/2,176,782,336 (59.7%) 3,925,765 H/s, length 6
+  Running: 1,322,659,712/2,176,782,336 (60.8%) 4,456,595 H/s, length 6
+  Running: 1,343,453,952/2,176,782,336 (61.7%) 4,155,738 H/s, length 6
+  Running: 1,365,527,808/2,176,782,336 (62.7%) 4,453,386 H/s, length 6
+  Running: 1,387,044,352/2,176,782,336 (63.7%) 4,303,201 H/s, length 6
+  Running: 1,408,238,592/2,176,782,336 (64.7%) 4,445,124 H/s, length 6
+  Running: 1,763,039,488/2,176,782,336 (81.0%) 308,665,605 H/s, length 6 [Apple M1 Pro 304,261,558, CPU (built-in engine) 4,404,047], GPU 55 °C
+[Info] Found by hashcat.
+RESULT: Found
+PASSWORD: [redacted, matches fixture]
+Fixture password verified: True; elapsed: 67.8 s
+
+CPU-only verification of the same fixture (fresh home, no password cache):
+[Info] Built-in CPU engine: ZipCrypto, 10 thread(s), lengths 6-6
+  Running: 425,595,744/2,176,782,336 (19.6%) 207,803,613 H/s, length 6
+RESULT: Found
+PASSWORD: [redacted, matches fixture]
+Fixture password verified: True; elapsed: 4.3 s
