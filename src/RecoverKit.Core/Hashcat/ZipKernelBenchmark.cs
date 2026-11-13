@@ -1,0 +1,134 @@
+using System.Text;
+using RecoverKit.Core.Formats;
+
+namespace RecoverKit.Core.Hashcat;
+
+/// <summary>
+/// Compares hashcat's own ZipCrypto kernels with RecoverKit's replacements (<see cref="HashcatKernels"/>)
+/// on every device, with live brute-force attacks on generated archives of different entry sizes
+/// (recoverkit-cli bench-zip). The cost of hashcat's kernels grows with the size of the attacked entry,
+/// so one figure (hashcat -b uses a 453-byte entry) does not describe them.
+/// </summary>
+public sealed class ZipKernelBenchmark(HashcatTool tool)
+{
+    public sealed record Sample(string Label, int Mode, string HashLine);
+
+    public sealed record Row(BackendDevice Device, Sample Sample, double Original, double Replacement);
+
+    /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
+    public int Seconds { get; init; } = 10;
+
+    /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
+    public string Mask { get; init; } = "?a?a?a?a?a?a?a?a";
+
+    public event Action<string>? Progress;
+
+    /// <summary>Entries: a 17-byte stored file, hashcat's own benchmark size, and larger stored and deflated files.</summary>
+    public static List<Sample> DefaultSamples()
+    {
+        var rng = new Random(20261112);
+        // The password is not in the mask, so every run tests candidates for the whole time.
+        var pw = "Benché-not-in-mask"u8.ToArray();
+        Sample Make(string label, int length, bool deflate)
+        {
+            var content = deflate ? ZipCryptoSample.Text(length, rng) : RandomBytes(length, rng);
+            var t = ZipCryptoSample.Extract(ZipCryptoSample.Archive([new ZipCryptoSample.Entry("bench.dat", content, deflate)], pw, rng));
+            return new Sample(label, t.Modes[0], t.HashLines);
+        }
+        return
+        [
+            Make("stored, 17 bytes", 17, false),
+            Make("stored, 453 bytes (as hashcat -b)", 453, false),
+            Make("stored, 4 KB", 4096, false),
+            Make("deflated, 1 KB text", 1024, true),
+            Make("deflated, 16 KB text", 16384, true),
+        ];
+    }
+
+    private static byte[] RandomBytes(int n, Random rng)
+    {
+        var b = new byte[n];
+        rng.NextBytes(b);
+        return b;
+    }
+
+    /// <summary>
+    /// Runs every sample on every device (each alias too, so CUDA, OpenCL and Metal show separately),
+    /// first with hashcat's kernels and then with RecoverKit's. RecoverKit's kernels are in place again
+    /// afterwards. Returns no rows when this hashcat cannot take the replacement kernels.
+    /// </summary>
+    public async Task<List<Row>> RunAsync(IReadOnlyList<BackendDevice> devices, IReadOnlyList<Sample> samples, CancellationToken ct)
+    {
+        var rows = new List<Row>();
+        if (HashcatKernels.Inspect(tool.Directory) == HashcatKernels.State.Unsupported) return rows;
+        var dir = Directory.CreateTempSubdirectory("rk-bench-zip").FullName;
+        try
+        {
+            foreach (var dev in devices)
+            {
+                foreach (var s in samples)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var file = Path.Combine(dir, $"{s.Mode}-{rows.Count}.hash");
+                    await File.WriteAllTextAsync(file, s.HashLine + "\n", ct);
+                    HashcatKernels.Restore(tool.Directory);
+                    Progress?.Invoke($"Device #{dev.Id}, {s.Label}: hashcat's kernel ...");
+                    double original = await SpeedAsync(s.Mode, file, dev.Id, ct);
+                    HashcatKernels.Install(tool.Directory);
+                    Progress?.Invoke($"Device #{dev.Id}, {s.Label}: RecoverKit's kernel ...");
+                    double replacement = await SpeedAsync(s.Mode, file, dev.Id, ct);
+                    rows.Add(new Row(dev, s, original, replacement));
+                }
+            }
+        }
+        finally
+        {
+            HashcatKernels.Install(tool.Directory);
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+        return rows;
+    }
+
+    /// <summary>Median speed (H/s) over the status updates of one run, the first two (warm-up) left out.</summary>
+    private async Task<double> SpeedAsync(int mode, string hashFile, int device, CancellationToken ct)
+    {
+        var args = new List<string>
+        {
+            "-m", mode.ToString(), "-a", "3", hashFile, Mask, "-d", device.ToString(),
+            "--runtime", Seconds.ToString(), "--status", "--status-json", "--status-timer", "1",
+            "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
+        };
+        var (_, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
+        var speeds = o.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
+            .Where(st => st.Status == 3).Select(st => st.TotalSpeed).Where(v => v > 0).ToList();
+        if (speeds.Count == 0)
+        {
+            var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);
+            Progress?.Invoke("  no speed reported: " + string.Join(" / ", why));
+            return 0;
+        }
+        var tail = speeds.Count > 3 ? speeds.Skip(2).ToList() : speeds;
+        tail.Sort();
+        return tail[tail.Count / 2];
+    }
+
+    /// <summary>The result table as printed by recoverkit-cli bench-zip.</summary>
+    public static string Format(IEnumerable<Row> rows)
+    {
+        var sb = new StringBuilder();
+        foreach (var g in rows.GroupBy(r => r.Device.Id))
+        {
+            var d = g.First().Device;
+            sb.AppendLine($"Device #{d.Id}: {d.Name} ({d.Backend}{(d.BackendVersion.Length > 0 ? " " + d.BackendVersion : "")})");
+            sb.AppendLine($"  {"entry",-36} {"hashcat",14} {"RecoverKit",14} {"gain",7}");
+            foreach (var r in g)
+            {
+                string gain = r.Original > 0 && r.Replacement > 0 ? $"{r.Replacement / r.Original:F2}x" : "-";
+                sb.AppendLine($"  {r.Sample.Label,-36} {Mhs(r.Original),14} {Mhs(r.Replacement),14} {gain,7}");
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string Mhs(double hs) => hs > 0 ? (hs / 1e6).ToString("N1") + " MH/s" : "failed";
+}
