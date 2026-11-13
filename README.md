@@ -143,6 +143,20 @@ are tested at **17 million passwords per second**, so the same search takes 4 se
 
 All measurements, and how they were made: [docs/benchmarks.md](docs/benchmarks.md).
 
+### Detailed performance report
+
+If the developers ask for a detailed performance report: **Tools > Benchmark > Detailed
+performance test**, then **Save report** and send the file. Select which sections to run;
+each shows an estimated time. The test uses synthetic targets and keeps completed results if
+you abandon it. The HTML report includes the measurements and a **Copy summary** button.
+
+The measurements also build a performance profile for this PC. RecoverKit keeps the current
+method unless a correctness-checked alternative wins by at least 5% in repeated measurements.
+On a PC without measurements, a longer attack can run a short automatic calibration first.
+**Preferences > Performance** shows the profile, with **Reset**, **Run detailed test**, and
+**Measure the fastest method automatically**. Your explicit settings take priority.
+
+
 ## Getting started
 
 1. **Download** from the [Releases page](https://github.com/007hacky007/RecoverKit/releases/latest):

@@ -33,6 +33,20 @@ docs/                 benchmarks, screenshots, this file
 Everything is cross-platform .NET. The GUI is written in C# against Avalonia 12 (code only, no
 XAML) and uses the system menu bar on macOS and an in-window menu elsewhere.
 
+## Detailed performance diagnostics
+
+`recoverkit-cli bench-full --out report.html` runs the same Core diagnostics as **Tools >
+Benchmark > Detailed performance test**. `--sections system,cpu,gpu,zip,hybrid` selects sections.
+The quick benchmark keeps its existing speed-cache behavior. Detailed measurements use synthetic
+targets, isolate hashcat work, retain partial results on cancellation, and write a self-contained
+HTML report with embedded JSON. Compare only rows with the same target and candidate length;
+hashcat's built-in benchmark and the native microbenchmarks are separate workloads.
+
+The performance profile lives beside settings under `RECOVERKIT_HOME` when set. Its decisions
+require correctness and repeated measurements with at least a 5% margin; explicit user settings
+win. CPU and GPU fingerprints allow driver changes to invalidate GPU choices without discarding
+CPU path measurements. Preferences exposes automatic calibration and profile reset.
+
 ## Building
 
 Requires the .NET 10 SDK, and [zig](https://ziglang.org) 0.15.2 for the native kernels.
