@@ -266,7 +266,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (outcome == RunOutcome.Error && NoCpuDevice(r.Settings, KnownDevices) && error!.Contains("No devices found", StringComparison.OrdinalIgnoreCase))
             error = "hashcat has no processor (CPU) device on this computer: Apple Silicon Macs expose only the GPU to hashcat. " +
                     "Choose a GPU strategy in Preferences (the built-in CPU engine still runs the formats it supports).\n" + error;
-        // hashcat refuses some modes on Apple GPUs (e.g. 17200 PKZIP: no 'goto' in Metal, OpenCL compiler hang).
+        // hashcat refuses some modes on Apple GPUs (hashcat 7 did so for 17200 PKZIP: no goto in Metal, OpenCL compiler hang).
         else if (outcome == RunOutcome.Error && IsGpuRefusal(error, r.Mode))
             error = $"hashcat cannot run hash mode {r.Mode} on the Apple GPU (a known Metal/OpenCL runtime limitation). " +
                     "If the built-in CPU engine supports this format, choose \"Don't use GPU threads\" in Preferences to use it.\n" + error;

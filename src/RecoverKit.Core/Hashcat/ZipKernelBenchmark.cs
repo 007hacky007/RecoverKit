@@ -13,7 +13,11 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
 {
     public sealed record Sample(string Label, int Mode, string HashLine);
 
-    public sealed record Row(BackendDevice Device, Sample Sample, double Original, double Replacement);
+    /// <summary>Speeds in H/s: hashcat's kernel, RecoverKit's, and RecoverKit's without the amplifier key cache (0 when not measured).</summary>
+    public sealed record Row(BackendDevice Device, Sample Sample, double Original, double Replacement, double NoCache);
+
+    /// <summary>Also measure RecoverKit's kernel without the amplifier key cache (RK_AMP_CACHE 0), which saves 12 KB of local memory.</summary>
+    public bool WithoutCache { get; init; } = true;
 
     /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
     public int Seconds { get; init; } = 10;
@@ -77,7 +81,16 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
                     HashcatKernels.Install(tool.Directory);
                     Progress?.Invoke($"Device #{dev.Id}, {s.Label}: RecoverKit's kernel ...");
                     double replacement = await SpeedAsync(s.Mode, file, dev.Id, ct);
-                    rows.Add(new Row(dev, s, original, replacement));
+                    double noCache = 0;
+                    if (WithoutCache)
+                    {
+                        var include = Path.Combine(tool.Directory, "OpenCL", HashcatKernels.IncludeFile);
+                        File.WriteAllText(include, HashcatKernels.Sources[HashcatKernels.IncludeFile].Replace("#define RK_AMP_CACHE 1", "#define RK_AMP_CACHE 0"));
+                        Progress?.Invoke($"Device #{dev.Id}, {s.Label}: RecoverKit's kernel without the amplifier cache ...");
+                        noCache = await SpeedAsync(s.Mode, file, dev.Id, ct);
+                        HashcatKernels.Install(tool.Directory);
+                    }
+                    rows.Add(new Row(dev, s, original, replacement, noCache));
                 }
             }
         }
@@ -120,11 +133,12 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
         {
             var d = g.First().Device;
             sb.AppendLine($"Device #{d.Id}: {d.Name} ({d.Backend}{(d.BackendVersion.Length > 0 ? " " + d.BackendVersion : "")})");
-            sb.AppendLine($"  {"entry",-36} {"hashcat",14} {"RecoverKit",14} {"gain",7}");
+            bool nc = g.Any(r => r.NoCache > 0);
+            sb.AppendLine($"  {"entry",-36} {"hashcat",14} {"RecoverKit",14} {"gain",7}" + (nc ? $" {"no amp cache",14}" : ""));
             foreach (var r in g)
             {
                 string gain = r.Original > 0 && r.Replacement > 0 ? $"{r.Replacement / r.Original:F2}x" : "-";
-                sb.AppendLine($"  {r.Sample.Label,-36} {Mhs(r.Original),14} {Mhs(r.Replacement),14} {gain,7}");
+                sb.AppendLine($"  {r.Sample.Label,-36} {Mhs(r.Original),14} {Mhs(r.Replacement),14} {gain,7}" + (nc ? $" {Mhs(r.NoCache),14}" : ""));
             }
         }
         return sb.ToString();

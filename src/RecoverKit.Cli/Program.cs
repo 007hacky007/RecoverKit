@@ -9,7 +9,7 @@ using RecoverKit.Core.Hashcat;
 //     attacks: --scenario "Name" | --brute csde --min 1 --max 6 [--mask "pass????"] |
 //              --hcmask "?u?l?l?d" [-1 chars ..] | --dict file [--rules simple|advanced|complex|two|two-adv|three|file.rule]
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
-//   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
+//   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();
@@ -55,7 +55,7 @@ try
         }
         case "bench-zip":
         {
-            // recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S]
+            // recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]
             // hashcat's ZipCrypto kernels against RecoverKit's replacements, per device.
             var settings = Settings.Load();
             if (HashcatInstaller.BundledDirectory is not null) HashcatInstaller.TryInstallBundled();
@@ -76,7 +76,11 @@ try
             if (devices.Any(d => d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
                 && !devices.Any(d => d.Backend == "CUDA"))
                 Console.WriteLine("Note: no CUDA device. hashcat uses CUDA on NVIDIA GPUs only when it finds NVRTC (CUDA Toolkit); see docs/benchmarks.md.");
-            var bench = new ZipKernelBenchmark(tool) { Seconds = int.TryParse(Opt(argv, "--seconds"), out var sec) ? sec : 10 };
+            var bench = new ZipKernelBenchmark(tool)
+            {
+                Seconds = int.TryParse(Opt(argv, "--seconds"), out var sec) ? sec : 10,
+                WithoutCache = !argv.Contains("--quick"),
+            };
             bench.Progress += Console.WriteLine;
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };

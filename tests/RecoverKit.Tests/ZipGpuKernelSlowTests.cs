@@ -134,6 +134,71 @@ public class ZipGpuKernelSlowTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Dictionary attack with rules (-a 0): words that differ from the password in the first and last
+    /// character, rules that keep the word, append a character or delete the last one.
+    /// </summary>
+    [Fact]
+    public async Task DictionaryWithRulesGivesTheSamePasswordsAsTheCpuEngine()
+    {
+        if (Tool() is not { } tool) { output.WriteLine("hashcat 8.0.0 not found, skipped"); return; }
+        Assert.True(HashcatKernels.Install(tool.Directory));
+        var devices = (await tool.DevicesAsync()).Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
+        var dir = Directory.CreateTempSubdirectory("rk-zip-gpu").FullName;
+        try
+        {
+            var rng = new Random(3);
+            foreach (int length in new[] { 1, 3, 6, 8, 12, 17, 30 })
+            {
+                var c = MakeCase(rng, length);
+                var stems = new SortedSet<string>(StringComparer.Ordinal);
+                foreach (var a in c.Charset)
+                    foreach (var b in c.Charset)
+                        stems.Add(length == 1 ? a.ToString() : a + c.Password[1..^1] + b);
+                // Words: full candidates, and the same without the last character for the append rules.
+                var words = stems.Concat(stems.Where(w => w.Length > 1).Select(w => w[..^1])).Distinct().ToList();
+                var rules = new List<string> { ":", "]" };
+                rules.AddRange(c.Charset.Take(6).Append(c.Password[^1]).Distinct().Select(ch => "$" + ch));
+                static string Apply(string rule, string w) => rule == ":" ? w : rule == "]" ? (w.Length > 0 ? w[..^1] : w) : w + rule[1];
+
+                var k = ZipCryptoKernel.TryParse(c.Target.HashLines)!;
+                var cpu = new SortedSet<string>(StringComparer.Ordinal);
+                foreach (var w in words)
+                    foreach (var r in rules)
+                    {
+                        var cand = Apply(r, w);
+                        if (k.Verify(Encoding.ASCII.GetBytes(cand))) cpu.Add(cand);
+                    }
+                Assert.Contains(c.Password, cpu);
+
+                var hash = Path.Combine(dir, "d.hash");
+                var dict = Path.Combine(dir, "d.dict");
+                var rule = Path.Combine(dir, "d.rule");
+                var outFile = Path.Combine(dir, "d.out");
+                File.WriteAllText(hash, c.Target.HashLines + "\n");
+                File.WriteAllText(dict, string.Join("\n", words) + "\n");
+                File.WriteAllText(rule, string.Join("\n", rules) + "\n");
+                foreach (var dev in devices)
+                {
+                    if (File.Exists(outFile)) File.Delete(outFile);
+                    var (code, o, e) = await tool.RunAsync(
+                    [
+                        "-m", c.Target.Modes[0].ToString(), "-a", "0", hash, dict, "-r", rule, "-d", dev.Id.ToString(),
+                        "--keep-guessing", "--potfile-disable", "--session", "rk-zip-test", "--quiet", "-o", outFile, "--outfile-format", "2",
+                    ], TimeSpan.FromMinutes(10));
+                    Assert.True(code is 0 or 1, $"hashcat exit {code}: {o} {e}");
+                    var gpu = new SortedSet<string>(File.Exists(outFile) ? File.ReadAllLines(outFile).Where(l => l.Length > 0) : [], StringComparer.Ordinal);
+                    output.WriteLine($"#{dev.Id} {dev.Backend}: -a 0, {c.Description}, {words.Count} words x {rules.Count} rules: {gpu.Count} found");
+                    Assert.True(cpu.SetEquals(gpu), $"device #{dev.Id} {dev.Backend}, -a 0, {c.Description}: CPU [{string.Join(",", cpu)}] GPU [{string.Join(",", gpu)}]");
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
     /// The same with a two-entry queue, so it overflows all the time and candidates are retried in the
     /// next round: none may be lost or reported under another candidate's position.
     /// </summary>

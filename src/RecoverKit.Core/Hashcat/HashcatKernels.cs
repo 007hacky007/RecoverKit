@@ -33,7 +33,9 @@ public static class HashcatKernels
     /// </summary>
     internal static readonly IReadOnlyDictionary<string, string> Originals = new Dictionary<string, string>
     {
+        ["m17200_a0-pure.cl"] = "8cc090809d856f102f7723148099e44efcbe6f371da93b9f02a577f2b24a1f44",
         ["m17200_a3-pure.cl"] = "868234fe68fb3d8b03c350f17a97031610e30f70d70e30533aeb1773511668af",
+        ["m17210_a0-pure.cl"] = "d4b40226a68a5acb1ae19a0cf50dad2f40567f6cb093d130e6deaabedd8fea73",
         ["m17210_a3-pure.cl"] = "21304bd626e6415548b1efcfa5b80baca5713fee28fca02a4f2850cadb513f35",
     };
 

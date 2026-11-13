@@ -97,6 +97,19 @@ typedef struct pkzip pkzip_t;
 #define RK_LOCAL_INC(p) atomic_inc (p)
 #endif
 
+#if defined IS_CUDA || defined IS_HIP
+#define RK_LOCAL_OR(p,v) atomicOr ((p), (v))
+#elif defined IS_METAL
+#define RK_LOCAL_OR(p,v) atomic_fetch_or_explicit ((volatile threadgroup atomic_uint *) (p), (v), memory_order_relaxed)
+#else
+#define RK_LOCAL_OR(p,v) atomic_or ((p), (v))
+#endif
+
+// Key states after the amplifier's characters, one per il_pos, shared by the work-group (12 KB of
+// local memory). recoverkit-cli bench-zip also measures the kernel with RK_AMP_CACHE 0.
+#define RK_AMP_CACHE 1
+#define RK_PFX 1024
+
 // the 32-bit word j of the entry data, from the local copy when it holds it
 #define RK_DATA(j) (((j) < MAX_LOCAL) ? l_data[(j)] : esalt_bufs[DIGESTS_OFFSET_HOST].hash.data[(j)])
 
@@ -116,7 +129,17 @@ typedef struct pkzip pkzip_t;
   (k0) = 0x12345678;                                                  \
   (k1) = 0x23456789;                                                  \
   (k2) = 0x34567890;                                                  \
-  RK_PW_WORD ((k0), (k1), (k2), (w0),  0, (len));                     \
+  RK_PW_TAIL ((k0), (k1), (k2), (w0), (w1), (w2), (w3), (len), (pwbuf), 0); \
+}
+
+// The same from character `from` (0..4) on, with the keys already holding the state before it.
+
+#define RK_PW_TAIL(k0,k1,k2,w0,w1,w2,w3,len,pwbuf,from)              \
+{                                                                     \
+  if ((from) <= 0 && (len) > 0) RK_UPDATE ((k0), (k1), (k2), RK_BYTE ((w0), 0)); \
+  if ((from) <= 1 && (len) > 1) RK_UPDATE ((k0), (k1), (k2), RK_BYTE ((w0), 1)); \
+  if ((from) <= 2 && (len) > 2) RK_UPDATE ((k0), (k1), (k2), RK_BYTE ((w0), 2)); \
+  if ((from) <= 3 && (len) > 3) RK_UPDATE ((k0), (k1), (k2), RK_BYTE ((w0), 3)); \
   if ((len) > 4)                                                      \
   {                                                                   \
     RK_PW_WORD ((k0), (k1), (k2), (w1),  4, (len));                   \
@@ -193,6 +216,61 @@ typedef struct pkzip pkzip_t;
   }                                                                   \
 }
 
+// RK_AMP_PREPARE sets pfx, the number of leading characters that come from the amplifier alone,
+// and computes the key states after them; RK_AMP_KEYS loads the state for il_pos.
+
+#if RK_AMP_CACHE
+
+#define RK_AMP_PREPARE()                                              \
+  LOCAL_VK u32 l_pk0[RK_PFX];                                         \
+  LOCAL_VK u32 l_pk1[RK_PFX];                                         \
+  LOCAL_VK u32 l_pk2[RK_PFX];                                         \
+  LOCAL_VK u32 l_w0or;                                                \
+                                                                      \
+  if (lid == 0) l_w0or = 0;                                           \
+                                                                      \
+  SYNC_THREADS ();                                                    \
+                                                                      \
+  if (active && w0l != 0) RK_LOCAL_OR (&l_w0or, w0l);                 \
+                                                                      \
+  SYNC_THREADS ();                                                    \
+                                                                      \
+  const u32 w0or = l_w0or;                                            \
+                                                                      \
+  if (IL_CNT <= RK_PFX)                                               \
+  {                                                                   \
+    if ((w0or & 0x000000ff) == 0) pfx = 1;                            \
+    if ((w0or & 0x0000ffff) == 0) pfx = 2;                            \
+    if ((w0or & 0x00ffffff) == 0) pfx = 3;                            \
+    if (w0or == 0)                pfx = 4;                            \
+  }                                                                   \
+                                                                      \
+  if (pfx > 0)                                                        \
+  {                                                                   \
+    for (u32 i = (u32) lid; i < IL_CNT; i += (u32) lsz)               \
+    {                                                                 \
+      const u32 wr = words_buf_r[i];                                  \
+      u32 k0 = 0x12345678;                                            \
+      u32 k1 = 0x23456789;                                            \
+      u32 k2 = 0x34567890;                                            \
+      for (u32 b = 0; b < pfx; b++) RK_UPDATE (k0, k1, k2, RK_BYTE (wr, b)); \
+      l_pk0[i] = k0;                                                  \
+      l_pk1[i] = k1;                                                  \
+      l_pk2[i] = k2;                                                  \
+    }                                                                 \
+  }                                                                   \
+                                                                      \
+  SYNC_THREADS ();                                                    \
+
+#define RK_AMP_KEYS(k0,k1,k2,il) { (k0) = l_pk0[(il)]; (k1) = l_pk1[(il)]; (k2) = l_pk2[(il)]; }
+
+#else
+
+#define RK_AMP_PREPARE()
+#define RK_AMP_KEYS(k0,k1,k2,il) { }
+
+#endif
+
 // The brute-force (-a 3) kernel body. The kernel defines RK_VERIFY (k0, k1, k2, r0): the full check
 // of a candidate whose keys after the 12-byte header are k0..k2, leaving the value compared with the
 // digest in r0. REPORT is RK_REPORT_S or RK_REPORT_M.
@@ -251,6 +329,17 @@ typedef struct pkzip pkzip_t;
   const u32 w2     = (active) ? pws[gid].i[2] : 0;                    \
   const u32 w3     = (active) ? pws[gid].i[3] : 0;                    \
                                                                       \
+  /* hashcat puts the first 1-4 characters (the amplifier, il_pos) in words_buf_r and the rest */ \
+  /* in pws[gid], with zero bytes where the other part goes. The bytes that are zero in every   */ \
+  /* w0l of the work-group come from words_buf_r alone, so the keys after them depend on il_pos */ \
+  /* only and are computed once per work-group.                                                 */ \
+  u32 pfx = 0;                                                        \
+                                                                      \
+  RK_AMP_PREPARE ();                                                  \
+                                                                      \
+  /* a password shorter than the shared part takes the full key schedule */ \
+  const u32 from = (pw_len >= pfx) ? pfx : 0;                         \
+                                                                      \
   /* about RK_QUEUE / 2 survivors per round at the usual 1 in 128 */  \
   const u32 chunk = (u32) RK_MAX ((u64) 1, (u64) (RK_QUEUE * 64) / lsz); \
                                                                       \
@@ -271,7 +360,18 @@ typedef struct pkzip pkzip_t;
       u32 key1;                                                       \
       u32 key2;                                                       \
                                                                       \
-      RK_PW_KEYS (key0, key1, key2, w0, w1, w2, w3, pw_len, pws[gid].i); \
+      if (from > 0)                                                   \
+      {                                                               \
+        RK_AMP_KEYS (key0, key1, key2, il_pos);                       \
+      }                                                               \
+      else                                                            \
+      {                                                               \
+        key0 = 0x12345678;                                            \
+        key1 = 0x23456789;                                            \
+        key2 = 0x34567890;                                            \
+      }                                                               \
+                                                                      \
+      RK_PW_TAIL (key0, key1, key2, w0, w1, w2, w3, pw_len, pws[gid].i, from); \
                                                                       \
       bool ok;                                                        \
                                                                       \
@@ -331,6 +431,202 @@ typedef struct pkzip pkzip_t;
     SYNC_THREADS ();                                                  \
                                                                       \
     if (more == 0) break;                                             \
+  }
+
+// The dictionary (-a 0) kernel body: the candidate is pws[gid] with rule il_pos applied. Same rounds
+// and queue as RK_A3_BODY; the queue verification applies the rule again.
+
+#define RK_PW_KEYS_BUF(k0,k1,k2,pwbuf,len)                           \
+{                                                                     \
+  (k0) = 0x12345678;                                                  \
+  (k1) = 0x23456789;                                                  \
+  (k2) = 0x34567890;                                                  \
+  for (u32 rk_i = 0; rk_i < (len); rk_i++)                            \
+  {                                                                   \
+    const u32 rk_c = RK_BYTE ((pwbuf)[rk_i / 4], rk_i & 3);           \
+    RK_UPDATE ((k0), (k1), (k2), rk_c);                               \
+  }                                                                   \
+}
+
+#define RK_A0_BODY(REPORT)                                            \
+  const u64 gid = get_global_id (0);                                  \
+  const u64 lid = get_local_id (0);                                   \
+  const u64 lsz = get_local_size (0);                                 \
+                                                                      \
+  LOCAL_VK u32 l_crc32tab[256];                                       \
+                                                                      \
+  for (u64 i = lid; i < 256; i += lsz)                                \
+  {                                                                   \
+    l_crc32tab[i] = crc32tab[i];                                      \
+  }                                                                   \
+                                                                      \
+  LOCAL_VK u32 l_data[MAX_LOCAL];                                     \
+                                                                      \
+  for (u64 i = lid; i < MAX_LOCAL; i += lsz)                          \
+  {                                                                   \
+    l_data[i] = esalt_bufs[DIGESTS_OFFSET_HOST].hash.data[i];         \
+  }                                                                   \
+                                                                      \
+  LOCAL_VK u32 l_qpos[RK_QUEUE];                                      \
+  LOCAL_VK u32 l_qcnt;                                                \
+  LOCAL_VK u32 l_more;                                                \
+                                                                      \
+  if (lid == 0) l_qcnt = 0;                                           \
+                                                                      \
+  SYNC_THREADS ();                                                    \
+                                                                      \
+  const u32 search0                 = digests_buf[DIGESTS_OFFSET_HOST].digest_buf[DGST_R0]; \
+  const u32 checksum_size           = esalt_bufs[DIGESTS_OFFSET_HOST].checksum_size; \
+  const u32 checksum_from_crc       = esalt_bufs[DIGESTS_OFFSET_HOST].hash.checksum_from_crc; \
+  const u32 checksum_from_timestamp = esalt_bufs[DIGESTS_OFFSET_HOST].hash.checksum_from_timestamp; \
+  const u32 data_length             = esalt_bufs[DIGESTS_OFFSET_HOST].hash.data_length; \
+                                                                      \
+  const u32 h0 = l_data[0];                                           \
+  const u32 h1 = l_data[1];                                           \
+  const u32 h2 = l_data[2];                                           \
+                                                                      \
+  const bool active = (gid < GID_CNT);                                \
+                                                                      \
+  const pw_t pw = pws[(active) ? gid : 0];                            \
+                                                                      \
+  const u32 chunk = (u32) RK_MAX ((u64) 1, (u64) (RK_QUEUE * 64) / lsz); \
+                                                                      \
+  u32 il_next = (active) ? 0 : (u32) IL_CNT;                          \
+                                                                      \
+  for (;;)                                                            \
+  {                                                                   \
+    const u32 il_stop = RK_MIN (il_next + chunk, (u32) IL_CNT);       \
+                                                                      \
+    u32 il_retry = il_stop;                                           \
+                                                                      \
+    _Pragma ("unroll 1")                                              \
+    for (u32 il_pos = il_next; il_pos < il_stop; il_pos++)            \
+    {                                                                 \
+      pw_t tmp = pw;                                                  \
+                                                                      \
+      tmp.pw_len = apply_rules (rules_buf[il_pos].cmds, tmp.i, tmp.pw_len); \
+                                                                      \
+      u32 key0;                                                       \
+      u32 key1;                                                       \
+      u32 key2;                                                       \
+                                                                      \
+      RK_PW_KEYS_BUF (key0, key1, key2, tmp.i, tmp.pw_len);           \
+                                                                      \
+      bool ok;                                                        \
+                                                                      \
+      RK_HEADER (key0, key1, key2, h0, h1, h2, ok);                   \
+                                                                      \
+      if (ok == false) continue;                                      \
+                                                                      \
+      const u32 slot = RK_LOCAL_INC (&l_qcnt);                        \
+                                                                      \
+      if (slot < RK_QUEUE)                                            \
+      {                                                               \
+        l_qpos[slot] = ((u32) lid << 22) | il_pos;                    \
+      }                                                               \
+      else                                                            \
+      {                                                               \
+        il_retry = RK_MIN (il_retry, il_pos);                         \
+      }                                                               \
+    }                                                                 \
+                                                                      \
+    il_next = il_retry;                                               \
+                                                                      \
+    if (lid == 0) l_more = 0;                                         \
+                                                                      \
+    SYNC_THREADS ();                                                  \
+                                                                      \
+    if (il_next < IL_CNT) l_more = 1;                                 \
+                                                                      \
+    const u32 qn = RK_MIN (l_qcnt, (u32) RK_QUEUE);                   \
+                                                                      \
+    for (u32 q = (u32) lid; q < qn; q += (u32) lsz)                   \
+    {                                                                 \
+      const u32 q_gid = (u32) (gid - lid) + (l_qpos[q] >> 22);        \
+      const u32 q_il  = l_qpos[q] & 0x3fffff;                         \
+                                                                      \
+      pw_t tmp = pws[q_gid];                                          \
+                                                                      \
+      tmp.pw_len = apply_rules (rules_buf[q_il].cmds, tmp.i, tmp.pw_len); \
+                                                                      \
+      u32 key0;                                                       \
+      u32 key1;                                                       \
+      u32 key2;                                                       \
+                                                                      \
+      RK_PW_KEYS_BUF (key0, key1, key2, tmp.i, tmp.pw_len);           \
+                                                                      \
+      bool ok;                                                        \
+                                                                      \
+      RK_HEADER (key0, key1, key2, h0, h1, h2, ok);                   \
+                                                                      \
+      u32 r0;                                                         \
+      RK_VERIFY (key0, key1, key2, r0);                               \
+      REPORT (r0, q_gid, q_il);                                       \
+    }                                                                 \
+                                                                      \
+    SYNC_THREADS ();                                                  \
+                                                                      \
+    const u32 more = l_more;                                          \
+                                                                      \
+    if (lid == 0) l_qcnt = 0;                                         \
+                                                                      \
+    SYNC_THREADS ();                                                  \
+                                                                      \
+    if (more == 0) break;                                             \
+  }
+
+// Association attacks (-a 9) give every thread its own hash, so nothing is shared in the work-group:
+// one candidate per hash, verified on the spot as in hashcat's kernel.
+
+#define RK_A0_ASSOC_BODY(REPORT)                                      \
+  const u64 gid = get_global_id (0);                                  \
+  const u64 lid = get_local_id (0);                                   \
+  const u64 lsz = get_local_size (0);                                 \
+                                                                      \
+  LOCAL_VK u32 l_crc32tab[256];                                       \
+                                                                      \
+  for (u64 i = lid; i < 256; i += lsz)                                \
+  {                                                                   \
+    l_crc32tab[i] = crc32tab[i];                                      \
+  }                                                                   \
+                                                                      \
+  SYNC_THREADS ();                                                    \
+                                                                      \
+  if (gid >= GID_CNT) return;                                         \
+                                                                      \
+  GLOBAL_AS const u32 *l_data = esalt_bufs[DIGESTS_OFFSET_HOST].hash.data; \
+                                                                      \
+  const u32 search0                 = digests_buf[DIGESTS_OFFSET_HOST].digest_buf[DGST_R0]; \
+  const u32 checksum_size           = esalt_bufs[DIGESTS_OFFSET_HOST].checksum_size; \
+  const u32 checksum_from_crc       = esalt_bufs[DIGESTS_OFFSET_HOST].hash.checksum_from_crc; \
+  const u32 checksum_from_timestamp = esalt_bufs[DIGESTS_OFFSET_HOST].hash.checksum_from_timestamp; \
+  const u32 data_length             = esalt_bufs[DIGESTS_OFFSET_HOST].hash.data_length; \
+                                                                      \
+  const u32 h0 = l_data[0];                                           \
+  const u32 h1 = l_data[1];                                           \
+  const u32 h2 = l_data[2];                                           \
+                                                                      \
+  for (u32 il_pos = 0; il_pos < IL_CNT; il_pos++)                     \
+  {                                                                   \
+    pw_t tmp = pws[gid];                                              \
+                                                                      \
+    tmp.pw_len = apply_rules (rules_buf[il_pos].cmds, tmp.i, tmp.pw_len); \
+                                                                      \
+    u32 key0;                                                         \
+    u32 key1;                                                         \
+    u32 key2;                                                         \
+                                                                      \
+    RK_PW_KEYS_BUF (key0, key1, key2, tmp.i, tmp.pw_len);             \
+                                                                      \
+    bool ok;                                                          \
+                                                                      \
+    RK_HEADER (key0, key1, key2, h0, h1, h2, ok);                     \
+                                                                      \
+    if (ok == false) continue;                                        \
+                                                                      \
+    u32 r0;                                                           \
+    RK_VERIFY (key0, key1, key2, r0);                                 \
+    REPORT (r0, gid, il_pos);                                         \
   }
 
 #endif // INC_RK_ZIPCRYPTO
