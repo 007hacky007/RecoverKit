@@ -153,24 +153,27 @@ public static class ZipExtractor
     /// </summary>
     private static ZipStayTarget? CollectStayTarget(Stream s, List<ZipEntry> enc, long delta)
     {
-        var usable = enc.Where(e => e.AesStrength == 0 && e.CompSize >= 12).ToList();
+        // Stay's full-entry verification and decrypted copy use int-sized buffers.
+        var usable = enc.Where(e => e.AesStrength == 0 && e.CompSize >= 12 && e.CompSize <= int.MaxValue).ToList();
         if (usable.Count < 2) return null;
         var entries = new List<ZipStayEntry>();
         foreach (var e in usable)
         {
             try
             {
+                long dataOffset = EntryDataOffset(s, e, delta);
+                if (dataOffset < 0 || e.CompSize > s.Length - dataOffset) continue;
                 entries.Add(new ZipStayEntry
                 {
                     Name = e.Name,
-                    StoredHeader = Bin.ReadAt(s, EntryDataOffset(s, e, delta), 12),
+                    StoredHeader = Bin.ReadAt(s, dataOffset, 12),
                     Crc = e.Crc,
                     Flags = e.Flags,
                     Method = e.Method,
                     CompSize = e.CompSize,
                     UncompSize = e.UncompSize,
                     LocalOffset = e.LocalOffset,
-                    DataOffset = EntryDataOffset(s, e, delta),
+                    DataOffset = dataOffset,
                 });
             }
             catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException or OverflowException or ArgumentOutOfRangeException)

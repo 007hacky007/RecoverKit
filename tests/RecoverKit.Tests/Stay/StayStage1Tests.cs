@@ -17,7 +17,6 @@ internal static class StayTruth
     public static byte By2(uint y) => (byte)((y * unchecked(M * M)) >> 24);
 }
 
-[Trait("Category", "Stay")]
 public class StayStage1Tests
 {
     [Fact]
@@ -76,6 +75,7 @@ public class StayStage1Tests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public void Scalar_and_avx2_agree_on_subrange()
     {
         var zip = StayTestZip.MakeZip(5);
@@ -111,6 +111,7 @@ public class StayStage1Tests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public void Search_finds_true_guess_in_full_keyspace()
     {
         var zip = StayTestZip.MakeZip(5);
