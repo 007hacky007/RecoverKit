@@ -84,6 +84,28 @@ public class ZipGpuKernelTests
     }
 
     [Fact]
+    public void KernelsOfAnEarlierRecoverKitAreUpdated()
+    {
+        using var t = new TempDir();
+        var (dir, originals) = FakeHashcat(t.Path);
+        Assert.True(HashcatKernels.Install(dir, originals));
+        var f = HashcatKernels.KernelFiles.First();
+        var path = Path.Combine(dir, "OpenCL", f);
+        File.WriteAllText(path, "/* " + HashcatKernels.Marker + " 8.0.0, an older version */\n");
+        File.WriteAllText(Path.Combine(dir, "OpenCL", HashcatKernels.IncludeFile), "// older include\n");
+
+        Assert.Equal(HashcatKernels.State.Original, HashcatKernels.Inspect(dir, originals));
+        Assert.True(HashcatKernels.Install(dir, originals));
+        Assert.Equal(HashcatKernels.State.Installed, HashcatKernels.Inspect(dir, originals));
+        Assert.Equal(HashcatKernels.Sources[f], File.ReadAllText(path));
+
+        // Without hashcat's original beside it, a marked file is not touched.
+        File.WriteAllText(path, "/* " + HashcatKernels.Marker + " */\n");
+        File.Delete(path + HashcatKernels.OriginalSuffix);
+        Assert.Equal(HashcatKernels.State.Unsupported, HashcatKernels.Inspect(dir, originals));
+    }
+
+    [Fact]
     public void OtherHashcatVersionsAreLeftAlone()
     {
         using var t = new TempDir();

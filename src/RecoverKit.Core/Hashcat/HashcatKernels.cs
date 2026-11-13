@@ -82,8 +82,15 @@ public static class HashcatKernels
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    /// <summary>State of the ZIP kernels in a hashcat folder.</summary>
+    /// <summary>
+    /// State of the ZIP kernels in a hashcat folder: RecoverKit's current kernels, files that can be
+    /// replaced (hashcat 8.0.0's originals, or an earlier RecoverKit version's kernels with hashcat's
+    /// original kept beside them), or something else (another hashcat version).
+    /// </summary>
     public enum State { Installed, Original, Unsupported }
+
+    /// <summary>Text every RecoverKit kernel file carries in its header comment.</summary>
+    internal const string Marker = "RecoverKit replacement kernel for hashcat";
 
     /// <summary>Whether <paramref name="hashcatDir"/> runs RecoverKit's kernels, hashcat's 8.0.0 originals, or neither.</summary>
     public static State Inspect(string hashcatDir) => Inspect(hashcatDir, Originals);
@@ -91,19 +98,22 @@ public static class HashcatKernels
     internal static State Inspect(string hashcatDir, IReadOnlyDictionary<string, string> originals)
     {
         var dir = Path.Combine(hashcatDir, "OpenCL");
-        bool allOurs = true, allOriginal = true;
+        bool allOurs = true;
         foreach (var f in KernelFiles)
         {
             var text = ReadNormalized(Path.Combine(dir, f));
             if (text is null) return State.Unsupported;
             bool ours = text == Sources[f];
-            bool orig = originals.TryGetValue(f, out var h) && Hash(text) == h;
+            bool known = originals.TryGetValue(f, out var h);
+            bool orig = known && Hash(text) == h;
+            // An earlier RecoverKit version's kernel, over hashcat's original.
+            bool older = !ours && !orig && known && text.Contains(Marker, StringComparison.Ordinal)
+                         && ReadNormalized(Path.Combine(dir, f + OriginalSuffix)) is { } backup && Hash(backup) == h;
             if (!ours) allOurs = false;
-            if (!orig) allOriginal = false;
-            if (!ours && !orig) return State.Unsupported;
+            if (!ours && !orig && !older) return State.Unsupported;
         }
         if (allOurs && IncludeFiles.All(f => ReadNormalized(Path.Combine(dir, f)) == Sources[f])) return State.Installed;
-        return allOriginal ? State.Original : State.Installed;
+        return State.Original;
     }
 
     /// <summary>
