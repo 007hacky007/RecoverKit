@@ -74,9 +74,17 @@ public sealed class HashcatFailureTests : IDisposable
     public async Task ThreeRetriesWithoutProgressStopWithTheBackendReason()
     {
         if (Runner($"print({Py(MetalFailure)}, file=sys.stderr)\nsys.exit(255)") is not { } runner) return;
+        var output = new List<string>();
+        runner.OutputLine += line => { lock (output) output.Add(line); };
         var result = await runner.RunAsync(Request(), CancellationToken.None);
         Assert.Equal(RunOutcome.Error, result.Outcome);
         Assert.Equal(4, Attempts().Length);
+        Assert.Equal(new[]
+        {
+            "The GPU stopped with an error; restarting this step because no checkpoint was saved (retry 1 of 3).",
+            "The GPU stopped with an error; restarting this step because no checkpoint was saved (retry 2 of 3).",
+            "The GPU stopped with an error; restarting this step because no checkpoint was saved (retry 3 of 3).",
+        }, output.Where(line => line.Contains("(retry ")));
         Assert.StartsWith("The GPU", result.Error);
         Assert.Contains("Metal 4 command buffer failed", result.Error);
     }
@@ -96,10 +104,13 @@ public sealed class HashcatFailureTests : IDisposable
             with open(out, 'a') as f: f.write('wrong\n$HEX[7265616c]\n')
             sys.exit(255)
             """) is not { } runner) return;
+        var output = new List<string>();
+        runner.OutputLine += line => { lock (output) output.Add(line); };
         var result = await runner.RunAsync(Request(pw => Encoding.ASCII.GetString(pw) == "real"), CancellationToken.None);
         Assert.Equal(RunOutcome.Cracked, result.Outcome);
         Assert.Equal(["real"], result.Passwords);
         Assert.Equal(2, Attempts().Length);
+        Assert.Contains("The GPU stopped with an error; resuming from the last checkpoint (retry 1 of 3).", output);
         Assert.All(Attempts(), args => Assert.Contains("--keep-guessing", args));
         Assert.Equal(1, runner.FalsePositives.Count);
     }
@@ -109,7 +120,7 @@ public sealed class HashcatFailureTests : IDisposable
     {
         if (Runner($"print({Py(MetalFailure)}, file=sys.stderr)\nsys.exit(255)") is not { } runner) return;
         using var stop = new CancellationTokenSource();
-        runner.OutputLine += line => { if (line.Contains("Retrying", StringComparison.OrdinalIgnoreCase)) stop.Cancel(); };
+        runner.OutputLine += line => { if (line.Contains("(retry ", StringComparison.OrdinalIgnoreCase)) stop.Cancel(); };
         var result = await runner.RunAsync(Request(), stop.Token);
         Assert.Equal(RunOutcome.Aborted, result.Outcome);
         Assert.Single(Attempts());
@@ -145,12 +156,22 @@ public sealed class HashcatFailureTests : IDisposable
     [Fact]
     public async Task NvidiaOpenClFallbackGetsOneCompilerHintAcrossRetries()
     {
-        if (Runner($"print({Py(Startup)}, file=sys.stderr)\nif attempt == 1:\n    print({Py(MetalFailure)}, file=sys.stderr)\n    sys.exit(255)\nsys.exit(1)") is not { } runner) return;
+        string advice = Startup + "\nThe NVIDIA RTC library that hashcat compiles its kernels with comes with the CUDA Toolkit.\n" +
+            "Install the Windows build of it from https://developer.nvidia.com/cuda-downloads, choosing\n" +
+            "Windows and the version of it you are on. The GPU driver on its own does not carry it.\n" +
+            "Running hashcat inside WSL2 reaches CUDA as well, using the Linux build of hashcat and the\n" +
+            "Linux CUDA Toolkit installed inside it. No NVIDIA GPU driver is installed inside WSL2 itself.\n" +
+            "For all details: https://docs.nvidia.com/cuda/wsl-user-guide/index.html";
+        if (Runner($"print({Py(advice)}, file=sys.stderr)\nif attempt == 1:\n    print({Py(MetalFailure)}, file=sys.stderr)\n    sys.exit(255)\nsys.exit(1)") is not { } runner) return;
         var output = new List<string>();
         runner.OutputLine += line => { lock (output) output.Add(line); };
         var result = await runner.RunAsync(Request(), CancellationToken.None);
         Assert.Equal(RunOutcome.Exhausted, result.Outcome);
         Assert.Single(output, line => line.Contains("Tools > Download NVIDIA CUDA compiler"));
+        Assert.DoesNotContain(output, line => line.Contains("WSL", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(output, line => line.Contains("CUDA SDK Toolkit"));
+        Assert.DoesNotContain(output, line => line.Contains("cuda-downloads"));
+        Assert.DoesNotContain(output, line => line.Contains("The NVIDIA RTC library"));
     }
 
     [Fact]
@@ -286,6 +307,6 @@ public sealed class HashcatFailureTests : IDisposable
             """) is not { } runner) return;
         var result = await runner.RunAsync(Request(), CancellationToken.None);
         Assert.Equal(RunOutcome.Error, result.Outcome);
-        Assert.Equal(7, Attempts().Length);
+        Assert.Equal(6, Attempts().Length);
     }
 }

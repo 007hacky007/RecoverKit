@@ -209,12 +209,14 @@ public sealed class HashcatRunner(HashcatTool tool)
             var enabled = known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
             bool cpuOnly = s.Strategy == DeviceStrategy.CpuOnly && !gpuOnly;
             // An unidentified GPU might still need either backend. Its aliases can supply the vendor.
-            bool unknown = enabled.Any(d => !new[] { d }.Concat(known.Where(alias => alias.AliasOf == d.Id))
-                .Any(device => device.Backend is "CUDA" or "HIP" or "Metal" ||
+            IEnumerable<BackendDevice> WithAliases(BackendDevice device)
+                => new[] { device }.Concat(known.Where(alias => alias.AliasOf == device.Id));
+            var enabledWithAliases = enabled.SelectMany(WithAliases).ToList();
+            bool unknown = enabled.Any(d => !WithAliases(d).Any(device => device.Backend is "CUDA" or "HIP" or "Metal" ||
                     HasVendor(device, "NVIDIA") || HasVendor(device, "AMD") || HasVendor(device, "Advanced Micro Devices") ||
                     HasVendor(device, "Intel") || HasVendor(device, "Apple")));
-            bool ignoreCuda = cpuOnly || !unknown && !enabled.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
-            bool ignoreHip = cpuOnly || !unknown && !enabled.Any(d => d.Backend == "HIP" || HasVendor(d, "AMD") || HasVendor(d, "Advanced Micro Devices"));
+            bool ignoreCuda = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
+            bool ignoreHip = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "HIP" || HasVendor(d, "AMD") || HasVendor(d, "Advanced Micro Devices"));
             if (ignoreCuda && !a.Contains("--backend-ignore-cuda")) a.Add("--backend-ignore-cuda");
             if (ignoreHip && !a.Contains("--backend-ignore-hip")) a.Add("--backend-ignore-hip");
             int selection = a.IndexOf("-d");
@@ -302,11 +304,11 @@ public sealed class HashcatRunner(HashcatTool tool)
         string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
         if (!r.Restore && File.Exists(restoreFile)) File.Delete(restoreFile);
         long checkpoint = Native.HybridRunner.ReadRestorePoint(restoreFile) ?? 0;
-        int failures = 0;
+        int retries = 0;
         int cudaHintShown = 0;
         void Output(string line)
         {
-            OutputLine?.Invoke(line);
+            if (!HashcatOutput.IsCudaCompilerAdvice(line)) OutputLine?.Invoke(line);
             if (HashcatOutput.NeedsCudaCompilerHint(line) && Interlocked.Exchange(ref cudaHintShown, 1) == 0)
                 OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Download NVIDIA CUDA compiler to enable CUDA.");
         }
@@ -317,15 +319,16 @@ public sealed class HashcatRunner(HashcatTool tool)
             if (result.Outcome != RunOutcome.Error || ct.IsCancellationRequested || !HashcatOutput.IsTransientFailure(result.Error)) return result;
             long nextProgress = result.LastStatus?.ProgressDone ?? 0;
             long nextCheckpoint = Native.HybridRunner.ReadRestorePoint(RestoreFile(r.SessionDir, r.SessionName)) ?? 0;
-            failures = nextProgress > progress || nextCheckpoint > checkpoint ? 0 : failures + 1;
+            if (nextProgress > progress || nextCheckpoint > checkpoint) retries = 0;
             progress = Math.Max(progress, nextProgress);
             checkpoint = Math.Max(checkpoint, nextCheckpoint);
-            if (failures > 3) return result;
+            if (retries >= 3) return result;
+            retries++;
             bool restore = r.Attack.Stdin is null && File.Exists(restoreFile);
-            OutputLine?.Invoke("The GPU backend stopped unexpectedly. Retrying " +
-                (restore ? "from the saved checkpoint." : r.Attack.Stdin is not null
-                    ? "from the start of this step (the candidate generator cannot resume)."
-                    : "from the start of this step (no checkpoint was saved)."));
+            OutputLine?.Invoke("The GPU stopped with an error; " +
+                (restore ? "resuming from the last checkpoint" : r.Attack.Stdin is not null
+                    ? "restarting this step because the candidate generator cannot resume"
+                    : "restarting this step because no checkpoint was saved") + $" (retry {retries} of 3).");
             try { await Task.Delay(TimeSpan.FromMilliseconds(100), ct); }
             catch (OperationCanceledException) { return new RunResult { Outcome = RunOutcome.Aborted, LastStatus = result.LastStatus }; }
             r = r with { Restore = restore };

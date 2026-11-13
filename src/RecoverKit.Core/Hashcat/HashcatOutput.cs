@@ -11,6 +11,12 @@ internal static class HashcatOutput
         "Windows and the version of it", "WSL2", "Linux CUDA Toolkit", "hashcat.net/faq/wrongdriver",
         "developer.nvidia.com/cuda-downloads", "docs.nvidia.com/cuda/wsl-user-guide", "Metal 4 setup failed");
 
+    internal static bool IsCudaCompilerAdvice(string line) => Has(line,
+        "NVIDIA main driver CUDA runtime library", "NVIDIA RTC library", "CUDA SDK Toolkit",
+        "Falling back to OpenCL runtime", "Install the Windows build of it", "Windows and the version of it",
+        "WSL2", "Linux CUDA Toolkit", "hashcat.net/faq/wrongdriver", "developer.nvidia.com/cuda-downloads",
+        "docs.nvidia.com/cuda/wsl-user-guide");
+
     internal static bool NeedsCudaCompilerHint(string line)
         => Has(line, "CUDA SDK Toolkit not installed", "Failed to initialize NVIDIA RTC library");
 

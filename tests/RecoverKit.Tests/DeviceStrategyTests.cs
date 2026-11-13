@@ -84,6 +84,18 @@ public class DeviceStrategyTests
         Assert.Contains("--backend-ignore-hip", args);
     }
 
+    [Theory]
+    [InlineData("NVIDIA Corporation", "--backend-ignore-cuda", "--backend-ignore-hip")]
+    [InlineData("Advanced Micro Devices, Inc.", "--backend-ignore-hip", "--backend-ignore-cuda")]
+    public void VendorKnownOnlyThroughSkippedAliasKeepsTheMatchingBackend(string vendor, string needed, string unused)
+    {
+        BackendDevice primary = new() { Id = 1, Backend = "OpenCL", Type = "GPU", Name = "Graphics device" };
+        BackendDevice alias = new() { Id = 2, AliasOf = 1, Backend = "OpenCL", Type = "GPU", Vendor = vendor };
+        var args = HashcatRunner.DeviceArguments(new Settings(), [primary, alias]);
+        Assert.DoesNotContain(needed, args);
+        Assert.Contains(unused, args);
+    }
+
     [Fact]
     public void DisablingEveryGpuDoesNotReviveItsOpenClAlias()
     {
