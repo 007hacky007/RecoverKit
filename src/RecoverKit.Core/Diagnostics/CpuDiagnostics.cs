@@ -48,26 +48,26 @@ public static class CpuDiagnostics
         }
     }
 
-    public static Task RunAsync(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct)
-        => Task.Run(() => Run(add, progress, ct), CancellationToken.None);
+    public static Task RunAsync(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings = null)
+        => Task.Run(() => Run(add, progress, ct, settings), CancellationToken.None);
 
-    private static void Run(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct)
+    private static void Run(Action<DiagnosticMeasurement> add, Action<string> progress, CancellationToken ct, Settings? settings)
     {
         int savedPath = ZipCryptoNative.RequestedPath;
         try
         {
             ct.ThrowIfCancellationRequested();
-            int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Distinct().Order().ToArray();
+            int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Select(n => Math.Min(n, settings?.MaxCpuThreads is > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount)).Distinct().Order().ToArray();
             foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
             {
                 ct.ThrowIfCancellationRequested();
-                var variants = Math.Abs(mode) is 17200 or 17210 ? Variants : new[] { new ZipVariant("default", savedPath) };
+                var variants = KernelVariants.ForMode(mode);
                 foreach (var variant in variants)
                 {
-                    if (Math.Abs(mode) is 17200 or 17210 && !variant.Supported) continue;
+                    if (!variant.Supported) continue;
                     progress($"Mode {mode}: checking {variant.Name}");
-                    ZipCryptoNative.RequestedPath = Math.Abs(mode) is 17200 or 17210 ? variant.Selector : savedPath;
-                    var check = Math.Abs(mode) is 17200 or 17210 ? CheckZipPath(variant.Selector) : CheckKernel(mode);
+                    using var selection = KernelVariants.Select(mode, variant.Name);
+                    var check = Math.Abs(mode) is 17200 or 17210 ? CheckZipVariant(variant.Name) : CheckKernel(mode);
                     if (!check.Passed)
                     {
                         add(new DiagnosticMeasurement { Section = "cpu", Step = "Correctness FAIL", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name, Correct = false, Error = check.Error, Target = Target(mode), Length = 7 });
@@ -82,14 +82,14 @@ public static class CpuDiagnostics
                         try
                         {
                             var result = CheckThenMeasure(() => check,
-                                () => NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(3), ct, length: 7));
+                                () => NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(3), ct, length: 7, priority: NativeRunner.ThreadPriorityFor(settings?.Priority ?? ProcessPriority.Normal)));
                             ct.ThrowIfCancellationRequested();
                             add(new DiagnosticMeasurement
                             {
                                 Section = "cpu", Step = "Correctness PASS; timed", Mode = Math.Abs(mode), Engine = "cpu", Variant = variant.Name,
                                 Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
                                 ElapsedSeconds = timer.Elapsed.TotalSeconds, Target = Target(mode), Length = 7,
-                                Details = new() { ["correctness cases"] = check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : "native default" },
+                                Details = new() { ["correctness cases"] = check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : variant.Name },
                             });
                         }
                         catch (OperationCanceledException) { throw; }
