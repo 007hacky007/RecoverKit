@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using RecoverKit.Core.Formats;
 using RecoverKit.Core.Native.Kernels;
 
 namespace RecoverKit.Core.Native;
@@ -7,10 +8,10 @@ namespace RecoverKit.Core.Native;
 public static class NativeKernels
 {
     /// <summary>Creates the kernel for a hashcat mode and hash line, or null if the format is not built in.</summary>
-    public static NativeKernel? TryCreate(int mode, string hashLine) => mode switch
+    public static NativeKernel? TryCreate(int mode, string hashLine, ZipPartialTarget? partial = null) => mode switch
     {
         29331 when RkNative.Available => TrueCryptWhirlpoolKernel.TryParse(hashLine),
-        17200 or 17210 => ZipCryptoKernel.TryParse(hashLine),
+        17200 or 17210 => ZipCryptoKernel.TryParse(hashLine, partial),
         // The native library's vector paths (AVX2 / NEON) run these regardless of .NET's vector support.
         12500 when Rar3Kernel.NativeFast => Rar3Kernel.TryParse(hashLine),
         10700 => PdfR6Kernel.NativeFast ? PdfR6Kernel.TryParse(hashLine) : null,

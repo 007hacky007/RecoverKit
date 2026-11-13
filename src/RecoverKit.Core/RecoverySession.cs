@@ -299,19 +299,45 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             for (int mi = startMode; mi < state.Modes.Count; mi++)
             {
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
-                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, credentials: target.VolumeCredentials);
+                int attackMode = HashcatRunner.EffectiveAttackMode(attack, settings.ExtraArguments);
+                bool resumeDictionary = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex
+                    && File.Exists(Native.ZipDictionaryRunner.RestoreFile(settings.SessionsDir, resume.HashcatSession));
+                bool partialCpu = target.ZipPartial is { } partial && (partial.Method == 0
+                    || resumeDictionary
+                    || settings.Strategy == DeviceStrategy.CpuOnly || Devices is not null && HashcatRunner.ActiveGpus(settings, Devices).Count == 0
+                    || !HashcatKernels.EnsureFor(tool, mode, attackMode));
+                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices,
+                    ignoreGpu: partialCpu, credentials: target.VolumeCredentials, partial: target.ZipPartial);
+                bool cpuDictionary = partialCpu && settings.UseNativeCpuEngine
+                    && string.IsNullOrWhiteSpace(settings.ExtraArguments) && Native.ZipDictionaryRunner.CanRun(attack);
+                if (partialCpu)
+                {
+                    if (nativePlan is null && !cpuDictionary)
+                        return new SessionResult
+                        {
+                            Outcome = SessionOutcome.Error,
+                            Error = "This large ZIP file needs the built-in CPU engine for this attack. Enable it in Preferences " +
+                                    "and use a brute-force, mask, or plain dictionary attack without rules or extra hashcat options.",
+                        };
+                    Log?.Invoke(LogKind.Info, target.ZipPartial!.Method == 0
+                        ? "This large file is not compressed; using the built-in CPU engine so the password cannot be missed among header matches."
+                        : "RecoverKit's ZIP GPU kernels are unavailable for this attack; using the built-in CPU engine to check the whole file.");
+                }
                 // With a GPU: hashcat on the GPUs and the built-in engine on the CPU, each on its own part.
-                var hybridPlan = nativePlan is null && pmkTable is null
-                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, settings, Devices, target.VolumeCredentials) : null;
+                var hybridPlan = nativePlan is null && !cpuDictionary && pmkTable is null
+                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, settings, Devices, target.VolumeCredentials, target.ZipPartial) : null;
                 if (nativePlan is null && hybridPlan is null && settings.HybridCpuGpu && Native.HybridRunner.CpuAddsTooLittle(settings, Devices, mode)
-                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is not null)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true,
+                        credentials: target.VolumeCredentials, partial: target.ZipPartial) is not null)
                     Log?.Invoke(LogKind.Info, $"The CPU added less than a quarter of the GPU's speed in the last hybrid attack on this format, " +
                                               "and on an integrated GPU it slows the GPU down: hashcat runs alone.");
-                string restoreFile = nativePlan is not null
-                    ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
-                    : hybridPlan is not null
-                        ? Native.HybridRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
-                        : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
+                string restoreFile = cpuDictionary
+                    ? Native.ZipDictionaryRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
+                    : nativePlan is not null
+                        ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
+                        : hybridPlan is not null
+                            ? Native.HybridRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
+                            : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
                 bool restore = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
                                && File.Exists(restoreFile);
                 string session = restore ? resume!.HashcatSession : $"rk_{key}_{si}_{mi}";
@@ -322,13 +348,13 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                                           (restore ? " - resuming" : $" - {attack.Keyspace:N0} candidates"));
                 foreach (var n in attack.Notes) Log?.Invoke(LogKind.Warning, n);
 
-                bool optimized = await SelectOptimizedKernelAsync(tool, mode, attack, settings.OptimizedKernels,
+                bool optimized = nativePlan is null && !cpuDictionary && await SelectOptimizedKernelAsync(tool, mode, attack, settings.OptimizedKernels,
                     restore, state.UseOptimizedKernel);
                 state.UseOptimizedKernel = optimized;
                 state.StepIndex = si;
                 state.ModeIndex = mi;
                 state.HashcatSession = session;
-                state.Restorable = attack.CanRestore;
+                state.Restorable = cpuDictionary || attack.CanRestore;
                 state.Save(settings);
 
                 var request = new RunRequest
@@ -345,20 +371,33 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     PasswordCachePath = potfile,
                     Guard = HashcatRunner.GuardFor(settings, Devices),
                     ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
+                    RequiresPartialZipKernel = target.ZipPartial is not null,
                 };
-                var result = nativePlan is { } np
-                    ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
-                    : hybridPlan is { } hp
-                        ? await hybrid.RunAsync(hp, target.HashLines, request, tool, ct)
-                        : await runner.RunAsync(request, ct);
+                var result = cpuDictionary
+                    ? await new Native.ZipDictionaryRunner { Status = s => Status?.Invoke(s) }.RunAsync(target, request, ct)
+                    : nativePlan is { } np
+                        ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
+                        : hybridPlan is { } hp
+                            ? await hybrid.RunAsync(hp, target.HashLines, request, tool, ct)
+                            : await runner.RunAsync(request, ct);
 
                 // hashcat refuses some modes on Apple GPUs (e.g. PKZIP 17200 family): run the built-in CPU engine instead.
                 if (nativePlan is null && hybridPlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
-                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is { } fallback)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true,
+                        credentials: target.VolumeCredentials, partial: target.ZipPartial) is { } fallback)
                 {
                     Log?.Invoke(LogKind.Warning, $"hashcat cannot run hash mode {mode} on this GPU; using the built-in CPU engine instead.");
                     request = request with { Restore = false };
                     result = await native.RunAsync(fallback.Kernel, fallback.Space, target.HashLines, request, ct);
+                }
+                else if (result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
+                    && target.ZipPartial is not null && settings.UseNativeCpuEngine
+                    && string.IsNullOrWhiteSpace(settings.ExtraArguments) && Native.ZipDictionaryRunner.CanRun(attack))
+                {
+                    Log?.Invoke(LogKind.Warning, "hashcat cannot check this ZIP file on the GPU; using the built-in CPU engine for the dictionary.");
+                    request = request with { Restore = false };
+                    state.Restorable = true;
+                    result = await new Native.ZipDictionaryRunner { Status = s => Status?.Invoke(s) }.RunAsync(target, request, ct);
                 }
 
                 if (result.LastStatus is { TotalSpeed: > 0 } ls) settings.SpeedByMode[mode] = ls.TotalSpeed;
@@ -510,6 +549,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     {
         foreach (var f in new[] { HashcatRunner.RestoreFile(settings.SessionsDir, session), HashcatRunner.OutFile(settings.SessionsDir, session),
                                   Native.NativeRunner.RestoreFile(settings.SessionsDir, session),
+                                  Native.ZipDictionaryRunner.RestoreFile(settings.SessionsDir, session),
                                   Native.HybridRunner.RestoreFile(settings.SessionsDir, session) })
             try { File.Delete(f); } catch (IOException) { }
     }

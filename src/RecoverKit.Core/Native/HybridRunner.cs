@@ -94,12 +94,12 @@ public sealed class HybridRunner
     /// lets the CPU work next to the GPUs, and the built-in engine could run the step on its own.
     /// </summary>
     public static HybridPlan? Plan(int mode, string hashLines, PreparedAttack attack, Settings settings,
-        IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null)
+        IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null, ZipPartialTarget? partial = null)
     {
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
         if (CpuAddsTooLittle(settings, devices, mode)) return null;
-        if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials) is not { } p) return null;
+        if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials, partial) is not { } p) return null;
         // Every length must fit in 64 bits (hashcat's counters) and in hashcat's eight custom charsets.
         for (int l = p.Space.MinLength; l <= p.Space.MaxLength; l++)
         {

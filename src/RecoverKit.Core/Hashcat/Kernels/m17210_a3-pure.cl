@@ -99,26 +99,34 @@ Related publication: https://scitepress.org/PublicationsDetail.aspx?ID=KLPzPqStp
 #include M2S(INCLUDE_PATH/inc_checksum_crc.cl)
 #include M2S(INCLUDE_PATH/inc_rk_zipcrypto.cl)
 
-// Stored entry: decrypt the rest of the entry and compare its CRC-32.
+// Stored entry: compare the full CRC, or leave a partial header hit for CPU confirmation.
+// Partial stored entries require CPU search: hashcat can report only one hit per kernel launch.
 
 #define RK_VERIFY(k0,k1,k2,r0)                                        \
 {                                                                     \
-  u32 rk_crc = 0xffffffff;                                            \
-  u32 rk_k0 = (k0);                                                   \
-  u32 rk_k1 = (k1);                                                   \
-  u32 rk_k2 = (k2);                                                   \
-  for (u32 rk_i = 12; rk_i < data_length; rk_i += 4)                  \
+  if (esalt_bufs[DIGESTS_OFFSET_HOST].hash.data_type_enum == 1)        \
   {                                                                   \
-    const u32 rk_w = RK_DATA (rk_i / 4);                              \
-    const u32 rk_n = RK_MIN (data_length - rk_i, 4u);                    \
-    for (u32 rk_b = 0; rk_b < rk_n; rk_b++)                           \
-    {                                                                 \
-      u32 rk_p;                                                       \
-      RK_DECRYPT (rk_k0, rk_k1, rk_k2, rk_w, rk_b, rk_p);             \
-      rk_crc = RK_CRC (rk_crc, rk_p);                                 \
-    }                                                                 \
+    (r0) = search0;                                                    \
   }                                                                   \
-  (r0) = ~rk_crc;                                                     \
+  else                                                                \
+  {                                                                   \
+    u32 rk_crc = 0xffffffff;                                          \
+    u32 rk_k0 = (k0);                                                 \
+    u32 rk_k1 = (k1);                                                 \
+    u32 rk_k2 = (k2);                                                 \
+    for (u32 rk_i = 12; rk_i < data_length; rk_i += 4)                \
+    {                                                                 \
+      const u32 rk_w = RK_DATA (rk_i / 4);                            \
+      const u32 rk_n = RK_MIN (data_length - rk_i, 4u);               \
+      for (u32 rk_b = 0; rk_b < rk_n; rk_b++)                         \
+      {                                                               \
+        u32 rk_p;                                                     \
+        RK_DECRYPT (rk_k0, rk_k1, rk_k2, rk_w, rk_b, rk_p);           \
+        rk_crc = RK_CRC (rk_crc, rk_p);                               \
+      }                                                               \
+    }                                                                 \
+    (r0) = ~rk_crc;                                                   \
+  }                                                                   \
 }
 
 

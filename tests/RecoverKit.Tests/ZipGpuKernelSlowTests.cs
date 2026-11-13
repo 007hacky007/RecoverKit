@@ -1,4 +1,5 @@
 using System.Text;
+using System.IO.Compression;
 using RecoverKit.Core;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
@@ -123,6 +124,139 @@ public class ZipGpuKernelSlowTests(ITestOutputHelper output)
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public async Task PartialDeflateAcceptsTruncatedDynamicAndStoredBlocks()
+    {
+        if (Tool() is not { } tool) { output.WriteLine("hashcat 8.0.0 not found, skipped"); return; }
+        Assert.True(HashcatKernels.Install(tool.Directory));
+        var devices = (await tool.DevicesAsync()).Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.NotEmpty(devices);
+        var dir = Directory.CreateTempSubdirectory("rk-zip-partial-gpu").FullName;
+        try
+        {
+            var rng = new Random(417);
+            var password = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+            foreach (bool text in new[] { true, false })
+            {
+                var content = new byte[4_000_000];
+                if (text) content = ZipCryptoSample.Text(content.Length, rng);
+                else rng.NextBytes(content);
+                using var compressed = new MemoryStream();
+                using (var deflater = new DeflateStream(compressed, CompressionLevel.Optimal, leaveOpen: true)) deflater.Write(content);
+                int firstType = compressed.ToArray()[0] & 6;
+                Assert.Equal(text ? 4 : 0, firstType);
+                var archive = ZipCryptoSample.Archive([new("a.bin", content, true)], Encoding.ASCII.GetBytes(password), rng);
+                const int prefixLength = 256 * 1024;
+                Assert.True(BitConverter.ToUInt32(archive, 18) > prefixLength);
+                var prefix = archive.AsSpan(35, prefixLength).ToArray();
+                var check = BitConverter.ToUInt32(archive, 14) >> 16;
+                var hash = Path.Combine(dir, "partial.hash");
+                var dict = Path.Combine(dir, "partial.dict");
+                File.WriteAllText(hash, $"$pkzip2$1*1*1*0*8*{prefixLength:x}*{check:x4}*{check:x4}*{Convert.ToHexString(prefix)}*$/pkzip2$\n");
+                var candidates = Enumerable.Range(0, 4096).Select(i => $"{i:X3}{password[3..]}").ToArray();
+                File.WriteAllLines(dict, candidates);
+                foreach (var device in devices)
+                {
+                    foreach (int attack in new[] { 0, 3 })
+                    {
+                        var outFile = Path.Combine(dir, "partial.out");
+                        File.Delete(outFile);
+                        var args = new List<string>
+                        {
+                            "-m", "17200", "-a", attack.ToString(), hash, attack == 0 ? dict : "?1?1?1" + password[3..],
+                            "-1", "0123456789ABCDEF", "--keep-guessing",
+                            "-d", device.Id.ToString(), "--potfile-disable", "--logfile-disable", "--session", "rk-zip-partial-test", "--quiet",
+                            "-o", outFile, "--outfile-format", "2",
+                        };
+                        var (code, stdout, stderr) = await tool.RunAsync(args, TimeSpan.FromSeconds(90));
+                        output.WriteLine($"#{device.Id} {device.Backend}, partial {(text ? "dynamic" : "stored")} deflate, attack {attack}: exit {code}, {(File.Exists(outFile) ? File.ReadAllLines(outFile).Length : 0)} hits / 4096 candidates");
+                        Assert.True(code is 0 or 1, $"hashcat exit {code}: {stdout} {stderr}");
+                        Assert.True(File.Exists(outFile), "Correct password was rejected for a truncated deflate stream");
+                        Assert.Equal(password, File.ReadAllText(outFile).Trim());
+                        // The right header must not allow an invalid deflate block type through.
+                        if (attack == 0)
+                        {
+                            var invalid = (byte[])prefix.Clone();
+                            invalid[12] ^= (byte)(firstType ^ 6);
+                            File.WriteAllText(hash, $"$pkzip2$1*1*1*0*8*{prefixLength:x}*{check:x4}*{check:x4}*{Convert.ToHexString(invalid)}*$/pkzip2$\n");
+                            File.Delete(outFile);
+                            var (invalidCode, invalidOut, invalidErr) = await tool.RunAsync(args, TimeSpan.FromSeconds(90));
+                            Assert.True(invalidCode is 0 or 1, $"hashcat exit {invalidCode}: {invalidOut} {invalidErr}");
+                            Assert.False(File.Exists(outFile) && File.ReadAllLines(outFile).Length > 0, "Malformed prefix accepted");
+                            if (!text)
+                            {
+                                // Stored blocks have no Huffman precheck; corrupt NLEN inside the inflater.
+                                invalid = (byte[])prefix.Clone();
+                                invalid[15] ^= 1;
+                                File.WriteAllText(hash, $"$pkzip2$1*1*1*0*8*{prefixLength:x}*{check:x4}*{check:x4}*{Convert.ToHexString(invalid)}*$/pkzip2$\n");
+                                var (badCode, badOut, badErr) = await tool.RunAsync(args, TimeSpan.FromSeconds(90));
+                                Assert.True(badCode is 0 or 1, $"hashcat exit {badCode}: {badOut} {badErr}");
+                                Assert.False(File.Exists(outFile) && File.ReadAllLines(outFile).Length > 0, "Inflater error accepted");
+                            }
+                            // A stream ending before the rest of the prefix is also a false hit.
+                            var shortArchive = ZipCryptoSample.Archive([new("a.bin", [42], true)], Encoding.ASCII.GetBytes(password), rng);
+                            var shortBody = shortArchive.AsSpan(35, (int)BitConverter.ToUInt32(shortArchive, 18));
+                            shortBody.CopyTo(invalid);
+                            var shortCheck = BitConverter.ToUInt32(shortArchive, 14) >> 16;
+                            File.WriteAllText(hash, $"$pkzip2$1*1*1*0*8*{prefixLength:x}*{shortCheck:x4}*{shortCheck:x4}*{Convert.ToHexString(invalid)}*$/pkzip2$\n");
+                            var (shortCode, shortOut, shortErr) = await tool.RunAsync(args, TimeSpan.FromSeconds(90));
+                            Assert.True(shortCode is 0 or 1, $"hashcat exit {shortCode}: {shortOut} {shortErr}");
+                            Assert.False(File.Exists(outFile) && File.ReadAllLines(outFile).Length > 0, "Early stream end accepted");
+                            File.WriteAllText(hash, $"$pkzip2$1*1*1*0*8*{prefixLength:x}*{check:x4}*{check:x4}*{Convert.ToHexString(prefix)}*$/pkzip2$\n");
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task PartialStoredHeadersReachBothAttackKernels()
+    {
+        if (Tool() is not { } tool) { output.WriteLine("hashcat 8.0.0 not found, skipped"); return; }
+        Assert.True(HashcatKernels.Install(tool.Directory));
+        var devices = (await tool.DevicesAsync()).Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.NotEmpty(devices);
+        var dir = Directory.CreateTempSubdirectory("rk-zip-partial-stored-gpu").FullName;
+        try
+        {
+            var rng = new Random(418);
+            var password = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+            var content = new byte[400_000];
+            rng.NextBytes(content);
+            var archive = ZipCryptoSample.Archive([new("a.bin", content, false)], Encoding.ASCII.GetBytes(password), rng);
+            const int prefixLength = 256 * 1024;
+            var prefix = archive.AsSpan(35, prefixLength).ToArray();
+            var check = BitConverter.ToUInt32(archive, 14) >> 16;
+            string hashLine = $"$pkzip2$1*1*1*0*0*{prefixLength:x}*{check:x4}*{check:x4}*{Convert.ToHexString(prefix)}*$/pkzip2$";
+            var hash = Path.Combine(dir, "stored.hash");
+            var dict = Path.Combine(dir, "stored.dict");
+            File.WriteAllText(hash, hashLine + "\n");
+            File.WriteAllText(dict, password + "\n");
+            foreach (var device in devices)
+            foreach (int attack in new[] { 0, 3 })
+            {
+                var outFile = Path.Combine(dir, "stored.out");
+                File.Delete(outFile);
+                var (code, stdout, stderr) = await tool.RunAsync(
+                [
+                    "-m", "17210", "-a", attack.ToString(), hash, attack == 0 ? dict : password,
+                    "-d", device.Id.ToString(), "--potfile-disable", "--logfile-disable", "--session", "rk-zip-partial-stored-test", "--quiet",
+                    "-o", outFile, "--outfile-format", "2",
+                ], TimeSpan.FromSeconds(90));
+                Assert.True(code is 0 or 1, $"hashcat exit {code}: {stdout} {stderr}");
+                Assert.True(File.Exists(outFile), "Partial stored header hit was rejected");
+                Assert.Equal(password, File.ReadAllText(outFile).Trim());
+                output.WriteLine($"#{device.Id} {device.Backend}, partial stored, attack {attack}: correct header reported");
+            }
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
     }
 
     [Fact]

@@ -184,6 +184,28 @@ and OpenCL (and the random-archive test also with `RK_AMP_CACHE 1`).
 RecoverKit's on every device (CUDA, OpenCL and Metal aliases separately) for entries of 17 bytes to
 16 KB; see [benchmarks.md](benchmarks.md#zip-on-the-gpu).
 
+### Large entries
+
+If every usable encrypted entry exceeds hashcat's 320 KiB limit, `ZipExtractor` emits a type 1
+`$pkzip2$` hash with the first 256 KiB (including the encryption header). Full entries still take
+priority, with the selection rules below. The prefix crosses several stored deflate block headers;
+a short prefix ending inside the first block would admit too many wrong passwords. The unmodified
+module passes `data_type_enum == 1` to RecoverKit's kernels. They check the header, first deflate
+block and available inflate data without requiring end-of-stream or the full length. Full hashes
+retain the original inflate/CRC checks.
+
+`HashTarget.ZipPartial` keeps the archive path, entry offset, lengths, method and CRC. CPU `Verify`
+decrypts from that file through bounded streams and checks the entire output length, deflate end
+and CRC-32, without the old 64 MiB embedded-data limit. `ConfirmPassword` also runs the existing
+other-entry checks. Partial GPU runs always use outfile confirmation and keep guessing.
+
+Stored partials have only the header check (1 in 128 or 256 candidates), which overwhelms
+hashcat's one-hit-per-launch result buffer and can hide the real password. Recovery therefore
+uses the CPU for these entries. If replacement kernels are unavailable, partial deflated targets
+also use the CPU. Masks/brute-force and plain dictionaries are supported; CPU dictionary fallback
+does not interpret hashcat rule files or extra options and explains that limit before starting.
+The CLI and GUI Notes describe partial targets. GPU tests are opt-in through `RunSlowTests`.
+
 ### False positives
 
 The hash covers one entry. For a stored entry a wrong password passes the check byte and the CRC-32
