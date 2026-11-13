@@ -99,6 +99,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
         catch (Exception) when (ct.IsCancellationRequested) { report.Cancelled = true; }
         finally
         {
+            report.Cancelled |= ct.IsCancellationRequested;
             pulse.Change(Timeout.Infinite, Timeout.Infinite);
             report.System["NVIDIA telemetry after"] = Telemetry();
             if (isolated is not null)
@@ -107,7 +108,8 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                 { report.Summary.Add("Temporary GPU files could not be removed; they contain synthetic targets only."); }
             report.Finished = DateTimeOffset.UtcNow;
         }
-        if (report.Measurements.Any(m => m.Correct && m.Speed > 0))
+        // A failed correctness check must quarantine an old choice even if no timing completed.
+        if (report.Measurements.Any(m => m.Correct && m.Speed > 0 || m.Section == "cpu" && !m.Correct && m.Variant.Length > 0))
         {
             try { PerformanceProfiles.Record(report, tool, devices, "detailed"); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
