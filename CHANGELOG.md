@@ -5,6 +5,12 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-13
+
+### Fixed
+- The fast key search for classic ZIP archives (Stay's attack) could include a damaged (cut off) or
+  very large file of the archive and then fail. Such files are skipped again, as in 1.3.0.
+
 ## [1.4.0] - 2026-11-13
 
 ### Added
@@ -140,6 +146,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.4.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.1
 [1.4.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.0
 [1.3.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.3.0
 [1.2.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.2.0
