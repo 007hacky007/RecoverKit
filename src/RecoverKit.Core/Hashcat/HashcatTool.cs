@@ -181,6 +181,7 @@ public sealed partial class HashcatTool
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         CpuRuntime.ApplyTo(psi, MaxCpuThreads);
+        NvrtcRuntime.ApplyTo(psi);
         return psi;
     }
 

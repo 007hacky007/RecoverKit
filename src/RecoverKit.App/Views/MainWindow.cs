@@ -212,6 +212,7 @@ public sealed partial class MainWindow : Window
             Item(mac ? "Install hashcat..." : "_Download hashcat ...", () => _ = DownloadHashcatAsync()),
         };
         if (CpuRuntime.IsSupportedPlatform) tools.Add(Item("Download _CPU runtime (OpenCL) ...", () => _ = DownloadCpuRuntimeAsync()));
+        if (NvrtcRuntime.IsSupportedPlatform) tools.Add(Item("Download _NVIDIA CUDA compiler (NVRTC) ...", () => _ = DownloadNvrtcAsync()));
 
         var help = new List<NativeMenuItemBase>
         {
@@ -593,6 +594,10 @@ public sealed partial class MainWindow : Window
                 Line($"No compatible GPU devices detected. Passwords are recovered on the processor ({threads} threads).", Palette.DimBrush);
             else if (gpus.Count == 0) NoDevicesNotice();
             foreach (var d in deviceLines) Line(d, Palette.DimBrush);
+            // NVIDIA GPUs run through OpenCL until hashcat finds NVRTC for its CUDA backend.
+            if (NvrtcRuntime.IsSupportedPlatform && !_devices.Any(d => d.Backend == "CUDA")
+                && usable.Any(d => d.Backend == "OpenCL" && (d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))))
+                Line("The NVIDIA GPU runs through OpenCL. hashcat's CUDA backend needs NVIDIA's NVRTC compiler: Tools > Download NVIDIA CUDA compiler (NVRTC).", Palette.DimBrush);
             if (_hashcat.IsOutdatedManagedCopy)
                 Notice($"This is an older hashcat. Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
         }
@@ -725,6 +730,18 @@ public sealed partial class MainWindow : Window
         _busyDialog = true;
         bool ok;
         try { ok = await CpuRuntimeDownloadWindow.RunAsync(this); }
+        finally { _busyDialog = false; }
+        if (!ok) return;
+        if (_current is null) ShowStartPage();
+        await InitHashcatAsync();
+    }
+
+    private async Task DownloadNvrtcAsync()
+    {
+        if (_cts is not null || _busyDialog) return;
+        _busyDialog = true;
+        bool ok;
+        try { ok = await NvrtcDownloadWindow.RunAsync(this); }
         finally { _busyDialog = false; }
         if (!ok) return;
         if (_current is null) ShowStartPage();
