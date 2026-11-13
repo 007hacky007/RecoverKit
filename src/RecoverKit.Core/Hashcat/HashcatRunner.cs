@@ -59,10 +59,27 @@ public sealed class HashcatRunner(HashcatTool tool)
     public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".restore");
     public static string OutFile(string dir, string session) => Path.Combine(dir, session + ".out");
 
+    /// <summary>
+    /// hashcat's major version, for the restore arguments; read from <c>--version</c> on first use.
+    /// Tests set it directly.
+    /// </summary>
+    public int HashcatMajorVersion
+    {
+        get => _major ??= tool.MajorVersion;
+        set => _major = value;
+    }
+    private int? _major;
+
+    /// <summary>
+    /// Command line for a run. Resuming: hashcat 7 re-ran the command line stored in the .restore file
+    /// (<c>--restore</c>). hashcat 8 no longer does (CVE-2026-68766; <c>--restore</c> only prints it): the
+    /// same command line is given again with <c>--restore-position</c>, which takes only the position
+    /// from the file. The request carries the same attack, so the arguments are rebuilt from it.
+    /// </summary>
     public List<string> BuildArguments(RunRequest r)
     {
         string restore = RestoreFile(r.SessionDir, r.SessionName);
-        if (r.Restore)
+        if (r.Restore && HashcatMajorVersion is > 0 and < 8)
             return ["--session", r.SessionName, "--restore", "--restore-file-path", restore];
 
         var s = r.Settings;
@@ -81,6 +98,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
             a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         a.AddRange(HwmonArguments(s, r.Guard));
+        if (r.Restore) a.Add("--restore-position");
         return a;
     }
 
@@ -145,6 +163,7 @@ public sealed class HashcatRunner(HashcatTool tool)
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
         r.VolumeCredentials?.ValidateUnchanged();
+        HashcatKernels.EnsureFor(tool, r.Mode);
         var args = BuildArguments(r);
         string outFile = OutFile(r.SessionDir, r.SessionName);
         if (!r.Restore && File.Exists(outFile)) File.Delete(outFile);

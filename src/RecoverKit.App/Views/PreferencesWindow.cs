@@ -220,7 +220,8 @@ public sealed class PreferencesWindow : Window
         var duty = L.Grid("Auto,Auto", columnSpacing: 12);
         duty.Put(L.Text("Let the GPU work"), 0, 0);
         duty.Put(_duty, 0, 1);
-        var note = L.Text("Workload sets how big each piece of GPU work is: lower keeps the desktop responsive. " +
+        var note = L.Text("Workload sets how big each piece of GPU work is: lower keeps the desktop responsive " +
+                          "(hashcat 8 ignores it and always uses the former level 3). " +
                           "Working only part of the time pauses hashcat in cycles of a minute, so the GPU idles in between: " +
                           "average power, heat and fan noise drop, and the attack takes correspondingly longer. " +
                           "On NVIDIA GPUs a real power limit can also be set (needs administrator rights).", dim: true, wrap: true);

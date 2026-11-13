@@ -36,10 +36,11 @@ public sealed class InstallException : Exception
 public sealed class HashcatInstaller
 {
     // Pinned, validated release. hashcat keeps every historical file at this stable URL.
-    public const string Version = "7.1.2";
-    public const string ArchiveUrl = "https://hashcat.net/files/hashcat-7.1.2.7z";
-    public const string ArchiveSha256 = "80db0316387794ce9d14ed376da75b8a7742972485b45db790f5f8260307ff98";
-    private const long ArchiveSize = 19682772;
+    // The same file is published on GitHub (releases/download/v8.0.0/hashcat-8.0.0.7z) with the same hash.
+    public const string Version = "8.0.0";
+    public const string ArchiveUrl = "https://hashcat.net/files/hashcat-8.0.0.7z";
+    public const string ArchiveSha256 = "9fa86e1bfd5dd898d3c83aa38a67b08db1ba5d2f5252dffa2af44a8c62585f49";
+    private const long ArchiveSize = 20350217;
 
     // Official standalone 7-Zip extractor (handles the BCJ2/LZMA2 archive). HTTPS from the vendor.
     private const string SevenZrUrl = "https://www.7-zip.org/a/7zr.exe";
@@ -214,9 +215,11 @@ public sealed class HashcatInstaller
         {
             if (Directory.Exists(staging)) Directory.Delete(staging, true);
             var src = new DirectoryInfo(bundleDir);
-            // Runtime output of an earlier use (should never be in a bundle) is not copied.
-            static bool Skip(string rel) => rel is "kernels" or "hashcat.log" or "hashcat.dictstat2" or "hashcat.pid"
-                                            || rel.StartsWith("kernels" + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            // Runtime output of an earlier use (should never be in a bundle) is not copied: kernel caches
+            // (kernels/ in hashcat 7, cache/ in hashcat 8), logs, dictstat and pid files.
+            static bool Skip(string rel) => rel is "kernels" or "cache" or "hashcat.log" or "hashcat.dictstat2" or "hashcat.pid"
+                                            || rel.StartsWith("kernels" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                                            || rel.StartsWith("cache" + Path.DirectorySeparatorChar, StringComparison.Ordinal);
             var files = src.EnumerateFiles("*", SearchOption.AllDirectories)
                 .Select(f => (File: f, Rel: Path.GetRelativePath(src.FullName, f.FullName)))
                 .Where(x => !Skip(x.Rel)).ToList();

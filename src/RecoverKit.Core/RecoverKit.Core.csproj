@@ -25,6 +25,8 @@
     <EmbeddedResource Include="Attacks\DefaultScenarios.txt" LogicalName="RecoverKit.DefaultScenarios.txt" />
     <EmbeddedResource Include="Attacks\Resources\SmallEnglish.txt" LogicalName="RecoverKit.SmallEnglish.txt" />
     <EmbeddedResource Include="Attacks\Resources\MediumEnglish.txt" LogicalName="RecoverKit.MediumEnglish.txt" />
+    <!-- Replacement hashcat kernels (HashcatKernels), written into hashcat's OpenCL folder at run time. -->
+    <EmbeddedResource Include="Hashcat\Kernels\*.cl" LogicalName="RecoverKit.Kernels.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

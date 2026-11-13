@@ -74,9 +74,13 @@ public sealed partial class HashcatTool
     {
         string exeName = OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
         var candidates = new List<string>();
-        if (!string.IsNullOrWhiteSpace(configured)) candidates.Add(configured);
-        if (OperatingSystem.IsMacOS())
-            candidates.Add(Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName));
+        // A configured path to an older copy that RecoverKit itself installed (engines/hashcat-7.1.2)
+        // gives way to the pinned version once that is installed too.
+        string pinned = Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName);
+        if (!string.IsNullOrWhiteSpace(configured) && !(IsOlderManagedCopy(configured, enginesDir) && File.Exists(pinned)))
+            candidates.Add(configured);
+        if (OperatingSystem.IsMacOS() || File.Exists(pinned))
+            candidates.Add(pinned);
         // hashcat writes into its own folder, so the read-only copy inside the app bundle is skipped.
         string? bundle = OperatingSystem.IsMacOS() ? HashcatInstaller.FindBundle(baseDir) : null;
         // Next to the application, and in the per-user engines folder a download installs into.
@@ -104,6 +108,62 @@ public sealed partial class HashcatTool
         }
         catch (IOException) { }
         return new HashcatTool(hit);
+    }
+
+    /// <summary>
+    /// True when <paramref name="exe"/> lies in a hashcat-&lt;version&gt; folder of the engines folder (a copy
+    /// RecoverKit downloaded or copied) whose version is not the pinned <see cref="HashcatInstaller.Version"/>.
+    /// </summary>
+    internal static bool IsOlderManagedCopy(string exe, string enginesDir)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(exe));
+            if (dir is null || !string.Equals(Path.GetDirectoryName(dir), Path.GetFullPath(enginesDir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+                return false;
+            var name = Path.GetFileName(dir);
+            return name.StartsWith("hashcat-", StringComparison.Ordinal) && name != "hashcat-" + HashcatInstaller.Version;
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return false; }
+    }
+
+    /// <summary>True when this is an older copy in the engines folder: offer the download of the pinned version.</summary>
+    public bool IsOutdatedManagedCopy => IsOlderManagedCopy(Exe, Path.Combine(Settings.AppDataDir, "engines"));
+
+    private int? _major;
+
+    /// <summary>
+    /// hashcat's major version from <c>--version</c> (v8.0.0 -> 8), cached; 0 when it cannot be read.
+    /// hashcat 8 no longer runs the command stored in a restore file (see <see cref="HashcatRunner.BuildArguments"/>).
+    /// </summary>
+    public int MajorVersion
+    {
+        get
+        {
+            if (_major is int m) return m;
+            int v = 0;
+            try
+            {
+                var psi = StartInfo(["--version"]);
+                using var p = Process.Start(psi);
+                if (p is not null)
+                {
+                    var o = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(20_000);
+                    v = ParseMajorVersion(o);
+                }
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { }
+            _major = v;
+            return v;
+        }
+        set => _major = value;
+    }
+
+    internal static int ParseMajorVersion(string versionOutput)
+    {
+        var m = Regex.Match(versionOutput, @"v?(\d+)\.\d+");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
     }
 
     public ProcessStartInfo StartInfo(IEnumerable<string> args, bool redirectStdin = false)
@@ -182,7 +242,7 @@ public sealed partial class HashcatTool
             var api = ApiHeader().Match(l);
             if (api.Success) { backend = api.Groups[1].Value; backendVersion = ""; continue; }
             var ver = Field().Match(l);
-            if (ver.Success && ver.Groups[1].Value is "CUDA.Version" or "HIP.Version" or "Metal.Version" or "Version" && !lines[Math.Max(0, i - 1)].Contains("Backend Device"))
+            if (ver.Success && ver.Groups[1].Value is "CUDA.Version" or "HIP.Version" or "Metal.Version" or "Metal.Runtime.Version" or "Version" && !lines[Math.Max(0, i - 1)].Contains("Backend Device"))
             {
                 if (backendVersion == "") backendVersion = ver.Groups[2].Value.Trim();
             }
@@ -270,6 +330,7 @@ public sealed partial class HashcatTool
     /// <summary>Benchmarks one mode; returns total H/s over all devices.</summary>
     public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct)
     {
+        HashcatKernels.EnsureFor(this, mode);
         var args = new List<string> { "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
         args.AddRange(deviceArgs);
         var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct);

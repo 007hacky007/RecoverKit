@@ -593,6 +593,8 @@ public sealed partial class MainWindow : Window
                 Line($"No compatible GPU devices detected. Passwords are recovered on the processor ({threads} threads).", Palette.DimBrush);
             else if (gpus.Count == 0) NoDevicesNotice();
             foreach (var d in deviceLines) Line(d, Palette.DimBrush);
+            if (_hashcat.IsOutdatedManagedCopy)
+                Notice($"This is an older hashcat. Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
         }
         catch (Exception ex) when (ex is TimeoutException or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
