@@ -110,9 +110,12 @@ lower managed baseline. Use the paired measurements to compare implementations.
 | Native ARM CRC, eight streams (after) | **19.60** | **155.2** | **1.46x** |
 
 ARM CRC is the default on Apple silicon with CRC32 instructions; native NEON is the ARM fallback.
-x86 stays managed until measured there. Native AVX2 and AVX-512 share their round source and use
-CRC gathers and 32-bit multiplies. Both compile into the Windows DLL; neither executed here.
-Rosetta on this Mac advertised no AVX2 and ran only the native scalar differential test.
+x86 stays managed. Native AVX2 and AVX-512 share their round source and use CRC gathers and 32-bit
+multiplies. On the Windows VM (Xeon E5-2620 v4, 8 vCPU, `bench-native --mode 17210 --seconds 8`,
+two alternating runs each) native AVX2 lost to the managed AVX2 kernel: 341 and 345 M/s against
+425 and 406 M/s (native scalar: 164 M/s); a brute-force run with the native AVX2 path forced found
+the password. AVX-512 compiles into the Windows DLL but has not run on real hardware; it is opt-in
+(`RECOVERKIT_ZIP_PATH=avx512`) until measured on an AVX-512 CPU.
 
 The native loop receives keys after the shared prefix from the existing managed cache. Several
 independent candidates hide the CRC/key-update dependency chain. The final header byte needs no
