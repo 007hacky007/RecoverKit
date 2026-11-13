@@ -86,17 +86,22 @@ public sealed class ZipLargeEntryTests : IDisposable
         AssertModuleAccepts(target.HashLines, 0);
     }
 
-    [Fact]
-    public void EntriesBeyond64MiBCanBeExtractedWithoutEmbeddingThem()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EntriesBeyond64MiBCanBeExtractedWithoutEmbeddingThem(bool withSmallEntry)
     {
         // A sparse synthetic payload tests file-size handling without allocating or encrypting 65 MiB.
-        byte[] original = ZipCryptoSample.Archive([new("large.bin", RandomData(400_000), false)], "ab1"u8, new Random(7));
+        ZipCryptoSample.Entry large = new("large.bin", RandomData(400_000), false);
+        byte[] original = ZipCryptoSample.Archive(withSmallEntry
+            ? [new("small.txt", "small"u8.ToArray(), false), large] : [large], "ab1"u8, new Random(7));
         const int encryptedLength = 65 * 1024 * 1024;
         int directory = (int)BitConverter.ToUInt32(original, original.Length - 6);
         byte[] tail = original[directory..];
-        BitConverter.TryWriteBytes(tail.AsSpan(20), encryptedLength);
-        BitConverter.TryWriteBytes(tail.AsSpan(24), encryptedLength - 12);
-        int dataOffset = 30 + "large.bin".Length;
+        int largeRecord = withSmallEntry ? 46 + "small.txt".Length : 0;
+        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 20), encryptedLength);
+        BitConverter.TryWriteBytes(tail.AsSpan(largeRecord + 24), encryptedLength - 12);
+        int dataOffset = (int)BitConverter.ToUInt32(tail, largeRecord + 42) + 30 + "large.bin".Length;
         int newDirectory = dataOffset + encryptedLength;
         BitConverter.TryWriteBytes(tail.AsSpan(tail.Length - 6), newDirectory);
         string path = Path.Combine(_dir, "sparse.zip");
@@ -108,7 +113,14 @@ public sealed class ZipLargeEntryTests : IDisposable
         }
         var detection = new Detection { FilePath = path };
         using (var file = File.OpenRead(path)) ZipExtractor.Extract(file, detection);
-        Assert.Equal(encryptedLength, detection.Target!.ZipPartial!.CompressedLength);
+        if (withSmallEntry)
+        {
+            var payload = detection.Target!.StayZip!;
+            Assert.Equal(2, payload.Entries.Count);
+            Assert.Equal(encryptedLength, payload.Entries.Single(e => e.Name == "large.bin").CompSize);
+            Assert.Null(detection.Target.ZipPartial); // the small entry remains the normal password target
+        }
+        else Assert.Equal(encryptedLength, detection.Target!.ZipPartial!.CompressedLength);
         AssertModuleAccepts(detection.Target.HashLines, 0);
     }
 
