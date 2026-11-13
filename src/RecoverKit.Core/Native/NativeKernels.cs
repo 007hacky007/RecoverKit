@@ -144,7 +144,7 @@ public static class NativeKernels
     /// Measures a kernel's speed (candidates/s) on all threads with a mask that does not contain the
     /// password, after a short warm-up.
     /// </summary>
-    public static double Benchmark(int mode, int threads, TimeSpan duration, CancellationToken ct = default, int length = 0)
+    public static double Benchmark(int mode, int threads, TimeSpan duration, CancellationToken ct = default, int length = 0, ThreadPriority priority = ThreadPriority.Normal)
     {
         if (!BenchmarkHashes.TryGetValue(mode, out var hash) || TryCreate(Math.Abs(mode), hash) is not { } kernel) return 0;
         // Seven characters (like hashcat's example password) from upper-case + digits + specials: never
@@ -154,7 +154,7 @@ public static class NativeKernels
         var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", Math.Clamp(length, 3, 16)))])!;
         var started = Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = ThreadPriority.Normal, ProgressInterval = TimeSpan.FromSeconds(0.5) };
+        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = priority, ProgressInterval = TimeSpan.FromSeconds(0.5) };
         // Average rate between the end of a one-second warm-up and the end of the run.
         double t0 = 0, t1 = 0;
         long d0 = -1, d1 = 0;

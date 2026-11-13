@@ -15,6 +15,8 @@ public sealed class PreferencesWindow : Window
 {
     private readonly Settings _s;
     private readonly DeviceStrategy _loadedStrategy;
+    private bool _threadsEdited;
+    private bool _strategyEdited;
     private readonly CheckBox _automaticCalibration = Check("Measure the fastest method automatically");
     private readonly TextBlock _profileStatus = L.Text("", dim: true, wrap: true);
     private readonly HashcatTool? _hashcat;
@@ -116,6 +118,8 @@ public sealed class PreferencesWindow : Window
         root.Children.Add(tabs);
         Content = root;
         LoadValues();
+        _maxThreads.ValueChanged += (_, _) => _threadsEdited = true;
+        _strategy.SelectionChanged += (_, _) => _strategyEdited = true;
         // Apply stays disabled until something changes.
         TrackChanges(tabs, () => _apply.IsEnabled = true);
     }
@@ -514,7 +518,8 @@ public sealed class PreferencesWindow : Window
     private void Apply()
     {
         _s.Strategy = (DeviceStrategy)Math.Max(0, _strategy.SelectedIndex);
-        if (_s.Strategy != _loadedStrategy) _s.PerformanceStrategyExplicit = true;
+        if (_strategyEdited || _s.Strategy != _loadedStrategy) _s.PerformanceStrategyExplicit = true;
+        if (_threadsEdited) _s.PerformanceThreadsExplicit = true;
         _s.AutomaticPerformanceCalibration = _automaticCalibration.IsChecked == true;
         _s.Priority = (ProcessPriority)Math.Max(0, _priority.SelectedIndex);
         _s.MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue();

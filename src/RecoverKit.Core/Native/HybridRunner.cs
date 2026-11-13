@@ -96,9 +96,10 @@ public sealed class HybridRunner
     public static HybridPlan? Plan(int mode, string hashLines, PreparedAttack attack, Settings settings,
         IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null)
     {
+        if (settings.PerformanceChoice?.Engine is "cpu" or "gpu") return null;
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
-        if (CpuAddsTooLittle(settings, devices, mode)) return null;
+        if (settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode)) return null;
         if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials) is not { } p) return null;
         // Every length must fit in 64 bits (hashcat's counters) and in hashcat's eight custom charsets.
         for (int l = p.Space.MinLength; l <= p.Space.MaxLength; l++)
@@ -130,6 +131,10 @@ public sealed class HybridRunner
     /// </summary>
     public static int CpuThreads(Settings s, IReadOnlyList<BackendDevice>? devices, bool hashcatRunning, IReadOnlyCollection<int>? excluded = null)
     {
+        if (s.MaxCpuThreads == 0 && s.PerformanceChoice is { Engine: "hybrid", Threads: > 0 } choice)
+            return Math.Clamp(choice.Threads, 1, Environment.ProcessorCount);
+        if (!hashcatRunning && s.MaxCpuThreads == 0 && s.CpuPerformanceChoice is { Threads: > 0 } cpuChoice)
+            return Math.Clamp(cpuChoice.Threads, 1, Environment.ProcessorCount);
         int total = s.MaxCpuThreads > 0 ? Math.Min(s.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
         if (!hashcatRunning || s.Strategy == DeviceStrategy.GpuAndCpu) return Math.Max(1, total);
         int gpus = Math.Max(1, HashcatRunner.ActiveGpus(s, devices).Count(d => excluded?.Contains(d.Id) != true));

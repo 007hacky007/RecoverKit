@@ -93,13 +93,21 @@ public class GpuProfileSelectionTests
     }
 
     [Fact]
-    public void WrongModeLengthOrFamilyCannotSelectAnAlias()
+    public void WrongModeOrFamilyCannotSelectAnAlias()
     {
         BackendDevice[] devices = [Device(1, "a-cuda"), Device(2, "a-opencl", 1, true)];
-        var wrongLength = Choice("a-cuda", "a-opencl"); wrongLength.Length = 5;
         var wrongMode = Choice("a-cuda", "a-opencl"); wrongMode.Mode = 17210;
         var wrongFamily = Choice("another-gpu", "a-opencl");
-        var profile = new PerformanceProfile { Decisions = [wrongLength, wrongMode, wrongFamily] };
+        var profile = new PerformanceProfile { Decisions = [wrongMode, wrongFamily] };
         Assert.Null(GpuProfileSelection.ForAttack(profile, new Settings(), devices, 13000, 7));
     }
+    [Fact]
+    public void BackendChoiceAppliesToOtherMaskLengthsOfTheSameFormat()
+    {
+        BackendDevice[] devices = [Device(1, "a-cuda"), Device(2, "a-opencl", 1, true)];
+        var measured = Choice("a-cuda", "a-opencl"); measured.Length = 5;
+        var profile = new PerformanceProfile { Decisions = [measured] };
+        Assert.Equal(["a-opencl"], GpuProfileSelection.ForAttack(profile, new Settings(), devices, 13000, 7)!.DeviceKeys);
+    }
+
 }

@@ -47,7 +47,7 @@ public class PerformanceProfileTests
     [Fact]
     public void ExplicitChoicesAndMissingDeviceWin()
     {
-        var d = new PerformanceDecision { Mode=17210,Engine="cpu",Threads=4,DeviceKeys=["missing"] };
+        var d = new PerformanceDecision { Domain="execution",Mode=17210,Engine="cpu",Threads=4,DeviceKeys=["missing"] };
         Assert.Null(PerformanceProfiles.Apply(d,new Settings(),[]));
         d.DeviceKeys=[];
         Assert.Null(PerformanceProfiles.Apply(d,new Settings{Strategy=DeviceStrategy.FastGpu},[]));

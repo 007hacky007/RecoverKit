@@ -20,6 +20,7 @@ public static class MatchedSpeedProbe
         copy.PerformanceChoice = settings.PerformanceChoice;
         copy.CpuPerformanceChoice = settings.CpuPerformanceChoice;
         copy.GpuPerformanceChoice = settings.GpuPerformanceChoice;
+        copy.ZipGpuPerformanceChoice = settings.ZipGpuPerformanceChoice;
         copy.DontUsePasswordCache = true;
         copy.SessionsDir = directory;
         var attack = new PreparedAttack { Description = "Synthetic matched speed measurement" };
@@ -54,7 +55,7 @@ public static class MatchedSpeedProbe
         try
         {
             var request = CreateRequest(mode, settings, devices, directory, duration,
-                settings.OptimizedKernels && (settings.GpuPerformanceChoice?.Optimized ?? settings.PerformanceChoice?.Optimized) != false
+                settings.OptimizedKernels && (settings.PerformanceChoice?.Optimized ?? settings.GpuPerformanceChoice?.Optimized) != false
                 && (await tool.ModeInfoAsync(mode))?.HasOptimizedKernel == true);
             DebugLog.RegisterHashes(HashLine(mode));
             await File.WriteAllTextAsync(request.HashFile, HashLine(mode) + "\n", ct);

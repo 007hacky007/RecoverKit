@@ -6,6 +6,7 @@ using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Diagnostics;
 
 namespace RecoverKit.Core;
 
@@ -258,14 +259,37 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             for (int mi = startMode; mi < state.Modes.Count; mi++)
             {
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
-                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, credentials: target.VolumeCredentials);
+                // Apply measured choices to this step only. Preferences and their explicit limits stay intact.
+                var runSettings = settings;
+                var mask = Native.MaskSpace.FromHashcatArgs(attack.Args);
+                int measuredLength = mask?.MaxLength ?? 0;
+                if (target.VolumeCredentials is null)
+                {
+                    try
+                    {
+                        var profile = resume is null && measuredLength > 0
+                            ? await PerformanceCalibration.EnsureAsync(tool, settings, Devices ?? [], mode, measuredLength,
+                                (double)attack.Keyspace, message => Log?.Invoke(LogKind.Info, message), ct)
+                            : PerformanceProfiles.Load();
+                        PerformanceProfiles.Invalidate(profile, PerformanceProfiles.CpuFingerprint, PerformanceProfiles.GpuFingerprint(tool, Devices ?? []));
+                        runSettings = ProfileSettings.ForAttack(settings, profile, Devices ?? [], mode, measuredLength, target.HashLines, (double)attack.Keyspace, maskAttack: mask is not null);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    { Log?.Invoke(LogKind.Warning, "Performance profile is unavailable; using preferences."); }
+                }
+                if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex)
+                    runSettings = ProfileSettings.PreserveResumeEngine(runSettings, mode, settings.SessionsDir, resume.HashcatSession);
+                using var cpuSelection = ProfileSettings.CpuSelection(runSettings, mode);
+                var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, credentials: target.VolumeCredentials);
                 // With a GPU: hashcat on the GPUs and the built-in engine on the CPU, each on its own part.
                 var hybridPlan = nativePlan is null && pmkTable is null
-                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, settings, Devices, target.VolumeCredentials) : null;
+                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, target.VolumeCredentials) : null;
                 if (nativePlan is null && hybridPlan is null && settings.HybridCpuGpu && Native.HybridRunner.CpuAddsTooLittle(settings, Devices, mode)
-                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is not null)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is not null)
                     Log?.Invoke(LogKind.Info, $"The CPU added less than a quarter of the GPU's speed in the last hybrid attack on this format, " +
                                               "and on an integrated GPU it slows the GPU down: hashcat runs alone.");
+                if (runSettings.PerformanceChoice is not null || runSettings.CpuPerformanceChoice is not null || runSettings.GpuPerformanceChoice is not null || runSettings.ZipGpuPerformanceChoice is not null)
+                    Log?.Invoke(LogKind.Info, ProfileSettings.Explain(runSettings, Devices ?? [], nativePlan is not null, hybridPlan is not null));
                 string restoreFile = nativePlan is not null
                     ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
                     : hybridPlan is not null
@@ -273,6 +297,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                         : HashcatRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "");
                 bool restore = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
                                && File.Exists(restoreFile);
+                if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex && !restore)
+                    Log?.Invoke(LogKind.Warning, "The saved engine cannot resume this step with the current settings; starting the step again.");
                 string session = restore ? resume!.HashcatSession : $"rk_{key}_{si}_{mi}";
 
                 StepStarted?.Invoke(si, state.Steps.Count, attack.Description + (state.Modes.Count > 1 ? $" [mode {mode}]" : ""), attack.Keyspace);
@@ -287,7 +313,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 state.Restorable = attack.CanRestore;
                 state.Save(settings);
 
-                bool optimized = settings.OptimizedKernels && CanUseOptimizedKernel(mode, spec)
+                bool optimized = runSettings.OptimizedKernels && (runSettings.PerformanceChoice?.Optimized ?? runSettings.GpuPerformanceChoice?.Optimized) != false && CanUseOptimizedKernel(mode, spec)
                                  && (await tool.ModeInfoAsync(mode))?.HasOptimizedKernel == true;
 
                 var request = new RunRequest
@@ -298,11 +324,11 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     SessionName = session,
                     SessionDir = settings.SessionsDir,
                     Restore = restore,
-                    Settings = settings,
+                    Settings = runSettings,
                     UseOptimizedKernel = optimized && !restore,
                     VolumeCredentials = target.VolumeCredentials,
                     PasswordCachePath = potfile,
-                    Guard = HashcatRunner.GuardFor(settings, Devices),
+                    Guard = HashcatRunner.GuardFor(runSettings, Devices),
                 };
                 var result = nativePlan is { } np
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)
@@ -312,7 +338,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
 
                 // hashcat refuses some modes on Apple GPUs (e.g. PKZIP 17200 family): run the built-in CPU engine instead.
                 if (nativePlan is null && hybridPlan is null && result.Outcome == RunOutcome.Error && HashcatRunner.IsGpuRefusal(result.Error, mode)
-                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is { } fallback)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is { } fallback)
                 {
                     Log?.Invoke(LogKind.Warning, $"hashcat cannot run hash mode {mode} on this GPU; using the built-in CPU engine instead.");
                     request = request with { Restore = false };

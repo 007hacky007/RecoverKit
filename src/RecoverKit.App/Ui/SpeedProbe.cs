@@ -43,7 +43,7 @@ internal static class SpeedProbe
         IReadOnlyList<BackendDevice> devices, int mode, TimeSpan nativeDuration, CancellationToken ct)
     {
         var s = ExecutionSettings(preferences, devices, mode, hashcat);
-        using var selection = ProfileSettings.ZipSelection(s, mode);
+        using var selection = ProfileSettings.CpuSelection(s, mode);
         if (NativeEligible(s, devices, mode))
         {
             int measured = s.PerformanceChoice?.Engine == "cpu" ? s.PerformanceChoice.Threads : s.CpuPerformanceChoice?.Threads ?? 0;
