@@ -1,0 +1,2 @@
+tests/RecoverKit.Tests/Fixtures/** -text
+*.pdf binary
