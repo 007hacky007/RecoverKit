@@ -40,7 +40,7 @@ internal static class GpuZipCorrectness
             }
             string hash = Path.Combine(dir, "fixture.hash"), output = Path.Combine(dir, "matches.out");
             await File.WriteAllTextAsync(hash, target.HashLines + "\n", ct);
-            var (code, _, _) = await tool.RunAsync(["-m", sample.Mode.ToString(), "-a", "3", hash, "?1?1CDABCD", "-1", "ABCD", "-d", device.Id.ToString(), "--keep-guessing", "--quiet", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-gpu-correctness", "-o", output, "--outfile-format", "2"], TimeSpan.FromMinutes(3), ct: ct);
+            var (code, _, _) = await tool.RunAsync(["-m", sample.Mode.ToString(), "-a", "3", hash, "?1?1CDABCD", "-1", "ABCD", "-d", device.Id.ToString(), "--keep-guessing", "--quiet", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-gpu-correctness", "-o", output, "--outfile-format", "2"], TimeSpan.FromMinutes(3), ct: ct, redactOutput: true);
             if (code is not (0 or 1)) return false;
             var actual = File.Exists(output) ? File.ReadAllLines(output).Where(s => s.Length > 0) : [];
             return expected.SetEquals(actual);

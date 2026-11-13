@@ -59,7 +59,7 @@ public sealed class DetailedBenchmarkWindow : Window
         {
             var box = new CheckBox
             {
-                Content = new TextBlock { Text = $"{section.Title} - about {section.EstimatedMinutes:N0} min", TextWrapping = TextWrapping.Wrap },
+                Content = new TextBlock { Text = section.EstimatedMinutes < 1 ? $"{section.Title} - under 1 min" : $"{section.Title} - about {section.EstimatedMinutes:N0} min", TextWrapping = TextWrapping.Wrap },
                 IsChecked = true,
             };
             _sections.Add((section.Id, box));

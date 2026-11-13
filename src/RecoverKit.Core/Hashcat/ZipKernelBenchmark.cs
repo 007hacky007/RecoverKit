@@ -24,6 +24,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
 
     /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
     public int Seconds { get; init; } = 10;
+    public ProcessPriority? Priority { get; init; }
 
     /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
     public string Mask { get; init; } = "?a?a?a?a?a?a?a?a";
@@ -77,6 +78,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
                 {
                     ct.ThrowIfCancellationRequested();
                     var file = Path.Combine(dir, $"{s.Mode}-{rows.Count}.hash");
+                    DebugLog.RegisterHashes(s.HashLine);
                     await File.WriteAllTextAsync(file, s.HashLine + "\n", ct);
                     HashcatKernels.Restore(tool.Directory);
                     Progress?.Invoke($"Device #{dev.Id}, {s.Label}: hashcat's kernel ...");
@@ -114,9 +116,9 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             "--runtime", Seconds.ToString(), "--status", "--status-json", "--status-timer", "1",
             // ZipCrypto has false positives: about one candidate in 2^39 passes the check byte and the
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
-            "--keep-guessing", "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
+            "--keep-guessing", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
-        var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
+        var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
         double speed = ParseSpeed(code, o);
         if (speed > 0) return speed;
         var why = (o + "\n" + e).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('{')).TakeLast(3);

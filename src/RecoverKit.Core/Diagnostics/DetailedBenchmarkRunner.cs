@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Text.RegularExpressions;
-using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Native;
 
@@ -36,7 +34,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
     public async Task<DiagnosticReport> RunAsync(IEnumerable<string>? sections = null, IProgress<DiagnosticProgress>? progress = null, CancellationToken ct = default)
     {
         var selected = SelectSections(sections);
-        var report = new DiagnosticReport();
+        var report = new DiagnosticReport { CpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "cpu"), GpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "gpu") };
         var clock = Stopwatch.StartNew();
         string current = "", step = "Preparing";
         double estimatedMinutes = Sections.Where(s => selected.Contains(s.Id)).Sum(s => s.EstimatedMinutes);
@@ -76,12 +74,13 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                 try
                 {
                     if (section == "system") { await PrepareGpuAsync(); await SystemAsync(local, report, ct); }
-                    else if (section == "cpu") await CpuDiagnostics.RunAsync(report.Measurements.Add, Update, ct);
+                    else if (section == "cpu") await CpuDiagnostics.RunAsync(report.Measurements.Add, Update, ct, settings);
                     else
                     {
                         if (tool is null) throw new InvalidOperationException("hashcat is unavailable.");
                         await PrepareGpuAsync();
                         if (devices.All(d => !d.IsGpu)) throw new InvalidOperationException("No GPU devices were detected.");
+                        if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) throw new InvalidOperationException("GPU tests skipped: every physical GPU is disabled.");
                         if (!await PowerLimitSatisfiedAsync()) throw new InvalidOperationException("GPU tests skipped: the configured power limit is not already active. Set it before measuring; diagnostics never raises power limits.");
                         if (section is "gpu" or "zip" && (settings.GpuTempGuard || settings.GpuDutyPercent < 100))
                             throw new InvalidOperationException("GPU benchmark skipped: hashcat benchmark output cannot enforce the pause/duty guard. Finite hybrid jobs retain the configured guard.");
@@ -120,6 +119,9 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
     private async Task SystemAsync(HashcatTool? systemTool, DiagnosticReport report, CancellationToken ct)
     {
         report.System["RecoverKit version"] = typeof(DetailedBenchmarkRunner).Assembly.GetName().Version?.ToString() ?? "unknown";
+        report.System["Build configuration"] = PerformanceProfiles.BuildConfiguration;
+        report.System[".NET runtime"] = Environment.Version.ToString();
+        report.System["Native library API"] = NativeKernels.NativeApiVersion.ToString();
         report.System["OS"] = RuntimeInformation.OSDescription;
         report.System["Architecture"] = RuntimeInformation.ProcessArchitecture.ToString();
         report.System["CPU"] = SystemFacts.CpuName();
@@ -130,7 +132,15 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
         report.System["GPU temperature guard"] = settings.GpuTempGuard ? $"active, {settings.GpuTempLimit} C" : "off";
         report.System["GPU duty percent"] = settings.GpuDutyPercent.ToString();
         report.System["GPU power limit"] = settings.GpuPowerLimit ? "requested; tests run only if already active" : "off; current hardware limits retained";
-        report.System["CPU priority"] = settings.Priority.ToString();
+        report.System["Strategy preference"] = settings.Strategy.ToString();
+        report.System["Built-in CPU engine enabled"] = settings.UseNativeCpuEngine.ToString();
+        report.System["Hybrid enabled"] = settings.HybridCpuGpu.ToString();
+        report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
+        report.System["Optimized kernels enabled"] = settings.OptimizedKernels.ToString();
+        report.System["GPU workload"] = settings.Workload.ToString();
+        report.System["Priority preference"] = settings.Priority.ToString();
+        report.System["Diagnostics process priority"] = Process.GetCurrentProcess().PriorityClass.ToString();
+        report.System["CPU worker priority"] = NativeRunner.ThreadPriorityFor(settings.Priority).ToString();
         report.System["NVRTC"] = NvrtcRuntime.Locate() is not null ? "private installation present" : devices.Any(d => d.Backend == "CUDA") ? "CUDA backend available" : "private installation absent; CUDA not detected";
         report.System["NVIDIA telemetry before"] = Telemetry();
         report.System["Power plan"] = OperatingSystem.IsWindows() ? await ReadCommandAsync("powercfg", ["/getactivescheme"], ct) : "not applicable";
@@ -143,29 +153,50 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
         report.System["GPU drivers"] = string.Join("; ", versions);
     }
 
+    private IEnumerable<BackendDevice> AllowedGpuDevices()
+    {
+        var active = HashcatRunner.ActiveGpus(settings, devices).Select(d => GpuProfileSelection.FamilyKey(d.Key, devices)).ToHashSet();
+        return devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d) && active.Contains(GpuProfileSelection.FamilyKey(d.Key, devices)));
+    }
+
     private async Task GpuAsync(HashcatTool local, DiagnosticReport report, Action<string> progress, CancellationToken ct)
     {
-        foreach (var dev in devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d)))
+        foreach (var dev in AllowedGpuDevices())
         foreach (int mode in Modes)
-        foreach (bool pure in mode == 12500 ? new[] { false, true } : new[] { false })
+        foreach (bool pure in mode == 12500 && settings.OptimizedKernels ? new[] { false, true } : new[] { !settings.OptimizedKernels })
         for (int repeat = 1; repeat <= 2; repeat++)
         {
             ct.ThrowIfCancellationRequested();
             string label = $"Device {dev.Id} {dev.Backend}, mode {mode}, {(pure ? "pure" : "default")}, repeat {repeat}/2";
             progress(label);
             var clock = Stopwatch.StartNew();
-            var row = new DiagnosticMeasurement { Section = "gpu", Step = label, Mode = mode, Target = $"hashcat built-in example mode {mode}", Length = 7, Engine = "gpu", Variant = pure ? "pure" : "default", DeviceKey = dev.Key, Backend = dev.Backend, Repeat = repeat };
+            var row = new DiagnosticMeasurement { Section = "gpu", Step = label, Mode = mode, Target = $"hashcat built-in example mode {mode}", Length = 0, Engine = "gpu", Variant = pure ? "pure" : "default", DeviceKey = dev.Key, Backend = dev.Backend, Repeat = repeat };
             try
             {
+                if (mode is 17200 or 17210)
+                {
+                    HashcatKernels.EnsureFor(local, mode);
+                    row.Details["ZIP GPU kernel"] = HashcatKernels.Inspect(local.Directory) == HashcatKernels.State.Installed ? "replacement" : "hashcat original";
+                }
                 var args = new List<string> { pure ? "-B" : "-b", "-m", mode.ToString(), "-d", dev.Id.ToString(), "-w", settings.Workload.ToString(), "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-diagnostic-bench" };
-                var (code, output, error) = await local.RunAsync(args, TimeSpan.FromMinutes(4), ct: ct);
+                var (code, output, error) = await local.RunAsync(args, TimeSpan.FromMinutes(4), ct: ct, priority: settings.Priority, redactOutput: true);
                 var parsed = ParseBenchmark(output + "\n" + error);
                 row.Speed = parsed.Speed;
-                row.Details = parsed.Details;
+                foreach (var detail in parsed.Details) row.Details[detail.Key] = detail.Value;
                 // hashcat's benchmark uses its own self-test and optimized/pure example workload.
                 row.Correct = code == 0 && row.Speed > 0 && !Regex.IsMatch(output + error, "self-test.*(failed|error)", RegexOptions.IgnoreCase);
-                if (!row.Correct) row.Error = $"No successful self-tested benchmark rate (exit {code}).";
-                row.Details["Default"] = (!dev.IsSkippedAlias && !pure).ToString();
+                if (!row.Correct) row.Error = DiagnosticGpuError.Classify(output, error, code);
+                row.Details["Default"] = (!dev.IsSkippedAlias && pure == !settings.OptimizedKernels).ToString();
+                row.Details["Length source"] = "hashcat module benchmark metadata; not compared with CPU fixture rates";
+                var info = await local.ModeInfoAsync(mode);
+                row.Length = info?.BenchmarkLength ?? 0;
+                bool optimized = !pure && info?.HasOptimizedKernel == true;
+                row.Details["Optimized"] = optimized.ToString();
+                if (!row.Details.ContainsKey("Kernel"))
+                {
+                    row.Details["Kernel"] = optimized ? "optimized" : "pure";
+                    row.Details["Kernel type source"] = "module capabilities and requested benchmark option";
+                }
                 row.Details["Comparability"] = "Benchmark rate only; never added to CPU fixture rates or used to choose CPU versus GPU.";
             }
             catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested) { row.Error = SafeError(ex); }
@@ -194,14 +225,19 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
     {
         var samples = ZipKernelBenchmark.DefaultSamples();
         var checkedPaths = new Dictionary<string, bool>();
-        foreach (var device in devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d)))
+        foreach (var device in AllowedGpuDevices())
         foreach (var sample in samples)
         for (int repeat = 1; repeat <= 2; repeat++)
         {
             ct.ThrowIfCancellationRequested();
             var clock = Stopwatch.StartNew();
-            var bench = new ZipKernelBenchmark(local) { Seconds = Math.Clamp(Seconds, 3, 60) };
-            bench.Progress += _ => progress($"Device {device.Id} {device.Backend}, {sample.Label}, repeat {repeat}/2");
+            var bench = new ZipKernelBenchmark(local) { Seconds = Math.Clamp(Seconds, 3, 60), Priority = settings.Priority };
+            bench.Progress += message =>
+            {
+                if (!message.StartsWith("Device #", StringComparison.Ordinal)) return;
+                string variant = message.Contains("amplifier cache", StringComparison.Ordinal) ? "amplifier cache" : message.Contains("RecoverKit", StringComparison.Ordinal) ? "replacement" : "hashcat original";
+                progress($"Device {device.Id} {device.Backend}, {sample.Label}, {variant}, repeat {repeat}/2");
+            };
             try
             {
                 foreach (string variant in new[] { "hashcat", "replacement", "amplifier-cache" })
@@ -230,6 +266,11 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
     private async Task HybridAsync(HashcatTool local, string isolated, DiagnosticReport report, Action<string> progress, CancellationToken ct)
     {
         var physical = devices.Where(d => d.IsGpu && !d.IsSkippedAlias && !HashcatRunner.IsDisabled(settings, d)).ToList();
+        if (physical.Count == 0)
+        {
+            report.Measurements.Add(new() { Section = "hybrid", Step = "Device selection", Error = "Finite GPU and hybrid jobs skipped: every physical GPU is disabled." });
+            return;
+        }
         var groups = new List<List<BackendDevice>> { physical };
         if (physical.Any(d => d.IsIntegratedGpu) && physical.Any(d => !d.IsIntegratedGpu)) groups.Add(physical.Where(d => !d.IsIntegratedGpu).ToList());
         int limit = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
@@ -239,58 +280,35 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
             var hash = NativeKernels.BenchmarkHashes[mode];
             var kernel = NativeKernels.TryCreate(mode, hash);
             if (kernel is null) { report.Measurements.Add(new() { Section = "hybrid", Mode = mode, Step = "CPU kernel", Error = "Built-in kernel unavailable." }); continue; }
+            var correctness = await CpuDiagnosticWorker.CheckAsync(mode, mode == 17210 ? PerformanceProfiles.DefaultZipVariant() : "default", ct);
+            if (!correctness.Passed)
+            {
+                report.Measurements.Add(new() { Section = "hybrid", Mode = mode, Step = "CPU correctness FAIL", Engine = "cpu", Correct = false, Error = correctness.Error });
+                continue;
+            }
             int length = mode == 13000 ? 5 : 8;
-            var args = new[] { "-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", length)) };
-            var space = MaskSpace.FromHashcatArgs(args)!;
-            var attack = new PreparedAttack { Description = "Synthetic finite diagnostics job", Keyspace = space.Keyspace(length) };
-            attack.Args.AddRange(args);
-            string hashFile = Path.Combine(isolated, "finite.hash");
-            await File.WriteAllTextAsync(hashFile, hash + "\n", ct);
             foreach (var group in groups)
-            foreach (int count in new[] { 0, -1 }.Concat(workers))
+            foreach (int count in new[] { 0, -1 }.Concat(workers).Append(HybridRunner.CpuThreads(settings, group, true)).Distinct())
             for (int repeat = 1; repeat <= 2; repeat++)
             {
                 ct.ThrowIfCancellationRequested();
                 string engine = count == 0 ? "gpu" : count < 0 ? "cpu" : "hybrid";
-                string label = $"Mode {mode}, {engine}, {Math.Max(0, count)} workers, {group.Count} GPU(s), repeat {repeat}/2";
+                string label = $"Mode {mode}, {engine}, {(count < 0 ? limit : count)} workers, {(count < 0 ? 0 : group.Count)} GPU(s), repeat {repeat}/2";
                 progress(label);
-                var clone = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
-                clone.SessionsDir = isolated;
-                clone.DontUsePasswordCache = true;
-                clone.SpeedByMode.Clear(); clone.GpuSpeedByMode.Clear(); clone.CpuSpeedByMode.Clear(); clone.GpuStartupByMode.Clear();
-                clone.DisabledDeviceKeys = devices.Where(d => !group.Contains(d)).Select(d => d.Key).ToList();
-                clone.DisabledDevices = devices.Where(d => !group.Contains(d)).Select(d => d.Id).ToList();
-                clone.Strategy = count < 0 ? DeviceStrategy.CpuOnly : DeviceStrategy.GpuOnly;
                 var row = new DiagnosticMeasurement { Section = "hybrid", Step = label, Mode = mode, Target = "native synthetic fixture mode " + mode, Length = length, Engine = engine, Variant = count == 0 ? "gpu-default" : engine, Threads = count < 0 ? limit : count, DeviceKey = count < 0 ? "" : string.Join(";", group.Select(d => d.Key)), Backend = count < 0 ? "" : string.Join(";", group.Select(d => d.Backend)), Repeat = repeat, Details = new() { ["Mask"] = $"A-N, {length} characters", ["Metric"] = "complete candidates / whole-job elapsed", ["Finite"] = "true" } };
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromMinutes(3));
                 var clock = Stopwatch.StartNew();
                 try
                 {
-                    var request = new RunRequest { Mode = mode, HashFile = hashFile, Attack = attack, SessionName = "finite-diagnostics", SessionDir = isolated, Settings = clone, Guard = HashcatRunner.GuardFor(clone, group), UseOptimizedKernel = settings.OptimizedKernels && (await local.ModeInfoAsync(mode))?.HasOptimizedKernel == true };
-                    RunResult result;
-                    if (count < 0)
-                    {
-                        clone.MaxCpuThreads = limit;
-                        result = await new NativeRunner().RunAsync(kernel, space, hash, request, timeout.Token);
-                    }
-                    else if (count == 0)
-                    {
-                        result = await new HashcatRunner(local) { KnownDevices = group }.RunAsync(request, timeout.Token);
-                    }
-                    else
-                    {
-                        var hybrid = new HybridRunner { Devices = group, ThreadsOverride = count };
-                        result = await hybrid.RunAsync(new HybridPlan(kernel, space), hash, request, local, timeout.Token);
-                    }
-                    row.Correct = result.Outcome == RunOutcome.Exhausted;
-                    row.Speed = row.Correct ? (double)space.Keyspace(length) / clock.Elapsed.TotalSeconds : 0;
-                    if (!row.Correct) row.Error = $"Finite job did not exhaust the synthetic keyspace ({result.Outcome}); not eligible for selection.";
-                    if (result.LastStatus is { } status)
-                        foreach (var dev in status.Devices) row.Details[$"Engine speed {dev.Id} {dev.Type}"] = dev.Speed.ToString("F2", CultureInfo.InvariantCulture);
+                    row.Details["Default"] = (group.SequenceEqual(physical) && (settings.HybridCpuGpu ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
+                    var result = await FiniteDiagnosticWorker.ExecuteAsync(local, settings, group, mode, count, length, limit, ct);
+                    row.Correct = result.Correct;
+                    row.Speed = result.Speed;
+                    row.ElapsedSeconds = result.ElapsedSeconds;
+                    row.Error = result.Error;
+                    foreach (var detail in result.Details) row.Details[detail.Key] = detail.Value;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested) { row.Error = SafeError(ex); }
-                finally { row.ElapsedSeconds = clock.Elapsed.TotalSeconds; report.Measurements.Add(row); }
+                finally { if (row.ElapsedSeconds <= 0) row.ElapsedSeconds = clock.Elapsed.TotalSeconds; report.Measurements.Add(row); }
             }
         }
     }

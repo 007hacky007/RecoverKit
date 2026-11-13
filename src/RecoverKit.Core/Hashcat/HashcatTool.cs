@@ -58,6 +58,9 @@ public sealed class HashModeInfo
     public bool HasOptimizedKernel { get; init; }
     public int PasswordLenMax { get; init; }
     public string? ExampleHash { get; init; }
+    public string BenchmarkMask { get; init; } = "";
+    public string BenchmarkCharset1 { get; init; } = "";
+    public int BenchmarkLength => Native.MaskSpace.FromHashcatArgs(["-a", "3", "-1", BenchmarkCharset1, BenchmarkMask])?.MaxLength ?? 0;
 }
 
 /// <summary>Locates hashcat and runs its short informational commands.</summary>
@@ -225,15 +228,18 @@ public sealed partial class HashcatTool
     }
 
     /// <summary>Runs hashcat to completion and returns (exit code, stdout, stderr).</summary>
-    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default)
+    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default, ProcessPriority? priority = null, bool redactOutput = false)
     {
         var psi = StartInfo(args, stdin is not null);
         // --show prints recovered plaintexts: keep them out of the debug log.
-        bool redact = psi.ArgumentList.Contains("--show");
+        bool redact = redactOutput || psi.ArgumentList.Contains("--show") || psi.ArgumentList.Contains("--hash-info");
         int logId = DebugLog.ProcessStart(psi);
         var sw = Stopwatch.StartNew();
         using var p = new Process { StartInfo = psi };
         p.Start();
+        if (priority is { } selectedPriority && Native.NativeRunner.LowersProcessPriority)
+            try { p.PriorityClass = Native.NativeRunner.ProcessClassFor(selectedPriority); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
         var outTask = p.StandardOutput.ReadToEndAsync(ct);
         var errTask = p.StandardError.ReadToEndAsync(ct);
         if (stdin is not null)
@@ -252,7 +258,7 @@ public sealed partial class HashcatTool
         }
         var (o, e) = (await outTask, await errTask);
         DebugLog.ProcessText(logId, "stdout", o, redact);
-        DebugLog.ProcessText(logId, "stderr", e);
+        DebugLog.ProcessText(logId, "stderr", e, redact);
         DebugLog.ProcessExit(logId, p.ExitCode, sw.Elapsed);
         return (p.ExitCode, o, e);
     }
@@ -367,6 +373,8 @@ public sealed partial class HashcatTool
                 HasOptimizedKernel = e.TryGetProperty("kernel_type", out var kt) && kt.EnumerateArray().Any(x => x.GetString() == "optimized"),
                 PasswordLenMax = e.TryGetProperty("password_len_max", out var pl) ? pl.GetInt32() : 256,
                 ExampleHash = e.TryGetProperty("example_hash", out var ex) ? ex.GetString() : null,
+                BenchmarkMask = e.TryGetProperty("benchmark_mask", out var bm) ? bm.GetString() ?? "" : "",
+                BenchmarkCharset1 = e.TryGetProperty("benchmark_charset1", out var bc) ? bc.GetString() ?? "" : "",
             };
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or TimeoutException) { }
