@@ -9,11 +9,11 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 6;
+    private const int RequiredVersion = 7;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits are the ARMv8 Crypto Extensions.</summary>
     [Flags]
-    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256 }
+    public enum Feature { Avx2 = 1, ShaNi = 2, AesNi = 4, Neon = 8, ArmAes = 16, ArmSha1 = 32, ArmSha2 = 64, ArmSha512 = 128, ArmSha3 = 256, Avx512 = 512 }
 
     [LibraryImport(Lib, EntryPoint = "rk_version")] private static partial int Version();
     [LibraryImport(Lib, EntryPoint = "rk_features")] private static partial int FeaturesRaw();
@@ -45,6 +45,17 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_whirlpool_pbkdf2")]
     public static partial int WhirlpoolPbkdf2(byte* salt64, byte* pws, int len, int n, byte* out64);
+
+    /// <summary>PBKDF2-HMAC-SHA256 of n candidates at pws + i * stride (lengths in lens, or stride each when null).</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256")]
+    public static partial int Pbkdf2Sha256(byte* pws, int stride, int* lens, int n, byte* salt, int saltLen, uint iterations, byte* dk, int dkLen);
+
+    /// <summary>Candidates per group of the PBKDF2-SHA256 path in use (16 AVX-512, 8 AVX2, NEON or ARMv8 SHA-256, 1 scalar).</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_lanes")]
+    public static partial int Pbkdf2Sha256Lanes();
+
+    [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
+    public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);
 
     [LibraryImport(Lib, EntryPoint = "rk_bench")]
     public static partial double Bench(int which, int reps);
