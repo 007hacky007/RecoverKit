@@ -134,7 +134,8 @@ same source serves CUDA, HIP, OpenCL and Metal. RecoverKit therefore speeds up c
 in RecoverKit.Core. `HashcatKernels.EnsureFor` writes them into hashcat's `OpenCL/` folder before a
 mode 17200/17210 run or benchmark, keeping hashcat's file as `<name>.hashcat`. It only replaces a
 file whose content is exactly hashcat 8.0.0's (line endings ignored; the Windows release uses
-CRLF), so another hashcat version is left alone. hashcat 8 keys its kernel cache on the kernel
+CRLF), or an earlier RecoverKit kernel with that original saved beside it, so another hashcat
+version is left alone. hashcat 8 keys its kernel cache on the kernel
 source and on every non-kernel file in `OpenCL/`, so the new kernel is compiled on first use.
 `RECOVERKIT_HASHCAT_ZIP_KERNELS=0` keeps hashcat's kernels. Combinator and hybrid attacks
 (`-a 1/6/7`, hashcat's `_a1` kernels), multi-file hashes (17220/17225) and checksum-only hashes
