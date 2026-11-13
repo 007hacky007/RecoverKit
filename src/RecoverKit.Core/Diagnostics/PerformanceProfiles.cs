@@ -50,7 +50,8 @@ public static class PerformanceProfiles
         ? $"{settings.Priority}|{settings.MaxCpuThreads}|{settings.PerformanceThreadsExplicit}"
         : $"{settings.Priority}|{settings.MaxCpuThreads}|{settings.Workload}|{settings.OptimizedKernels}|{settings.Strategy}|{settings.UseNativeCpuEngine}|{settings.HybridCpuGpu}|{settings.GpuTempGuard}|{settings.GpuTempLimit}|{settings.GpuTempHysteresis}|{settings.GpuDutyPercent}|{settings.GpuPowerLimit}|" + string.Join(';', settings.GpuPowerWatts.OrderBy(p => p.Key).Select(p => $"{p.Key}:{p.Value}")) + "|" + string.Join(';', settings.DisabledDeviceKeys.Order()) + "|" + string.Join(';', settings.DisabledDevices.Order()));
     public static string BuildConfiguration => System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(Settings).Assembly)?.Configuration ?? "unknown";
-    private static string CpuSoftwareVersion => $"{typeof(Settings).Assembly.GetName().Version}|{BuildConfiguration}|{Environment.Version}";
+    public static string AppVersion => (System.Reflection.Assembly.GetEntryAssembly() ?? typeof(Settings).Assembly).GetName().Version?.ToString() ?? "unknown";
+    private static string CpuSoftwareVersion => $"{AppVersion}|{BuildConfiguration}|{Environment.Version}";
 
     public static PerformanceProfile Load() => Load(FilePath);
 

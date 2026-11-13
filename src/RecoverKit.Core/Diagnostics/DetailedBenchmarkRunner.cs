@@ -120,7 +120,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
 
     private async Task SystemAsync(HashcatTool? systemTool, DiagnosticReport report, CancellationToken ct)
     {
-        report.System["RecoverKit version"] = typeof(DetailedBenchmarkRunner).Assembly.GetName().Version?.ToString() ?? "unknown";
+        report.System["RecoverKit version"] = PerformanceProfiles.AppVersion;
         report.System["Build configuration"] = PerformanceProfiles.BuildConfiguration;
         report.System[".NET runtime"] = Environment.Version.ToString();
         report.System["Native library API"] = NativeKernels.NativeApiVersion.ToString();
