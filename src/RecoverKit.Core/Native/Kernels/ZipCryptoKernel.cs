@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
+using RecoverKit.Core.Formats;
 
 namespace RecoverKit.Core.Native.Kernels;
 
@@ -19,6 +20,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     private readonly byte[] _header = new byte[12];
     private readonly Vector256<uint>[] _hdrVec;
     private readonly byte[] _data;          // full encrypted data, header included
+    private readonly ZipPartialTarget? _partial;
     private readonly int _method;           // 0 stored, 8 deflate
     private readonly uint _crc;
     private readonly long _uncompressed;
@@ -29,9 +31,11 @@ public sealed class ZipCryptoKernel : NativeKernel
     public override string Name => "ZipCrypto";
     public override double SpeedHint => 20_000_000;
 
-    private ZipCryptoKernel(byte[] data, int method, uint crc, long uncompressed, int checkBytes, int checksum, int timeChecksum)
+    private ZipCryptoKernel(byte[] data, int method, uint crc, long uncompressed, int checkBytes, int checksum, int timeChecksum,
+        ZipPartialTarget? partial = null)
     {
         _data = data;
+        _partial = partial;
         _method = method;
         _crc = crc;
         _uncompressed = uncompressed;
@@ -44,8 +48,8 @@ public sealed class ZipCryptoKernel : NativeKernel
         _twoBytes = checkBytes == 2;
     }
 
-    /// <summary>Parses a hashcat $pkzip2$ line (first file only, full data required).</summary>
-    public static ZipCryptoKernel? TryParse(string line)
+    /// <summary>Parses the first file of a $pkzip2$ line; partial data requires the archive entry.</summary>
+    public static ZipCryptoKernel? TryParse(string line, ZipPartialTarget? partial = null)
     {
         line = line.Trim();
         if (!line.StartsWith("$pkzip2$", StringComparison.Ordinal) || !line.EndsWith("*$/pkzip2$", StringComparison.Ordinal)) return null;
@@ -55,23 +59,46 @@ public sealed class ZipCryptoKernel : NativeKernel
             int i = 0;
             int count = int.Parse(f[i++]);
             int checkBytes = int.Parse(f[i++]);
-            if (count < 1) return null;
+            if (count < 1 || checkBytes is not (1 or 2)) return null;
             int dataType = int.Parse(f[i++]);
             i++; // magic type
-            if (dataType != 2) return null;     // only full-data hashes can be confirmed by CRC
-            i++; // compressed length
-            long uncompressed = Convert.ToInt64(f[i++], 16);
-            uint crc = Convert.ToUInt32(f[i++], 16);
-            i += 2; // offsets
+            long uncompressed;
+            uint crc;
+            if (dataType == 2)
+            {
+                i++; // compressed length
+                uncompressed = Convert.ToInt64(f[i++], 16);
+                crc = Convert.ToUInt32(f[i++], 16);
+                i += 2; // offsets
+            }
+            else if (dataType == 1 && count == 1 && partial is not null)
+            {
+                uncompressed = partial.UncompressedLength;
+                crc = partial.Crc;
+            }
+            else return null;
             int method = int.Parse(f[i++]);
             int dataLen = Convert.ToInt32(f[i++], 16);
             int checksum = Convert.ToInt32(f[i++], 16);
             int timeChecksum = Convert.ToInt32(f[i++], 16);
             var data = Convert.FromHexString(f[i]);
             if (data.Length != dataLen || data.Length < 12 || method is not (0 or 8)) return null;
-            return new ZipCryptoKernel(data, method, crc, uncompressed, checkBytes, checksum, timeChecksum);
+            if (dataType == 1)
+            {
+                if (partial!.Method != method || partial.DataOffset < 0 || partial.CompressedLength < data.Length || uncompressed < 0)
+                    return null;
+                using var archive = File.OpenRead(partial.ArchivePath);
+                if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return null;
+                archive.Position = partial.DataOffset;
+                var prefix = new byte[data.Length];
+                archive.ReadExactly(prefix);
+                if (!data.AsSpan().SequenceEqual(prefix)) return null;
+            }
+            return new ZipCryptoKernel(data, method, crc, uncompressed, checkBytes, checksum, timeChecksum,
+                dataType == 1 ? partial : null);
         }
-        catch (Exception ex) when (ex is FormatException or IndexOutOfRangeException or OverflowException) { return null; }
+        catch (Exception ex) when (ex is FormatException or IndexOutOfRangeException or OverflowException
+            or IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
     public override KernelWorker CreateWorker() => new Worker(this);
@@ -96,6 +123,7 @@ public sealed class ZipCryptoKernel : NativeKernel
             Update(ref k0, ref k1, ref k2, p);
         }
         if (!HeaderOk(lastHdr, prev)) return false;
+        if (_partial is { } partial) return VerifyArchive(partial, k0, k1, k2);
 
         if (_method == 0)
         {
@@ -140,6 +168,72 @@ public sealed class ZipCryptoKernel : NativeKernel
         }
         catch (InvalidDataException) { return false; }
         finally { pool.Return(body); }
+    }
+
+    private bool VerifyArchive(ZipPartialTarget partial, uint k0, uint k1, uint k2)
+    {
+        try
+        {
+            using var archive = File.OpenRead(partial.ArchivePath);
+            if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return false;
+            archive.Position = partial.DataOffset;
+            Span<byte> header = stackalloc byte[12];
+            archive.ReadExactly(header);
+            if (!header.SequenceEqual(_header)) return false;
+            using var decrypted = new DecryptStream(archive, partial.CompressedLength - 12, k0, k1, k2);
+            using var inflated = _method == 8 ? new DeflateStream(decrypted, CompressionMode.Decompress, leaveOpen: true) : null;
+            Stream content = inflated is not null ? inflated : decrypted;
+            uint crc = 0xffffffff;
+            long total = 0;
+            Span<byte> buffer = stackalloc byte[8192];
+            int read;
+            while ((read = content.Read(buffer)) > 0)
+            {
+                if (read > _uncompressed - total) return false;
+                foreach (byte b in buffer[..read]) crc = (crc >> 8) ^ Crc[(byte)(crc ^ b)];
+                total += read;
+            }
+            return total == _uncompressed && ~crc == _crc && decrypted.Remaining == 0
+                && (_method == 0 || !decrypted.RequestedPastEnd);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { return false; }
+    }
+
+    private sealed class DecryptStream(Stream archive, long remaining, uint k0, uint k1, uint k2) : Stream
+    {
+        public long Remaining { get; private set; } = remaining;
+        public bool RequestedPastEnd { get; private set; }
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.Length == 0) return 0;
+            if (Remaining == 0)
+            {
+                // DeflateStream asks for more input when the final block is missing, then silently returns EOF.
+                RequestedPastEnd = true;
+                return 0;
+            }
+            int read = archive.Read(buffer[..(int)Math.Min(buffer.Length, Remaining)]);
+            if (read == 0) throw new EndOfStreamException();
+            Remaining -= read;
+            for (int i = 0; i < read; i++)
+            {
+                uint t = (k2 | 2) & 0xffff;
+                byte p = (byte)(buffer[i] ^ (byte)((t * (t ^ 1)) >> 8));
+                buffer[i] = p;
+                Update(ref k0, ref k1, ref k2, p);
+            }
+            return read;
+        }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>

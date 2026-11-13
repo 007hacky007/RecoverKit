@@ -28,7 +28,8 @@ public sealed class NativeRunner
     /// is supported, and no GPU is going to be used.
     /// </summary>
     public static (NativeKernel Kernel, MaskSpace Space)? Plan(int mode, string hashLines, Attacks.PreparedAttack attack,
-        Settings settings, IReadOnlyList<BackendDevice>? devices, bool ignoreGpu = false, VolumeCredentials? credentials = null)
+        Settings settings, IReadOnlyList<BackendDevice>? devices, bool ignoreGpu = false, VolumeCredentials? credentials = null,
+        ZipPartialTarget? partial = null)
     {
         // Extra hashcat options can change candidate interpretation (for example TrueCrypt keyfiles).
         if (credentials is not null || !settings.UseNativeCpuEngine || attack.Stdin is not null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
@@ -38,7 +39,7 @@ public sealed class NativeRunner
         if (lines.Length != 1) return null;
         var space = MaskSpace.FromHashcatArgs(attack.Args);
         if (space is null) return null;
-        var kernel = NativeKernels.TryCreate(mode, lines[0]);
+        var kernel = NativeKernels.TryCreate(mode, lines[0], partial);
         if (kernel is null || space.MaxLength > kernel.MaxPasswordLength) return null;
         return (kernel, space);
     }
