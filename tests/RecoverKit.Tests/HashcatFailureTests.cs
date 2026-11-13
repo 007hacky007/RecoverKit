@@ -8,6 +8,17 @@ namespace RecoverKit.Tests;
 
 public sealed class HashcatFailureTests : IDisposable
 {
+    [Theory]
+    [InlineData("Syntax error in mask: ?z")]
+    [InlineData("error: syntax error", "clBuildProgram(): CL_BUILD_PROGRAM_FAILURE")]
+    public void SyntaxErrorsAreNotReportedAsUnreadableHashes(params string[] lines)
+    {
+        string error = HashcatOutput.FailureMessage(lines, 255);
+        Assert.DoesNotContain("read the hash", error);
+        if (lines.Length > 1) Assert.Contains("compile the attack kernel", error);
+        Assert.False(HashcatOutput.IsTransientFailure(string.Join('\n', lines)));
+    }
+
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "rk-failure-" + Guid.NewGuid().ToString("N"));
     private const string MetalFailure = "hc_mtl4_commit_and_wait(): Metal 4 command buffer failed, The operation couldn't be completed. (MTL4CommandQueueErrorDomain error 1.).";
     private const string Startup = "Failed to initialize the AMD main driver HIP runtime library. Please install the AMD HIP SDK.\nFailed to initialize AMD HIP RTC library. Please install the AMD HIP SDK.\nDevice #1: CUDA SDK Toolkit not installed or incorrectly installed... Falling back to OpenCL runtime.";
@@ -127,7 +138,7 @@ public sealed class HashcatFailureTests : IDisposable
     }
 
     [Theory]
-    [InlineData("No hashes loaded.", "read a valid hash")]
+    [InlineData("No hashes loaded.", "read the hash for this file")]
     [InlineData("* Device #1: Self-test failed.", "self-test failed")]
     [InlineData("clBuildProgram(): CL_BUILD_PROGRAM_FAILURE", "compile")]
     [InlineData("* Device #1: Not enough allocatable device memory or free host memory for mapping.", "allocate")]
@@ -226,7 +237,7 @@ public sealed class HashcatFailureTests : IDisposable
     {
         var output = new[] { "No hashes loaded." }.Concat(Enumerable.Repeat(MetalFailure, 15));
         string message = HashcatOutput.FailureMessage(output, 255);
-        Assert.StartsWith("hashcat could not read a valid hash", message);
+        Assert.StartsWith("hashcat could not read the hash for this file", message);
         Assert.False(HashcatOutput.IsTransientFailure(message));
         Assert.Contains("No hashes loaded.", message);
     }

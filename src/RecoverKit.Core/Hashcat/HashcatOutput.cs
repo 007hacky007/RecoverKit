@@ -21,7 +21,7 @@ internal static class HashcatOutput
         => Has(line, "CUDA SDK Toolkit not installed", "Failed to initialize NVIDIA RTC library");
 
     private static bool IsTargetFailure(string text)
-        => Has(text, "No hashes loaded", "Token length exception", "Separator unmatched", "Signature unmatched", "Syntax error", "could not read a valid hash");
+        => Has(text, "No hashes loaded", "Token length exception", "Separator unmatched", "Signature unmatched", "could not read the hash");
     private static bool IsSelfTestFailure(string text) => Has(text, "self-test", "self test");
     private static bool IsBuildFailure(string text)
         => Has(text, "build failed", "build failure", "CL_BUILD_PROGRAM_FAILURE", "clBuildProgram()", "nvrtcCompileProgram()",
@@ -34,7 +34,7 @@ internal static class HashcatOutput
     internal static bool IsTransientFailure(string? text)
     {
         if (text is null || IsTargetFailure(text) || IsSelfTestFailure(text) || IsBuildFailure(text) ||
-            IsMemoryFailure(text) || IsDeviceFailure(text)) return false;
+            IsMemoryFailure(text) || IsDeviceFailure(text) || Has(text, "syntax error")) return false;
         // Retry runtime execution failures only; invalid arguments and kernel compilation need a fix.
         return Has(text, "Metal 4 command buffer failed", "Metal command buffer failed", "MTLCommandBufferErrorDomain",
             "MTL4CommandQueueErrorDomain", "CL_OUT_OF_RESOURCES", "CL_DEVICE_NOT_AVAILABLE", "CL_OUT_OF_HOST_MEMORY",
@@ -48,7 +48,7 @@ internal static class HashcatOutput
         var errors = lines.Where(l => Has(l, "error", "failed", "failure", "cannot", "no devices", "no hashes", "not enough", "not found",
             "Skipping (hash-mode", "CL_OUT_OF", "CL_DEVICE_NOT_AVAILABLE", "hipError", "exception", "unmatched")).ToList();
         string all = string.Join(Environment.NewLine, lines);
-        string reason = IsTargetFailure(all) ? "hashcat could not read a valid hash from the attack target." :
+        string reason = IsTargetFailure(all) ? "hashcat could not read the hash for this file." :
             IsSelfTestFailure(all) ? "hashcat's kernel self-test failed. Check the GPU driver before trying again." :
             IsBuildFailure(all) ? "hashcat could not compile the attack kernel. Check the compute driver and compiler installation." :
             IsMemoryFailure(all) ? "hashcat could not allocate enough device memory for this attack." :
