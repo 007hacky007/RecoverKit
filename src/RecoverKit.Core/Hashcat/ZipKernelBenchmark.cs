@@ -30,6 +30,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
     internal bool BoundedTuning { get; init; }
 
     /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
+    internal string? Charset1 { get; init; }
     public string Mask { get; init; } = "?a?a?a?a?a?a?a?a";
 
     public event Action<string>? Progress;
@@ -118,6 +119,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             string file = Path.Combine(directory, "synthetic.hash");
             DebugLog.RegisterHashes(sample.HashLine);
             await File.WriteAllTextAsync(file, sample.HashLine + "\n", ct);
+            HashcatKernels.EnsureFor(tool, sample.Mode);
             using var selection = HashcatKernels.ApplyProfile(tool, sample.Mode, variant);
             using var tuning = BoundedTuning ? DiagnosticGpuTuning.Apply(tool, [device]) : null;
             return await SpeedAsync(sample.Mode, file, device.Id, ct);
@@ -136,6 +138,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
             "--keep-guessing", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
+        if (Charset1 is not null) args.AddRange(["-1", Charset1]);
         if (Optimized) args.Add("-O");
         var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
         double speed = ParseSpeed(code, o);

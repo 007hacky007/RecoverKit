@@ -10,6 +10,7 @@ using RecoverKit.Core.Diagnostics;
 //     attacks: --scenario "Name" | --brute csde --min 1 --max 6 [--mask "pass????"] |
 //              --hcmask "?u?l?l?d" [-1 chars ..] | --dict file [--rules simple|advanced|complex|two|two-adv|three|file.rule]
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
+//   recoverkit-cli bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]
 //   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
 if (args.Length > 0 && args[0] == FiniteDiagnosticWorker.Command) return FiniteDiagnosticWorker.Run(args);
@@ -49,6 +50,7 @@ try
                 };
                 var progress = new Progress<DiagnosticProgress>(p => Console.Error.WriteLine($"{p.Section}: {p.Step} ({p.Elapsed:mm\\:ss} elapsed, about {p.EstimatedRemaining.TotalMinutes:F0} min remaining)"));
                 var report = await runner.RunAsync(Opt(argv, "--sections")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), progress, cts.Token);
+                if (Opt(argv, "--export-tests") is { } testFolder) BenchmarkTestFiles.Export(testFolder, report);
                 string output = Opt(argv, "--out") ?? $"RecoverKit-performance-{DateTime.Now:yyyy-MM-dd}.html";
                 await File.WriteAllTextAsync(output, DiagnosticHtml.Render(report));
                 Console.WriteLine(DiagnosticHtml.Summary(report));
@@ -469,6 +471,7 @@ static void Print(Detection d)
 static int Usage()
 {
     Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir] | bench-zip [--device N] [--seconds S]");
+    Console.WriteLine("Detailed test: bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");

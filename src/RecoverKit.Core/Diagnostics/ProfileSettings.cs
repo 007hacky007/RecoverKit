@@ -75,9 +75,19 @@ public static class ProfileSettings
         var active = gpuChoice?.DeviceKeys is { Count: > 0 } keys ? devices.Where(d => keys.Contains(d.Key) && !HashcatRunner.IsDisabled(settings, d)).ToList() : HashcatRunner.ActiveGpus(settings, devices);
         if (active.Count != 1) return null;
         var choice = profile.Decisions.Where(d => d.Domain == "zip" && d.Mode == mode && d.Target.Contains(label, StringComparison.Ordinal)
-                && d.DeviceKeys.SequenceEqual(active.Select(device => device.Key)))
+                && ZipChecksMatch(d.Target, fields) && d.DeviceKeys.SequenceEqual(active.Select(device => device.Key)))
             .OrderByDescending(d => d.Length == length).ThenByDescending(d => d.Margin).FirstOrDefault();
         return PerformanceProfiles.Apply(choice, settings, devices);
+    }
+
+    private static bool ZipChecksMatch(string target, string[] fields)
+    {
+        if (target.Contains(", check2", StringComparison.Ordinal)) return fields[1] == "2";
+        if (target.Contains(", check1", StringComparison.Ordinal)) return fields[1] == "1";
+        if (fields.Length < 13) return !target.Contains(", crc", StringComparison.Ordinal);
+        if (target.EndsWith(", crc-time", StringComparison.Ordinal)) return fields[11] != fields[12];
+        if (target.EndsWith(", crc", StringComparison.Ordinal)) return fields[11] == fields[12];
+        return true;
     }
 
     public static string Explain(Settings settings, IReadOnlyList<BackendDevice> devices, bool cpuOnly, bool hybrid)

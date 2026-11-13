@@ -24,7 +24,7 @@ internal static class GpuZipCorrectness
             bool deflate = sample.Mode == 17200;
             var bytes = deflate ? ZipCryptoSample.Text(size, rng) : new byte[size];
             if (!deflate) rng.NextBytes(bytes);
-            var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive([new ZipCryptoSample.Entry("synthetic.dat", bytes, deflate)], "ABCDABCD"u8.ToArray(), rng));
+            var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive([new ZipCryptoSample.Entry("synthetic.dat", bytes, deflate, DataDescriptor: sample.Label.EndsWith("crc-time", StringComparison.Ordinal), TwoCheckBytes: sample.Label.EndsWith("check2", StringComparison.Ordinal))], "ABCDABCD"u8.ToArray(), rng));
             DebugLog.RegisterHashes(target.HashLines);
             var reference = ZipCryptoKernel.TryParse(target.HashLines)!;
             hashes.Add(target.HashLines);

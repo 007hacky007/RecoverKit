@@ -59,4 +59,20 @@ public sealed class CpuDiagnosticWorkerTests
         Assert.False(CpuDiagnosticWorker.ReadResult(0, "{}").Check.Passed);
         Assert.False(CpuDiagnosticWorker.ReadResult(0, "{\"Check\":{\"Passed\":true,\"Cases\":0},\"Speed\":1}").Check.Passed);
     }
+    [Fact]
+    public void ShortWindowIncludesWarmupBeforeItsMeasuredInterval()
+    {
+        string directory = Directory.CreateTempSubdirectory("rk-short-window-").FullName;
+        try
+        {
+            string file = Path.Combine(directory, "result.json");
+            Assert.Equal(0, CpuDiagnosticWorker.Run([CpuDiagnosticWorker.Command, "17210", "managed-scalar", "1", "Normal", "1", "7", "1", file]));
+            var result = CpuDiagnosticWorker.ReadResult(0, File.ReadAllText(file));
+            Assert.True(result.Check.Passed);
+            Assert.True(result.Speed > 0);
+            Assert.True(result.ElapsedSeconds >= 1.4, "A half-second warmup must precede the short measurement window.");
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
 }

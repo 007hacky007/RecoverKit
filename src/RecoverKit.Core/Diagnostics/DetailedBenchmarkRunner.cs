@@ -13,10 +13,10 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
     public static IReadOnlyList<DiagnosticSection> Sections { get; } =
     [
         new("system", "System and devices", 0.5),
-        new("cpu", "Built-in CPU engine and correctness", 1),
-        new("gpu", "GPU formats, each device and backend", 4),
-        new("zip", "ZIP GPU kernels and entry sizes", 3),
-        new("hybrid", "Finite CPU, GPU and hybrid jobs", 2),
+        new("cpu", "Built-in CPU engine and correctness", 3),
+        new("gpu", "GPU backends and main formats", 20),
+        new("zip", "ZIP GPU kernels and entry sizes", 16),
+        new("hybrid", "Finite CPU, GPU and hybrid jobs", 20),
     ];
 
     /// <summary>Dwell time for live ZIP samples. Startup and compilation take additional time.</summary>
@@ -74,7 +74,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                     report.Measurements.Add(new() { Section = section, Step = "GPU availability and limits", Error = "GPU tests skipped: engine/devices unavailable, all GPUs disabled, or configured power/pause/duty limits prevent this benchmark." });
                     continue;
                 }
-                if (section == "gpu") AddGpuSteps(plan, local!, report, ct);
+                if (section == "gpu") { AddGpuSteps(plan, local!, report, ct); AddComparisonSteps(plan, local!, report, ct); }
                 if (section == "zip") AddZipSteps(plan, local!, report, ct);
                 if (section == "hybrid") AddHybridSteps(plan, local!, report, ct);
             }
@@ -229,7 +229,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
 
     private void AddZipSteps(DiagnosticPlan plan, HashcatTool local, DiagnosticReport report, CancellationToken ct)
     {
-        var samples = ZipKernelBenchmark.DefaultSamples();
+        var samples = ComparisonZipSamples();
         var slots = Thorough ? AllowedGpuDevices() : HashcatRunner.ActiveGpus(settings, devices);
         foreach (var slot in slots)
         {
@@ -252,7 +252,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                     checks[(mode.Key, variant)] = correct;
                     foreach (var sample in mode)
                         report.Measurements.Add(new() { Section = "zip", Step = "Correctness", Mode = sample.Mode, Target = "synthetic ZIP " + sample.Label,
-                            Length = 8, Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Correct = correct,
+                            Length = 7, Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Correct = correct,
                             Error = correct ? null : "FAIL: GPU matches differ from scalar verification; timing skipped.", Details = new() { ["Check"] = correct ? "PASS" : "FAIL", ["Candidates"] = "Positive and negative candidates for each entry size in a batched GPU run" } });
                 });
             foreach (var sample in samples)
@@ -262,11 +262,11 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 {
                     var device = Device(sample.Mode);
                     var timer = Stopwatch.StartNew();
-                    double speed = await new ZipKernelBenchmark(local) { Seconds = Thorough ? Math.Max(6, Seconds) : Seconds, Priority = settings.Priority, BoundedTuning = !Thorough }.MeasureAsync(sample, device, variant, ct);
+                    double speed = await new ZipKernelBenchmark(local) { Seconds = Thorough ? Math.Max(6, Seconds) : Seconds, Mask = BenchmarkTestFiles.Mask, Charset1 = BenchmarkTestFiles.Charset, Priority = settings.Priority, BoundedTuning = !Thorough }.MeasureAsync(sample, device, variant, ct);
                     var row = new DiagnosticMeasurement { Section = "zip", Step = sample.Label, Mode = sample.Mode, Target = "synthetic ZIP " + sample.Label,
-                        Length = 8, Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Repeat = repeat,
+                        Length = 7, Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Repeat = repeat,
                         Speed = speed, ElapsedSeconds = timer.Elapsed.TotalSeconds, Correct = speed > 0, Error = speed > 0 ? null : "No benchmark rate reported.",
-                        Details = new() { ["Correctness"] = "PASS: GPU match set equals scalar verification for this entry size.", ["Mask"] = "eight printable ASCII characters", ["Adaptive sampling"] = (!Thorough).ToString() } };
+                        Details = ComparisonDetails(sample) };
                     rows.Add(row);
                     report.Measurements.Add(row);
                 }

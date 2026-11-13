@@ -31,6 +31,7 @@ public sealed class DetailedBenchmarkWindow : Window
     private readonly Button _start;
     private readonly Button _save;
     private readonly Button _copy;
+    private readonly Button _saveTests;
     private readonly Button _abandon;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Stopwatch _elapsed = new();
@@ -47,7 +48,7 @@ public sealed class DetailedBenchmarkWindow : Window
         _devices = devices;
         Title = "Detailed performance test";
         Icon = Icons.AppIcon();
-        Width = 780;
+        Width = 900;
         Height = 650;
         MinWidth = 590;
         MinHeight = 420;
@@ -71,10 +72,12 @@ public sealed class DetailedBenchmarkWindow : Window
         _thorough.IsCheckedChanged += (_, _) => UpdateEstimate();
         _start = L.Button("Start detailed test", () => _ = RunAsync(), 155, isDefault: true);
         _save = L.Button("Save report...", () => _ = SaveAsync(), 125);
+        _saveTests = L.Button("Save test files...", () => _ = SaveTestsAsync(), 135);
+        _saveTests.IsEnabled = false;
         _copy = L.Button("Copy summary", () => _ = CopyAsync(), 120);
         _save.IsEnabled = _copy.IsEnabled = false;
         _abandon = L.Button("Close", () => { if (_running) Abandon(); else Close(); }, 95, isCancel: true);
-        var footer = L.Footer(_copy, _save, _start, _abandon);
+        var footer = L.Footer(_copy, _save, _saveTests, _start, _abandon);
         _selectionGroup = L.Group("Sections", selection);
         var body = L.Column(12,
             L.Text("Detailed performance test", bold: true, size: 22),
@@ -105,8 +108,13 @@ public sealed class DetailedBenchmarkWindow : Window
 
     private void UpdateEstimate()
     {
-        double minutes = DetailedBenchmarkRunner.Sections.Where(s => _sections.Any(c => c.Id == s.Id && c.Box.IsChecked == true))
-            .Sum(s => s.EstimatedMinutes);
+        foreach (var (id, box) in _sections)
+        {
+            var section = DetailedBenchmarkRunner.Sections.First(s => s.Id == id);
+            if (box.Content is TextBlock label) label.Text = _thorough.IsChecked == true
+                ? $"{section.Title} - about {section.EstimatedMinutes:N0} min, hardware dependent"
+                : $"{section.Title} - {DetailedBenchmarkRunner.DefaultSectionSeconds(id)} s budget";
+        }
         _estimate.Text = _thorough.IsChecked == true
             ? "Thorough runs the full repeated sweep and can take an hour or longer."
             : "The default test stops within 2 minutes, including startup. Steps that do not fit are listed as not measured. Thorough keeps the full sweep.";
@@ -133,7 +141,7 @@ public sealed class DetailedBenchmarkWindow : Window
         _running = true;
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
-        _start.IsEnabled = _save.IsEnabled = _copy.IsEnabled = false;
+        _start.IsEnabled = _save.IsEnabled = _saveTests.IsEnabled = _copy.IsEnabled = false;
         _selectionGroup.IsVisible = _estimate.IsVisible = false;
         foreach (var (_, box) in _sections) box.IsEnabled = false;
         _abandon.Content = "Abandon";
@@ -185,7 +193,7 @@ public sealed class DetailedBenchmarkWindow : Window
             _timer.Stop();
             _bar.IsVisible = false;
             _timing.Text = $"Elapsed {_elapsed.Elapsed:hh\\:mm\\:ss}";
-            _save.IsEnabled = _copy.IsEnabled = _report is not null;
+            _save.IsEnabled = _saveTests.IsEnabled = _copy.IsEnabled = _report is not null;
             _abandon.IsEnabled = true;
             _abandon.Content = "Close";
         }
@@ -206,7 +214,10 @@ public sealed class DetailedBenchmarkWindow : Window
         await Snapshots.Save(this, Path.Combine(directory, "detailed-running.png"));
         await running;
         if (_report is not null)
+        {
             await File.WriteAllTextAsync(Path.Combine(directory, "detailed-gui.html"), DiagnosticHtml.Render(_report));
+            BenchmarkTestFiles.Export(Path.Combine(directory, "test-files"), _report);
+        }
         await Snapshots.Save(this, Path.Combine(directory, "detailed-finished.png"));
     }
 #endif
@@ -217,6 +228,19 @@ public sealed class DetailedBenchmarkWindow : Window
         var path = await Pick.Save(this, "HTML files (*.html)|*.html", $"RecoverKit-performance-{DateTime.Now:yyyy-MM-dd}.html", defaultExt: "html");
         if (path is null) return;
         try { await File.WriteAllTextAsync(path, DiagnosticHtml.Render(_report), new UTF8Encoding(false)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { await Msg.Error(this, ex.Message, Title); }
+    }
+
+    private async Task SaveTestsAsync()
+    {
+        if (_report is null) return;
+        string? folder = await Pick.FolderPath(this);
+        if (folder is null) return;
+        try
+        {
+            await Task.Run(() => BenchmarkTestFiles.Export(folder, _report));
+            _step.Text = "Test files saved. Read readme.txt for the attacks and enter the other program's rates in results.csv.";
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { await Msg.Error(this, ex.Message, Title); }
     }
 

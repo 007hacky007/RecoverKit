@@ -6,6 +6,8 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- Exportable synthetic benchmark files with matched comparison rates, exact attack instructions
+  and a results template, available from Save test files and `bench-full --export-tests`.
 - Two-minute detailed performance test with enforced section/step budgets, short samples, shared
   GPU kernel cache and a Thorough option for the full sweep.
 - Detailed performance test with selectable sections, live progress, partial reports and a

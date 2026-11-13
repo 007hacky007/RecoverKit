@@ -17,7 +17,7 @@ public sealed class DiagnosticStep
 /// <summary>Conditional slots are planned before measurements; skipped slots consume no time.</summary>
 internal sealed class DiagnosticPlan
 {
-    public TimeSpan TotalBudget { get; init; } = Timeout.InfiniteTimeSpan;
+    public TimeSpan TotalBudget { get; set; } = Timeout.InfiniteTimeSpan;
     public Dictionary<string, double> SectionBudgets { get; init; } = new();
     private readonly Stopwatch _totalClock = new();
     public List<DiagnosticStep> Steps { get; } = [];

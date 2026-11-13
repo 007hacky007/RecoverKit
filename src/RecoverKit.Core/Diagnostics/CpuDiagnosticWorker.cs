@@ -42,9 +42,19 @@ public static class CpuDiagnosticWorker
                     {
                         var kernel = NativeKernels.TryCreate(Math.Abs(mode), NativeKernels.BenchmarkHashes[mode])!;
                         var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", length))])!;
-                        using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(seconds == 1 ? 1000 : 650));
-                        var measured = new NativeEngine(kernel, space) { Threads = threads, Priority = NativeRunner.ThreadPriorityFor(priority) }.Run(null, sample.Token);
-                        speed = timer.Elapsed.TotalSeconds > 0 ? measured.Tested / timer.Elapsed.TotalSeconds : 0;
+                        using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(seconds == 1 ? 1500 : 650));
+                        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = NativeRunner.ThreadPriorityFor(priority), ProgressInterval = TimeSpan.FromMilliseconds(100) };
+                        long warmupDone = 0;
+                        double warmupElapsed = 0;
+                        if (seconds == 1) engine.Progress += p =>
+                        {
+                            if (warmupElapsed == 0 && timer.Elapsed.TotalSeconds >= .5)
+                            { warmupDone = p.Done; warmupElapsed = timer.Elapsed.TotalSeconds; }
+                        };
+                        var measured = engine.Run(null, sample.Token);
+                        double elapsed = timer.Elapsed.TotalSeconds - warmupElapsed;
+                        speed = elapsed > 0 && (seconds != 1 || warmupElapsed > 0)
+                            ? (measured.Tested - warmupDone) / elapsed : 0;
                     }
                     else speed = seconds == 0 ? 0 : NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), length: length,
                         priority: NativeRunner.ThreadPriorityFor(priority));

@@ -151,6 +151,12 @@ the default has a two-minute total budget, including engine startup. Unfinished 
 listed as "not measured, run the thorough test".
 **Thorough (slower)** runs the full sweep for developers. The test uses synthetic targets and keeps completed results if
 you abandon it. The HTML report includes the measurements and a **Copy summary** button.
+Use **Save test files** beside Save report to compare the same work with another program, or run
+`recoverkit-cli bench-full --export-tests <folder>`. Choose an empty folder. It contains synthetic
+ZIP, PDF and Office files, `readme.txt` with the exact attack and verification passwords, and
+`results.csv` for entering the other program's rates. Unmeasured files are marked explicitly;
+**Thorough (slower)** measures the full comparison set. RAR diagnostics have reference hashes only,
+so no RAR archive is exported.
 
 The measurements also build a performance profile for this PC. RecoverKit keeps the current
 method unless a correctness-checked alternative wins by at least 5% in repeated measurements.

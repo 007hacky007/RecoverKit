@@ -12,6 +12,7 @@ public static partial class DiagnosticHtml
     // Reports accept metadata only. This last boundary also removes paths from unexpected errors.
     public static string Scrub(string value)
     {
+        if (BenchmarkTestFiles.PublicFileNames.Contains(value, StringComparer.Ordinal)) return value;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (home.Length > 1) value = value.Replace(home, "[private]", StringComparison.OrdinalIgnoreCase);
         value = PathPattern().Replace(value, "[private path]");
@@ -23,12 +24,13 @@ public static partial class DiagnosticHtml
 
     public static string Summary(DiagnosticReport report) => Scrub(string.Join(Environment.NewLine,
         new[] { $"RecoverKit detailed performance test ({report.Started:yyyy-MM-dd})", report.Cancelled ? "Partial report: abandoned." : "" }
-            .Where(s => s.Length > 0).Concat(report.Summary)));
+            .Where(s => s.Length > 0).Concat(report.Summary).Append("Save test files exports synthetic targets, exact comparison attacks, measured rates and a results.csv template.")));
 
     public static string Render(DiagnosticReport report)
     {
         // Scrub string values before JSON encoding, preserving valid JSON and script escaping.
         var safe = JsonSerializer.SerializeToNode(report, Json)!;
+        safe["ComparisonFiles"] = JsonSerializer.SerializeToNode(BenchmarkTestFiles.Comparisons(report), Json);
         ScrubNode(safe);
         string json = safe.ToJsonString(Json);
         static string H(string? s) => WebUtility.HtmlEncode(Scrub(s ?? ""));
@@ -48,6 +50,12 @@ public static partial class DiagnosticHtml
                     .Append("</td><td>").Append(H(d.Reason)).Append("</td></tr>");
             html.Append("</table>");
         }
+        html.Append("<h2>Compare with another program</h2><p>Choose Save test files in the finished test, or use bench-full --export-tests with a folder. The export contains the exact synthetic targets, a readme with attacks and verification passwords, and results.csv for the other program's rates. RAR 3 and RAR 5 have reference hashes only, so no archive is exported.</p><table><tr><th>Test file</th><th>Format and entry details</th><th>Attack</th><th>RecoverKit candidates/s</th><th>Configuration</th></tr>");
+        foreach (var c in BenchmarkTestFiles.Comparisons(report))
+            html.Append("<tr><td>").Append(H(c.FileName)).Append("</td><td>").Append(H(c.Format + ": " + c.Details)).Append("</td><td>").Append(H(c.Attack))
+                .Append("</td><td>").Append(c.Rate?.ToString("N1", System.Globalization.CultureInfo.InvariantCulture) ?? "not measured, run the thorough test")
+                .Append("</td><td>").Append(H(c.Configuration)).Append("</td></tr>");
+        html.Append("</table>");
         foreach (var section in report.Measurements.GroupBy(m => m.Section))
         {
             html.Append("<h2>").Append(H(section.Key)).Append("</h2><table><tr><th>Step / mode</th><th>Target / length</th><th>Engine / variant</th><th>Workers / device / backend</th><th>Check</th><th>Candidates/s</th><th>Elapsed (s) / repeat</th><th>Details / error</th></tr>");
