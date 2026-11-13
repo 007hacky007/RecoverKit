@@ -139,12 +139,16 @@ public sealed class HybridRunner
     /// <summary>Runs a hybrid step with hashcat as the GPU side.</summary>
     public Task<RunResult> RunAsync(HybridPlan plan, string hashLine, RunRequest r, HashcatTool tool, CancellationToken ct)
     {
-        var runner = new HashcatRunner(tool) { KnownDevices = Devices };
+        var runner = new HashcatRunner(tool) { KnownDevices = Devices, FalsePositives = FalsePositives };
         runner.OutputLine += l => OutputLine?.Invoke(l);
         GuardEvents?.Invoke(runner);
         var gpu = new HashcatRange(tool, runner, r, OrderedMarkov.Ensure(r.SessionDir));
         return RunAsync(plan, hashLine, r, gpu, ct);
     }
+
+    /// <summary>Hits rejected by the confirmation check on either side, over all runs of this runner (a session).</summary>
+    internal FalsePositiveLog FalsePositives => _falsePositives ??= new FalsePositiveLog(l => OutputLine?.Invoke(l));
+    private FalsePositiveLog? _falsePositives;
 
     /// <summary>Lets the caller subscribe to the temperature guard events of the hashcat runner used.</summary>
     public Action<HashcatRunner>? GuardEvents { get; init; }
@@ -215,7 +219,7 @@ public sealed class HybridRunner
                 {
                     case LengthOutcome.Found:
                         TryDelete(restoreFile);
-                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, hashLine, cpuPw)] : job.FoundByGpu;
+                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, hashLine, cpuPw, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
                         OutputLine?.Invoke(job.FoundByCpu is not null ? "Found by the built-in CPU engine." : "Found by hashcat.");
                         return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = pw, LastStatus = last };
                     case LengthOutcome.Stopped:
@@ -703,6 +707,8 @@ public sealed class HybridRunner
                     Threads = Threads(hashcatRunning),
                     Priority = NativeRunner.ThreadPriorityFor(_r.Settings.Priority),
                     ProgressInterval = TimeSpan.FromMilliseconds(500),
+                    Confirm = _r.ConfirmPassword,
+                    Rejected = pw => _owner.FalsePositives.Rejected(pw.Length, "the built-in CPU engine"),
                 };
                 engine.Progress += p => { lock (_lock) _batchDone = boxBefore + p.Done; };
                 var resumeAt = b == box0 && prefix0 > 0 ? new NativeResumePoint { Length = _len, PrefixIndex = prefix0 } : null;

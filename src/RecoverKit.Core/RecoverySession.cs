@@ -112,7 +112,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         {
             foreach (var mode in target.Modes)
             {
-                var cached = await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
+                var cached = target.ConfirmPassword is { } confirm
+                    ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm)
+                    : await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
                 if (cached.Count > 0) return new SessionResult { Outcome = SessionOutcome.FoundInCache, Passwords = cached };
             }
         }
@@ -128,6 +130,43 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 Log?.Invoke(LogKind.Info, "GPU power limit restored.");
             }
         }
+    }
+
+    /// <summary>
+    /// Cached passwords for a target with a confirmation check: what hashcat's --show reports plus the
+    /// lines RecoverKit wrote itself (--show gives one plaintext per hash, the last matching line), each
+    /// checked again. Passwords cached before the check existed, or by hashcat elsewhere, may be false
+    /// positives; they are dropped.
+    /// </summary>
+    private async Task<List<string>> ConfirmedCacheAsync(int mode, string hashFile, string potfile, HashTarget target, Func<byte[], bool> confirm)
+    {
+        var (confirmed, rejected) = await ConfirmedCacheAsync(tool, mode, hashFile, potfile, target, confirm);
+        if (rejected > 0)
+        {
+            DebugLog.Info($"Password cache: {rejected} cached password(s) rejected by the confirmation check");
+            Log?.Invoke(LogKind.Warning, $"Ignored {rejected} cached password(s) for this archive: they open the attacked file " +
+                                         "but not the archive's other encrypted files (false positives).");
+        }
+        return confirmed;
+    }
+
+    internal static async Task<(List<string> Confirmed, int Rejected)> ConfirmedCacheAsync(HashcatTool tool, int mode, string hashFile,
+        string potfile, HashTarget target, Func<byte[], bool> confirm)
+    {
+        var raw = await tool.ShowRawAsync(mode, hashFile, potfile);
+        raw.AddRange(PasswordConfirmation.OwnEntries(potfile, target.HashLines.Replace("\r", "").Split('\n')[0]));
+        var confirmed = new List<string>();
+        int rejected = 0;
+        foreach (var plain in raw.Distinct())
+        {
+            if (confirm(PasswordConfirmation.PlainBytes(plain)))
+            {
+                string pw = HashcatTool.DecodePlain(plain, target.VolumeCredentials);
+                if (!confirmed.Contains(pw)) confirmed.Add(pw);
+            }
+            else rejected++;
+        }
+        return (confirmed, rejected);
     }
 
     /// <summary>Applies the optional NVIDIA power limit for the whole attack, after the user saw why admin rights are needed.</summary>
@@ -305,6 +344,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     VolumeCredentials = target.VolumeCredentials,
                     PasswordCachePath = potfile,
                     Guard = HashcatRunner.GuardFor(settings, Devices),
+                    ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
                 };
                 var result = nativePlan is { } np
                     ? await native.RunAsync(np.Kernel, np.Space, target.HashLines, request, ct)

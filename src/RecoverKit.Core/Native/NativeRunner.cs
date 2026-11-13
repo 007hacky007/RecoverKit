@@ -18,6 +18,10 @@ public sealed class NativeRunner
 
     public static string RestoreFile(string dir, string session) => Path.Combine(dir, session + ".native.json");
 
+    /// <summary>Hits rejected by the confirmation check, over all runs of this runner (a session).</summary>
+    internal FalsePositiveLog FalsePositives => _falsePositives ??= new FalsePositiveLog(l => OutputLine?.Invoke(l));
+    private FalsePositiveLog? _falsePositives;
+
     /// <summary>
     /// Returns the kernel and keyspace for this step when the built-in engine should run it: the
     /// format is built in, the attack is a brute-force/mask hashcat would run with -a 3, every length
@@ -55,7 +59,11 @@ public sealed class NativeRunner
                       $"positions {string.Join(",", space.Positions.Select(p => p.Length))}, lengths {space.MinLength}-{space.MaxLength}, resume {resume?.Length}:{resume?.PrefixIndex}");
 
         HashcatStatus? last = null;
-        var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = ThreadPriorityFor(s.Priority) };
+        var engine = new NativeEngine(kernel, space)
+        {
+            Threads = threads, Priority = ThreadPriorityFor(s.Priority),
+            Confirm = r.ConfirmPassword, Rejected = pw => FalsePositives.Rejected(pw.Length, "the built-in CPU engine"),
+        };
         engine.Progress += p =>
         {
             last = new HashcatStatus
@@ -94,7 +102,7 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = await RecordFoundAsync(s, hashLine, result.Password!);
+                var pw = await RecordFoundAsync(s, hashLine, result.Password!, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
                 TryDelete(restoreFile);
                 return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
@@ -109,10 +117,15 @@ public sealed class NativeRunner
     }
 
     /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
-    internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw)
+    internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw, string? confirmedCache = null)
     {
-        string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : "$HEX[" + Convert.ToHexString(pw).ToLowerInvariant() + "]";
-        if (!s.DontUsePasswordCache)
+        string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : PasswordConfirmation.HexPlain(pw);
+        // A confirmed password goes to the request's cache as hash:$HEX[...] (see PasswordConfirmation).
+        if (confirmedCache is not null)
+        {
+            if (!s.DontUsePasswordCache) await PasswordConfirmation.AppendAsync(confirmedCache, hashLine, pw);
+        }
+        else if (!s.DontUsePasswordCache)
             try { await File.AppendAllTextAsync(s.PotfilePath, hashLine.Trim() + ":" + plain + "\n", new UTF8Encoding(false), CancellationToken.None); }
             catch (IOException ex) { DebugLog.Warn("Could not write potfile: " + ex.Message); }
         return HashcatTool.DecodePlain(plain);

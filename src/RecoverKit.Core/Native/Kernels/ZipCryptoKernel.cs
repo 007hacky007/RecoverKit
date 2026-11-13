@@ -142,6 +142,24 @@ public sealed class ZipCryptoKernel : NativeKernel
         finally { pool.Return(body); }
     }
 
+    /// <summary>
+    /// The last byte of a 12-byte encryption header decrypted with <paramref name="password"/>: the
+    /// entry's check byte (the CRC's high byte, or the DOS time's high byte with a data descriptor).
+    /// </summary>
+    public static byte HeaderCheckByte(ReadOnlySpan<byte> password, ReadOnlySpan<byte> header)
+    {
+        uint k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
+        foreach (var b in password) Update(ref k0, ref k1, ref k2, b);
+        byte p = 0;
+        for (int i = 0; i < 12; i++)
+        {
+            uint t = (k2 | 2) & 0xffff;
+            p = (byte)(header[i] ^ (byte)((t * (t ^ 1)) >> 8));
+            Update(ref k0, ref k1, ref k2, p);
+        }
+        return p;
+    }
+
     private bool HeaderOk(byte last, byte prev) =>
         _twoBytes ? last == _check1 && prev == _check1Low : last == _check1 || last == _check2;
 

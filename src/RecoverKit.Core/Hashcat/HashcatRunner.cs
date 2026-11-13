@@ -25,6 +25,12 @@ public sealed record RunRequest
     public bool GpuOnly { get; init; }
     /// <summary>Device ids to leave out of this run (an integrated GPU slower than the CPU thread it costs).</summary>
     public IReadOnlyCollection<int>? ExcludeDevices { get; init; }
+    /// <summary>
+    /// Second check for found passwords (<see cref="HashTarget.ConfirmPassword"/>). hashcat then runs with
+    /// --keep-guessing and without its potfile; RecoverKit reads its outfile while it runs, stops it at the
+    /// first confirmed password and caches only that one.
+    /// </summary>
+    public Func<byte[], bool>? ConfirmPassword { get; init; }
 }
 
 public sealed class RunResult
@@ -93,10 +99,13 @@ public sealed class HashcatRunner(HashcatTool tool)
         a.AddRange(["--session", r.SessionName, "--restore-file-path", restore]);
         a.AddRange(["--status", "--status-json", "--status-timer", "2", "--quiet"]);
         a.AddRange(["-o", OutFile(r.SessionDir, r.SessionName), "--outfile-format", "2"]);
-        if (s.DontUsePasswordCache) a.Add("--potfile-disable");
+        // With a confirmation check hashcat must not stop at (or cache) a password that only passes the
+        // hash: it keeps guessing, and RecoverKit caches the confirmed one itself.
+        if (r.ConfirmPassword is not null) a.AddRange(["--keep-guessing", "--potfile-disable"]);
+        else if (s.DontUsePasswordCache) a.Add("--potfile-disable");
         else a.AddRange(["--potfile-path", r.PasswordCachePath ?? s.PotfilePath]);
         a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
-        a.AddRange(DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices));
+        a.AddRange(DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices, preferMetal: r.ConfirmPassword is not null && OperatingSystem.IsMacOS()));
         if (r.UseOptimizedKernel) a.Add("-O");
         if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
@@ -135,8 +144,16 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// built-in CPU engine is using it (hybrid attacks); <paramref name="exclude"/> leaves further
     /// devices out for this run.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="preferMetal"/> (macOS, runs with --keep-guessing): each GPU runs through its Metal
+    /// device instead of the OpenCL alias hashcat picks by default. With Apple's OpenCL, hashcat 8 never
+    /// clears a hash's "shown" flag after a hit (its clEnqueueFillBuffer reset has no effect), so with
+    /// --keep-guessing it reports nothing after the first hit: on an M1 Pro a run that found a false
+    /// positive missed the real password later in the same run, on OpenCL with both hashcat's kernel
+    /// and RecoverKit's, while Metal reported both.
+    /// </remarks>
     public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known, bool gpuOnly = false,
-        IReadOnlyCollection<int>? exclude = null)
+        IReadOnlyCollection<int>? exclude = null, bool preferMetal = false)
     {
         var a = new List<string>();
         // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
@@ -159,6 +176,22 @@ public sealed class HashcatRunner(HashcatTool tool)
                     break;
             }
         bool anyOff = s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0 || exclude is { Count: > 0 };
+        if (preferMetal && known is not null && known.Any(d => d.IsMetal && d.IsSkippedAlias && d.AliasOf is int))
+        {
+            var ids = new List<int>();
+            bool gpuTypesOnly = a.Count >= 2 && a[^2] == "-D" && a[^1] == "2";
+            foreach (var d in known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && (d.IsGpu || !gpuTypesOnly)))
+            {
+                var metal = d.IsGpu && !d.IsMetal ? known.FirstOrDefault(m => m.IsMetal && m.AliasOf == d.Id) : null;
+                if (exclude?.Contains(d.Id) == true || (metal is not null && exclude?.Contains(metal.Id) == true)) continue;
+                ids.Add(metal?.Id ?? d.Id);
+            }
+            if (ids.Count > 0)
+            {
+                a.AddRange(["-d", string.Join(',', ids)]);
+                return a;
+            }
+        }
         if (anyOff && known is not null)
         {
             var enabled = known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).Select(d => d.Id).ToList();
@@ -194,6 +227,17 @@ public sealed class HashcatRunner(HashcatTool tool)
         => OperatingSystem.IsMacOS() && error?.Contains($"Skipping (hash-mode {mode})", StringComparison.Ordinal) == true;
 
     public IReadOnlyList<BackendDevice>? KnownDevices { get; set; }
+
+    /// <summary>Hits rejected by the confirmation check, over all runs of this runner (a session); shared in hybrid runs.</summary>
+    public FalsePositiveLog FalsePositives
+    {
+        get => _falsePositives ??= new FalsePositiveLog(l => OutputLine?.Invoke(l));
+        set => _falsePositives = value;
+    }
+    private FalsePositiveLog? _falsePositives;
+
+    /// <summary>How often the outfile is read for new hits when a confirmation check is set.</summary>
+    internal TimeSpan OutfilePollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
@@ -266,10 +310,33 @@ public sealed class HashcatRunner(HashcatTool tool)
         }
 
         bool stopped = false;
+        // Confirmation check: hashcat keeps guessing; each hit it writes to the outfile is checked here
+        // and the first confirmed one stops it.
+        var confirm = r.ConfirmPassword is { } cf ? new OutfileConfirmer(outFile, cf, FalsePositives) : null;
+        using var tailCts = new CancellationTokenSource();
+        Task outfileTail = Task.CompletedTask;
+        if (confirm is not null)
+            outfileTail = Task.Run(async () =>
+            {
+                while (!tailCts.IsCancellationRequested && !p.HasExited)
+                {
+                    try { await Task.Delay(OutfilePollInterval, tailCts.Token); } catch (OperationCanceledException) { break; }
+                    if (confirm.Poll(final: false))
+                    {
+                        DebugLog.Info($"#{logId}: confirmed password found, stopping hashcat");
+                        guard?.BeforeStop();
+                        pumpCts.Cancel();
+                        await StopAsync(p);
+                        break;
+                    }
+                }
+            });
         using (ct.Register(() => { stopped = true; guard?.BeforeStop(); pumpCts.Cancel(); _ = StopAsync(p); }))
         {
             await p.WaitForExitAsync(CancellationToken.None);
         }
+        tailCts.Cancel();
+        await outfileTail;
         guard?.Dispose();
         pumpCts.Cancel();
         try { await pump.WaitAsync(TimeSpan.FromSeconds(5)); } catch (TimeoutException) { }
@@ -278,9 +345,17 @@ public sealed class HashcatRunner(HashcatTool tool)
         int code = p.ExitCode;
         DebugLog.ProcessExit(logId, code, sw.Elapsed);
         if (stopped) DebugLog.Info($"#{logId} was stopped by the user");
-        var raw = File.Exists(outFile)
-            ? File.ReadAllLines(outFile).Distinct().ToList()
-            : new List<string>();
+        List<string> raw;
+        if (confirm is not null)
+        {
+            // Only a confirmed hit counts; the outfile's other lines are false positives.
+            confirm.Poll(final: true);
+            raw = confirm.Confirmed is { } c ? [c] : [];
+        }
+        else
+            raw = File.Exists(outFile)
+                ? File.ReadAllLines(outFile).Distinct().ToList()
+                : new List<string>();
         var passwords = raw.Select(p => HashcatTool.DecodePlain(p, r.VolumeCredentials)).Distinct().ToList();
 
         RunOutcome outcome = code switch
@@ -290,7 +365,17 @@ public sealed class HashcatRunner(HashcatTool tool)
             2 or 3 or 4 or 5 => RunOutcome.Aborted,
             _ => stopped ? RunOutcome.Aborted : RunOutcome.Error,
         };
-        if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
+        if (confirm is not null)
+        {
+            // hashcat's own verdict does not count: it ended on its own without a confirmed hit (exhausted),
+            // or RecoverKit stopped it at one (cracked).
+            if (confirm.Confirmed is not null) outcome = RunOutcome.Cracked;
+            else if (outcome == RunOutcome.Cracked) outcome = RunOutcome.Exhausted;
+            if (confirm.Confirmed is { } plain && !r.Settings.DontUsePasswordCache)
+                await PasswordConfirmation.AppendAsync(r.PasswordCachePath ?? r.Settings.PotfilePath,
+                    PasswordConfirmation.FirstHashLine(r.HashFile), PasswordConfirmation.PlainBytes(plain));
+        }
+        else if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
             passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);
         if (stopped && outcome != RunOutcome.Cracked) outcome = RunOutcome.Aborted;
 
@@ -309,6 +394,61 @@ public sealed class HashcatRunner(HashcatTool tool)
                     "If the built-in CPU engine supports this format, choose \"Don't use GPU threads\" in Preferences to use it.\n" + error;
 
         return new RunResult { Outcome = outcome, ExitCode = code, Passwords = passwords, RawPasswords = raw, Error = error, LastStatus = last };
+    }
+
+    /// <summary>
+    /// Reads the lines hashcat appends to its outfile (format 2: one plaintext per line) and checks each
+    /// with the confirmation function until one passes.
+    /// </summary>
+    internal sealed class OutfileConfirmer(string path, Func<byte[], bool> confirm, FalsePositiveLog log)
+    {
+        private long _offset;
+        private readonly List<byte> _partial = new();
+        private readonly HashSet<string> _seen = new();
+
+        /// <summary>The first confirmed plaintext, as hashcat wrote it ($HEX[...] kept).</summary>
+        public string? Confirmed { get; private set; }
+
+        /// <summary>Checks new complete lines (and with <paramref name="final"/> an unterminated last one); true once confirmed.</summary>
+        public bool Poll(bool final)
+        {
+            if (Confirmed is not null) return true;
+            byte[] chunk;
+            try
+            {
+                if (!File.Exists(path)) return false;
+                using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (f.Length < _offset) _offset = 0;    // replaced
+                f.Position = _offset;
+                chunk = new byte[f.Length - _offset];
+                int n = 0;
+                while (n < chunk.Length && f.Read(chunk, n, chunk.Length - n) is var k and > 0) n += k;
+                if (n < chunk.Length) Array.Resize(ref chunk, n);
+                _offset += n;
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+
+            foreach (var b in chunk)
+            {
+                if (b != (byte)'\n') { _partial.Add(b); continue; }
+                if (Check()) return true;
+            }
+            return final && _partial.Count > 0 && Check();
+        }
+
+        private bool Check()
+        {
+            int len = _partial.Count;
+            if (len > 0 && _partial[len - 1] == (byte)'\r') len--;
+            string line = System.Text.Encoding.UTF8.GetString(_partial.ToArray(), 0, len);
+            _partial.Clear();
+            if (!_seen.Add(line)) return false;   // an empty line is an empty password
+            var pw = PasswordConfirmation.PlainBytes(line);
+            if (confirm(pw)) { Confirmed = line; return true; }
+            log.Rejected(pw.Length, "hashcat");
+            return false;
+        }
     }
 
     private static void Remember(Queue<string> q, string line)

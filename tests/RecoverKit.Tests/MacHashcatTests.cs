@@ -138,6 +138,15 @@ public class MacHashcatTests
     }
 
     [Fact]
+    public void KeepGuessingRunsUseTheMetalDevice()
+    {
+        // Apple's OpenCL breaks hashcat's --keep-guessing after the first hit; Metal does not.
+        var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
+        Assert.Equal(["-d", "1"], HashcatRunner.DeviceArguments(new Settings(), devs, preferMetal: true));
+        Assert.Equal(["-D", "2", "-d", "1"], HashcatRunner.DeviceArguments(new Settings(), devs, gpuOnly: true, preferMetal: true));
+    }
+
+    [Fact]
     public void CpuOnlyIsFlaggedWhenHashcatHasNoCpuDevice()
     {
         var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
