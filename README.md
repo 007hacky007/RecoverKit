@@ -200,11 +200,9 @@ quickest guesses.
   AMD or Intel GPUs.
 - **Crypto wallets:** you need the wallet file from your own device; an address or public key is
   not enough. For MetaMask, choose the vault text or the browser's extension storage file
-  (`.ldb` or `.log`); if it holds several vaults, the first complete one is used. Electrum 2.8+
-  wallets with full-file encryption cannot be cracked on a Mac (hashcat does not run that mode on
-  Apple GPUs) but work with Windows and Linux GPUs. Blockchain.com: the main password only, not the
-  second password. Exodus wallets are recognized but not supported yet. Always confirm a found
-  password in the wallet itself.
+  (`.ldb` or `.log`); if it holds several vaults, the first complete one is used. Blockchain.com:
+  the main password only, not the second password. Exodus wallets are recognized but not
+  supported yet. Always confirm a found password in the wallet itself.
 - **Word editing restrictions:** "read-only", "comments only", "filling in forms" and "password to
   modify" can be removed from .docx, .doc and .odt files that open without a password. RecoverKit
   saves a separate copy and never changes the original.

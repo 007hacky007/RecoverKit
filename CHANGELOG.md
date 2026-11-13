@@ -32,6 +32,16 @@ All notable changes to RecoverKit. Downloads are on the
   at once with AVX-512, 8 with AVX2 or on Apple silicon), and next to hashcat on the GPU in hybrid
   runs. On an Apple M1 Pro a hybrid run reached about 13,000 passwords per second against 11,000 on
   the GPU alone.
+- Faster classic ZIP (ZipCrypto) recovery on GPUs: RecoverKit's own hashcat kernels for brute-force,
+  mask and dictionary attacks no longer slow down with the size of the attacked file. `recoverkit-cli bench-zip`
+  compares them with hashcat's on each device.
+- Windows: Tools > Download NVIDIA CUDA compiler (NVRTC) lets hashcat use CUDA on NVIDIA GPUs
+  without installing the CUDA Toolkit.
+
+### Changed
+- hashcat 8.0.0 instead of 7.1.2. On Macs, ZIP archives with compressed files and large Electrum
+  wallets now run on the GPU.
+  hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ### Fixed
 - "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP

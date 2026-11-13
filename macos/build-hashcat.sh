@@ -2,11 +2,13 @@
 # Builds hashcat from the official source release for macOS arm64 (Apple Silicon) with the Metal
 # backend, and assembles a portable runtime folder for the RecoverKit app bundle:
 #
-#   macos/out/hashcat/   hashcat, modules/, bridges/, OpenCL/, charsets/, layouts/, masks/, rules/,
-#                        tunings/, hashcat.hcstat2, docs/ (license texts), RECOVERKIT_BUNDLE
+#   macos/out/hashcat/   hashcat, modules/, bridges/, feeds/, OpenCL/, charsets/, tables/, masks/,
+#                        rules/, tunings/, pcfg/, hashcat.hcstat2, docs/ (license texts), RECOVERKIT_BUNDLE
 #
 # Only hashcat's bundled dependencies (deps/) are used and nothing from Homebrew is linked; the
 # result links against system libraries and frameworks only (checked with otool at the end).
+# hashcat 8 loads liblzma (needed for every mask attack: hashcat.hcstat2 is LZMA2) and zlib at run
+# time with dlopen; macOS provides both as liblzma.5.dylib and libz.1.dylib.
 #
 # Portable mode: hashcat compares the folder of its own (resolved) executable with the install
 # folder compiled in (PREFIX/bin, /usr/local/bin by default). When they differ it uses the
@@ -17,9 +19,9 @@
 # Needs: Xcode command line tools (clang, make), curl, shasum, tar. Runs on GitHub macos-15 arm64.
 set -euo pipefail
 
-HASHCAT_VERSION="7.1.2"
+HASHCAT_VERSION="8.0.0"
 SOURCE_URL="https://hashcat.net/files/hashcat-${HASHCAT_VERSION}.tar.gz"
-SOURCE_SHA256="9546a6326d747530b44fcc079babad40304a87f32d3c9080016d58b39cfc8b96"
+SOURCE_SHA256="d6a7533e1e250a236a8b99d0b725cdd76d8fdce744c7eeacb2bf42210fe4761b"
 # Bump when the build recipe or folder layout changes without a hashcat version change; the app
 # re-copies its per-user engine copy whenever this stamp differs.
 BUNDLE_REVISION="1"
@@ -76,10 +78,7 @@ SRC="${BUILD_ROOT}/hashcat-${HASHCAT_VERSION}"
 rm -rf "${SRC}"
 tar -xzf "${TARBALL}" -C "${BUILD_ROOT}"
 
-# The stock Makefile builds a universal (arm64 + x86_64) binary on Apple Silicon. Only arm64 is
-# shipped, so drop the x86_64 slice (halves build time and size).
-cp -p "${SRC}/src/Makefile" "${SRC}/src/Makefile.orig"
-/usr/bin/sed -i '' '/-arch x86_64/d' "${SRC}/src/Makefile"
+# hashcat 8 builds arm64 only by default (MACOS_UNIVERSAL_BINARY=0), which is all that is shipped.
 
 # A clean environment: no Homebrew include/library paths may leak into the build.
 unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH LDFLAGS CFLAGS CPPFLAGS PKG_CONFIG_PATH || true
@@ -88,17 +87,20 @@ SDKROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
 [ -n "${SDKROOT}" ] && export SDKROOT
 
 # PRODUCTION=1: version from the release, not from "git describe" of an enclosing repository.
-# USE_SYSTEM_*=0: hashcat's bundled zlib, LZMA, xxHash, OpenCL headers and unrar.
-# The Python and Rust plugin bridges (-m 72000/73000/74000) are not shipped: they depend on
-# whatever Python or Rust toolchain the build machine has (the clean PATH above hides cargo and
-# Homebrew's python3-config), and RecoverKit does not use them.
-# COMPTIME: the release date (mtime of the Makefile in the tarball) so rebuilds are reproducible.
+# SHARED=0: every plugin carries its own copy of the core, so there is no libhashcat.dylib to
+# locate at run time. USE_SYSTEM_OPENCL=0: hashcat's bundled OpenCL headers.
+# The Python, Rust and FPGA bridges and the Rust feed are not shipped: they depend on whatever
+# Python or Rust toolchain the build machine has (the clean PATH above hides cargo and Homebrew's
+# python3-config) or on FPGA boards, and RecoverKit does not use them.
+# SOURCE_DATE_EPOCH: the release date (mtime of the Makefile in the tarball) so rebuilds are
+# reproducible; it is also the first element of hashcat's kernel cache key.
 MAKE_ARGS=(
   PRODUCTION=1
   SHARED=0
-  USE_SYSTEM_LZMA=0 USE_SYSTEM_ZLIB=0 USE_SYSTEM_OPENCL=0 USE_SYSTEM_XXHASH=0 USE_SYSTEM_UNRAR=0
-  ENABLE_UNRAR=1 ENABLE_BRAIN=1
-  "COMPTIME=$(stat -f %m "${SRC}/src/Makefile.orig")"
+  USE_SYSTEM_OPENCL=0
+  ENABLE_BRAIN=1
+  "BRIDGES_DISABLE=bridge_python_generic_hash bridge_rust_generic_hash bridge_fpga_bcrypt bridge_fpga_phantom"
+  "SOURCE_DATE_EPOCH=$(stat -f %m "${SRC}/src/Makefile")"
 )
 
 echo "Building hashcat ${HASHCAT_VERSION} (arm64, Metal) with ${JOBS} jobs ..."
@@ -119,11 +121,15 @@ mkdir -p "${STAGE}/bridges"
 for b in argon2id_reference scrypt_jane scrypt_yescrypt; do
   install -m 644 "${SRC}/bridges/bridge_${b}.so" "${STAGE}/bridges/"
 done
-for d in modules OpenCL charsets layouts masks rules tunings; do
+# Feeds generate candidates; stdin (RecoverKit's own generators) and wordlists go through them.
+mkdir -p "${STAGE}/feeds"
+install -m 644 "${SRC}"/feeds/feed_*.so "${STAGE}/feeds/"
+for d in modules OpenCL charsets tables masks rules tunings pcfg; do
   cp -R "${SRC}/${d}" "${STAGE}/${d}"
 done
+find "${STAGE}/modules" -name '*.dSYM' -prune -exec rm -rf {} +
 install -m 644 "${SRC}/hashcat.hcstat2" "${STAGE}/"
-for f in license.txt readme.txt changes.txt credits.txt; do
+for f in license.txt changes.txt credits.txt; do
   install -m 644 "${SRC}/docs/${f}" "${STAGE}/docs/"
 done
 cp -R "${SRC}/docs/license_libs" "${STAGE}/docs/license_libs"
@@ -145,7 +151,7 @@ check_links() {
   if lipo -archs "$1" | grep -qv '^arm64$'; then echo "Not arm64-only: $1 ($(lipo -archs "$1"))" >&2; fail=1; fi
 }
 check_links "${STAGE}/hashcat"
-for f in "${STAGE}"/modules/*.so "${STAGE}"/bridges/*.so; do
+for f in "${STAGE}"/modules/*.so "${STAGE}"/bridges/*.so "${STAGE}"/feeds/*.so; do
   [ -f "$f" ] && check_links "$f"
 done
 [ "${fail}" = "0" ] || { echo "Dependency check failed." >&2; exit 1; }
@@ -153,6 +159,8 @@ nmod=$(ls "${STAGE}"/modules/*.so | wc -l | tr -d ' ')
 echo "Dependency check passed (hashcat + ${nmod} modules link only system libraries)."
 
 "${STAGE}/hashcat" --version
+# hashcat 8 writes its module option cache on every start; it is runtime output, not part of the bundle.
+rm -rf "${STAGE}/cache"
 rm -rf "${OUT}"
 mv "${STAGE}" "${OUT}"
 echo "Portable hashcat ${STAMP}: ${OUT} ($(du -sh "${OUT}" | awk '{print $1}'))"

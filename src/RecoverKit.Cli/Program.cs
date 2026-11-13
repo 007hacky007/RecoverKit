@@ -9,6 +9,7 @@ using RecoverKit.Core.Hashcat;
 //     attacks: --scenario "Name" | --brute csde --min 1 --max 6 [--mask "pass????"] |
 //              --hcmask "?u?l?l?d" [-1 chars ..] | --dict file [--rules simple|advanced|complex|two|two-adv|three|file.rule]
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
+//   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
 
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();
@@ -50,6 +51,43 @@ try
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
                 Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s");
+            return 0;
+        }
+        case "bench-zip":
+        {
+            // recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]
+            // hashcat's ZipCrypto kernels against RecoverKit's replacements, per device.
+            var settings = Settings.Load();
+            if (HashcatInstaller.BundledDirectory is not null) HashcatInstaller.TryInstallBundled();
+            var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath)
+                ?? throw new InvalidOperationException("hashcat not found. Run 'recoverkit-cli install-hashcat' first, or pass --hashcat <path>.");
+            Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
+            if (HashcatKernels.Inspect(tool.Directory) == HashcatKernels.State.Unsupported)
+            {
+                Console.WriteLine($"This hashcat's PKZIP kernels are not hashcat {HashcatInstaller.Version}'s, so RecoverKit's kernels cannot be used with it.");
+                return 2;
+            }
+            var devices = await tool.DevicesAsync();
+            var only = Opt(argv, "--device")?.Split(',').Select(int.Parse).ToHashSet();
+            // Every backend device, aliases included: an NVIDIA GPU shows as CUDA and as OpenCL.
+            var chosen = devices.Where(d => only?.Contains(d.Id) ?? true).ToList();
+            foreach (var dev in devices)
+                Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.AliasOf is int a ? $", alias of #{a}" : "")}){(chosen.Contains(dev) ? "" : ", not measured")}");
+            if (devices.Any(d => d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
+                && !devices.Any(d => d.Backend == "CUDA"))
+                Console.WriteLine("Note: no CUDA device. hashcat uses CUDA on NVIDIA GPUs only when it finds NVRTC (CUDA Toolkit); see docs/benchmarks.md.");
+            var bench = new ZipKernelBenchmark(tool)
+            {
+                Seconds = int.TryParse(Opt(argv, "--seconds"), out var sec) ? sec : 10,
+                WithAmpCache = !argv.Contains("--quick"),
+            };
+            bench.Progress += Console.WriteLine;
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            var rows = await bench.RunAsync(chosen, ZipKernelBenchmark.DefaultSamples(), cts.Token);
+            Console.WriteLine();
+            Console.WriteLine($"ZipCrypto brute force, mask {bench.Mask}, {bench.Seconds} s per run, median speed:");
+            Console.Write(ZipKernelBenchmark.Format(rows));
             return 0;
         }
         case "scenario-line":
@@ -385,7 +423,7 @@ static void Print(Detection d)
 
 static int Usage()
 {
-    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir]");
+    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir] | bench-zip [--device N] [--seconds S]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");

@@ -19,13 +19,24 @@ Avalonia 12.1.6 (bundled)
   https://avaloniaui.net - MIT License. Includes SkiaSharp (MIT, Skia: BSD 3-Clause),
   HarfBuzzSharp (MIT, HarfBuzz: Old MIT) and, on Windows, ANGLE (BSD 3-Clause).
 
-hashcat 7.1.2
+hashcat 8.0.0
   https://hashcat.net - MIT License.
   Downloaded on Windows and Linux. The macOS app bundles it instead (hashcat.net publishes no
   macOS binary): RecoverKit.app/Contents/Resources/hashcat is built unmodified from the official
-  hashcat 7.1.2 source release by macos/build-hashcat.sh (only the x86_64 slice is dropped from
-  the build). Its license and the licenses of the libraries it includes (zlib, LZMA SDK, xxHash,
-  OpenCL headers, unrar, sse2neon, and others) are in that folder's docs/ and docs/license_libs/.
+  hashcat 8.0.0 source release by macos/build-hashcat.sh (arm64 only, without the Python, Rust and
+  FPGA bridges). Its license and the licenses of the libraries it includes (OpenCL headers, unrar,
+  sse2neon, miniz, and others) are in that folder's docs/ and docs/license_libs/.
+
+RecoverKit's ZIP kernels for hashcat (built in, written into hashcat's OpenCL folder at run time)
+  src/RecoverKit.Core/Hashcat/Kernels/*.cl are derived from the PKZIP Kernels for Hashcat,
+  (c) 2018 European Union (Joint Research Centre), MIT License, which use hashcat (MIT, (c) Jens
+  Steube) and miniz (MIT, (c) RAD Game Tools, Valve Software, Rich Geldreich, Tenacious Software).
+  The full license text is at the top of each kernel file.
+
+NVIDIA CUDA run-time compiler (NVRTC), Windows only, optional, after the user accepts NVIDIA's
+license
+  https://pypi.org/project/nvidia-cuda-nvrtc-cu12/ - NVIDIA CUDA Toolkit End User License Agreement
+  (https://docs.nvidia.com/cuda/eula/index.html). Downloaded from PyPI on request, not bundled.
 
 7-Zip reduced console extractor (7zr.exe), Windows only, when no 7-Zip is installed
   https://www.7-zip.org - GNU LGPL.

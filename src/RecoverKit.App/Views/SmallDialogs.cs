@@ -184,6 +184,67 @@ public sealed class CpuRuntimeDownloadWindow : ProgressDialog
 }
 
 /// <summary>
+/// Downloads NVIDIA's run-time compiler NVRTC (Windows), so hashcat can use its CUDA backend on NVIDIA GPUs
+/// without the CUDA Toolkit. NVIDIA's license must be accepted before anything is downloaded.
+/// </summary>
+public sealed class NvrtcDownloadWindow : ProgressDialog
+{
+    private readonly CheckBox _accept = new() { Content = "I accept the " + NvrtcRuntime.LicenseName };
+    private readonly NvrtcRuntime.Package? _package;
+
+    public static async Task<bool> RunAsync(Window owner) => await new NvrtcDownloadWindow().ShowDialog<bool>(owner);
+
+    private NvrtcDownloadWindow() : base("Download NVIDIA CUDA compiler", "Download")
+    {
+        var driver = NvrtcRuntime.DriverCudaVersion();
+        _package = NvrtcRuntime.Choose(driver);
+        Status.Text = _package is { } p
+            ? "hashcat runs NVIDIA GPUs through CUDA when it finds NVIDIA's run-time compiler (NVRTC, part of the CUDA Toolkit), " +
+              "and through OpenCL otherwise. This downloads NVRTC " + p.Version + $" (about {p.Size / 1_000_000} MB, NVIDIA's official package, " +
+              "SHA-256 verified) into your user folder. Nothing is installed system-wide."
+            : driver is { } d
+                ? $"The NVIDIA driver supports CUDA {d.Major}.{d.Minor}; hashcat's CUDA backend needs a driver for CUDA 12.4 or later. Update the NVIDIA driver first."
+                : "No NVIDIA driver was found (nvidia-smi). hashcat's CUDA backend needs an NVIDIA GPU with a current driver.";
+        var license = new HyperlinkButton { Content = "Read the " + NvrtcRuntime.LicenseName, NavigateUri = new Uri(NvrtcRuntime.LicenseUrl), Padding = new Thickness(0) };
+        Action.IsEnabled = false;
+        _accept.IsEnabled = _package is not null;
+        _accept.IsCheckedChanged += (_, _) => Action.IsEnabled = _accept.IsChecked == true && !Running && _package is not null;
+        Build(license, _accept);
+    }
+
+    protected override async Task RunAsync()
+    {
+        if (_accept.IsChecked != true || _package is null) return;
+        Running = true;
+        Action.IsEnabled = _accept.IsEnabled = false;
+        Cts = new CancellationTokenSource();
+        try
+        {
+            await NvrtcRuntime.InstallAsync(_package, Reporter(), Cts.Token);
+            Bar.Value = Bar.Maximum;
+            Succeed();
+        }
+        catch (OperationCanceledException)
+        {
+            Status.Text = "Cancelled.";
+            Detail.Text = "";
+        }
+        catch (InstallException ex)
+        {
+            Status.Text = "Install failed.";
+            Detail.Text = ex.Message;
+            await Msg.Error(this, ex.Message, Title);
+        }
+        finally
+        {
+            Running = false;
+            _accept.IsEnabled = true;
+            Action.IsEnabled = _accept.IsChecked == true;
+        }
+    }
+}
+
+/// <summary>
 /// Shows recovered password(s): a check mark that draws itself once, the password with Hide/Show and
 /// Copy (confirmed by a small toast), and "Decrypt file..." when the format can be decrypted.
 /// </summary>
