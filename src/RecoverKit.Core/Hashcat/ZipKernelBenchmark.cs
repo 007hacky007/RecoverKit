@@ -112,7 +112,9 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
         {
             "-m", mode.ToString(), "-a", "3", hashFile, Mask, "-d", device.ToString(),
             "--runtime", Seconds.ToString(), "--status", "--status-json", "--status-timer", "1",
-            "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
+            // ZipCrypto has false positives: about one candidate in 2^39 passes the check byte and the
+            // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
+            "--keep-guessing", "--potfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
         var (_, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct);
         var speeds = o.Split('\n').Select(l => HashcatStatus.TryParse(l.Trim())).OfType<HashcatStatus>()
