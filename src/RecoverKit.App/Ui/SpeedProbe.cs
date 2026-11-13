@@ -1,72 +1,74 @@
 using RecoverKit.Core;
+using RecoverKit.Core.Diagnostics;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Native;
 
 namespace RecoverKit.App.Ui;
 
-/// <summary>
-/// Measures the recovery speed of one hash mode with the same engine and device arguments a real
-/// attack would use: the built-in CPU kernels when no GPU is used, hashcat's benchmark on the GPUs
-/// plus the built-in kernels on the CPU at the same time for hybrid formats, otherwise hashcat's
-/// benchmark. Shared by the Benchmark window and the wizard's "Measure speed".
-/// </summary>
+/// <summary>Measures the selected engines. Hybrid rates use the same synthetic target and seven-character mask.</summary>
 internal static class SpeedProbe
 {
     public static bool HasGpu(IReadOnlyList<BackendDevice> devices)
         => devices.Any(d => !d.IsSkippedAlias && d.IsGpu);
 
-    /// <summary>True when an attack on this mode would run on the built-in CPU engine.</summary>
-    public static bool UseNative(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
-        s.UseNativeCpuEngine && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
-        && (HashcatRunner.ActiveGpus(s, devices).Count == 0 || s.Strategy == DeviceStrategy.CpuOnly)
-        && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
-
-    /// <summary>True when a brute-force attack on this mode would run hybrid (hashcat on the GPUs, built-in engine on the CPU).</summary>
-    public static bool UseHybrid(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
-        s.UseNativeCpuEngine && s.HybridCpuGpu && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
-        && s.Strategy is DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu && HashcatRunner.ActiveGpus(s, devices).Count > 0
-        && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
-
-    /// <summary>Passwords per second for <paramref name="mode"/> (0 when the device cannot run it).</summary>
-    public static async Task<(double Speed, bool Native)> MeasureAsync(HashcatTool hashcat, Settings s, IReadOnlyList<BackendDevice> devices, int mode,
-        TimeSpan nativeDuration, CancellationToken ct)
+    private static Settings ExecutionSettings(Settings preferences, IReadOnlyList<BackendDevice> devices, int mode, HashcatTool? tool = null)
     {
-        if (UseNative(s, devices, mode))
-        {
-            int threads = s.MaxCpuThreads > 0 ? s.MaxCpuThreads : Environment.ProcessorCount;
-            return (await Task.Run(() => NativeKernels.Benchmark(mode, threads, nativeDuration, ct), ct), true);
-        }
-        bool hybrid = UseHybrid(s, devices, mode);
-        var args = HashcatRunner.DeviceArguments(s, devices, gpuOnly: hybrid);
-        args.AddRange(["-w", s.Workload.ToString()]);
-        if (s.OptimizedKernels && (await hashcat.ModeInfoAsync(mode))?.HasOptimizedKernel == true) args.Add("-O");
-        if (!hybrid) return (await hashcat.BenchmarkAsync(mode, args, ct), false);
+        var profile = PerformanceProfiles.Load();
+        PerformanceProfiles.Invalidate(profile, PerformanceProfiles.CpuFingerprint,
+            PerformanceProfiles.GpuFingerprint(tool ?? HashcatTool.Locate(preferences.HashcatPath), devices));
+        return ProfileSettings.ForAttack(preferences, profile, devices, mode, MatchedSpeedProbe.Length,
+            NativeKernels.BenchmarkHashes.GetValueOrDefault(mode, ""));
+    }
 
-        // Both at once, as in an attack: they share cores, memory and power. The CPU keeps measuring
-        // while hashcat runs (its start-up takes a while), and its last full measurement counts.
-        using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var gpu = hashcat.BenchmarkAsync(mode, args, ct);
-        int cpuThreads = HybridRunner.CpuThreads(s, devices, hashcatRunning: true);
-        var cpu = Task.Run(() =>
+    public static bool UseNative(Settings s, IReadOnlyList<BackendDevice> devices, int mode)
+        => NativeEligible(ExecutionSettings(s, devices, mode), devices, mode);
+
+    private static bool NativeEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
+        s.UseNativeCpuEngine && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
+        && s.PerformanceChoice?.Engine is not ("gpu" or "hybrid")
+        && (HashcatRunner.ActiveGpus(s, devices).Count == 0 || s.Strategy == DeviceStrategy.CpuOnly || s.PerformanceChoice?.Engine == "cpu")
+        && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
+
+    public static bool UseHybrid(Settings s, IReadOnlyList<BackendDevice> devices, int mode)
+        => HybridEligible(ExecutionSettings(s, devices, mode), devices, mode);
+
+    private static bool HybridEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
+        s.UseNativeCpuEngine && s.HybridCpuGpu && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
+        && s.PerformanceChoice?.Engine is not ("cpu" or "gpu")
+        && s.Strategy is DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu && HashcatRunner.ActiveGpus(s, devices).Count > 0
+        && (s.PerformanceChoice?.Engine == "hybrid" || !HybridRunner.CpuAddsTooLittle(s, devices, mode))
+        && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
+
+    public static async Task<(double Speed, bool Native)> MeasureAsync(HashcatTool hashcat, Settings preferences,
+        IReadOnlyList<BackendDevice> devices, int mode, TimeSpan nativeDuration, CancellationToken ct)
+    {
+        var s = ExecutionSettings(preferences, devices, mode, hashcat);
+        using var selection = ProfileSettings.ZipSelection(s, mode);
+        if (NativeEligible(s, devices, mode))
         {
-            double last = 0;
-            while (!done.IsCancellationRequested)
-            {
-                // A sample cut short by the end of hashcat's run still covers its final seconds;
-                // one shorter than the warm-up returns 0 and keeps the previous sample.
-                double v = NativeKernels.Benchmark(mode, cpuThreads, nativeDuration, done.Token);
-                if (v > 0) last = v;
-            }
-            return last;
-        }, CancellationToken.None);
-        double gpuSpeed;
-        try { gpuSpeed = await gpu; }
-        finally { done.Cancel(); }
-        double cpuSpeed = await cpu;
-        ct.ThrowIfCancellationRequested();
-        if (gpuSpeed > 0) s.GpuSpeedByMode[mode] = gpuSpeed;
-        if (cpuSpeed > 0) s.CpuSpeedByMode[mode] = cpuSpeed;
-        DebugLog.Info($"Hybrid speed probe, mode {mode}: hashcat {gpuSpeed:N0} + built-in {cpuSpeed:N0} ({cpuThreads} threads)");
-        return (gpuSpeed + cpuSpeed, false);
+            int measured = s.PerformanceChoice?.Engine == "cpu" ? s.PerformanceChoice.Threads : s.CpuPerformanceChoice?.Threads ?? 0;
+            int threads = s.MaxCpuThreads > 0 ? s.MaxCpuThreads : measured > 0 ? measured : Environment.ProcessorCount;
+            return (await Task.Run(() => NativeKernels.Benchmark(mode, threads, nativeDuration, ct, MatchedSpeedProbe.Length), ct), true);
+        }
+        bool hybrid = HybridEligible(s, devices, mode);
+        if (hybrid || (NativeKernels.Supports(mode) && HashcatRunner.ActiveGpus(s, devices).Count > 0
+            && string.IsNullOrWhiteSpace(s.ExtraArguments)))
+        {
+            int threads = HybridRunner.CpuThreads(s, devices, hashcatRunning: true);
+            var (cpu, gpu) = await MatchedSpeedProbe.MeasureAsync(hashcat, s, devices, mode, threads, nativeDuration, hybrid, ct);
+            if (gpu <= 0 || hybrid && cpu <= 0) return (0, false);
+            preferences.GpuSpeedByMode[mode] = gpu;
+            if (hybrid) preferences.CpuSpeedByMode[mode] = cpu;
+            DebugLog.Info($"Matched speed probe, mode {mode}, synthetic native fixture, length {MatchedSpeedProbe.Length}: GPU {gpu:N0}/s, CPU {cpu:N0}/s ({threads} threads)");
+            return (hybrid ? MatchedSpeedProbe.CombinedRate(cpu, gpu) : gpu, false);
+        }
+
+        // hashcat's standalone benchmark has no live guard. Keep configured limits intact by leaving this measurement out.
+        if (HashcatRunner.GuardFor(s, devices) is { Active: true } || !await MatchedSpeedProbe.PowerLimitAllowsAsync(s)) return (0, false);
+        var args = HashcatRunner.DeviceArguments(s, devices);
+        args.AddRange(["-w", s.Workload.ToString()]);
+        if (s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false
+            && (await hashcat.ModeInfoAsync(mode))?.HasOptimizedKernel == true) args.Add("-O");
+        return (await hashcat.BenchmarkAsync(mode, args, ct), false);
     }
 }
