@@ -421,11 +421,7 @@ DECLSPEC int check_inflate_code1 (PRIVATE_AS u8 *next, int left)
     }
     else if (op & 32)
     {
-      if (left == 0)
-      {
-        return 1;
-      }
-      return 0;
+      return 1; // End of this block; the inflater checks any following blocks.
     }
     else
     {
@@ -436,8 +432,8 @@ DECLSPEC int check_inflate_code1 (PRIVATE_AS u8 *next, int left)
 
 // Deflated entry, as hashcat's kernel checks it: the block type of the first byte, then (with at
 // least 24 bytes of data) a quick look at the first fixed or dynamic Huffman block, then a full
-// inflate whose output length and CRC-32 must match. r0 is left different from the digest when a
-// check fails.
+// inflate whose output length and CRC-32 must match. A type 1 hash contains a prefix: the decoder
+// must consume it without an error, with more input expected. CPU confirmation checks the archive.
 
 #define RK_VERIFY(k0,k1,k2,r0)                                        \
 {                                                                     \
@@ -483,11 +479,20 @@ DECLSPEC int check_inflate_code1 (PRIVATE_AS u8 *next, int left)
                                                                       \
     mz_inflateInit2 (&infstream, -MAX_WBITS, &pStream);               \
                                                                       \
-    const int ret = hc_inflate (&infstream);                          \
-                                                                      \
-    if (ret == MZ_STREAM_END && infstream.total_out == esalt_bufs[DIGESTS_OFFSET_HOST].hash.uncompressed_length) \
+    if (esalt_bufs[DIGESTS_OFFSET_HOST].hash.data_type_enum == 1)      \
     {                                                                 \
-      (r0) = ~infstream.crc32;                                        \
+      size_t rk_in = infstream.avail_in;                              \
+      size_t rk_out = infstream.avail_out;                            \
+      const tinfl_status status = tinfl_decompress (&pStream.m_decomp, infstream.next_in, &rk_in, tmp, tmp, &rk_out, TINFL_FLAG_FLUSH_WINDOW | TINFL_FLAG_HAS_MORE_INPUT, &infstream); \
+      if ((status == TINFL_STATUS_NEEDS_MORE_INPUT || status == TINFL_STATUS_DONE) && rk_in == data_length - 12) (r0) = search0; \
+    }                                                                 \
+    else                                                              \
+    {                                                                 \
+      const int ret = hc_inflate (&infstream);                        \
+      if (ret == MZ_STREAM_END && infstream.total_out == esalt_bufs[DIGESTS_OFFSET_HOST].hash.uncompressed_length) \
+      {                                                               \
+        (r0) = ~infstream.crc32;                                      \
+      }                                                               \
     }                                                                 \
   }                                                                   \
 }
