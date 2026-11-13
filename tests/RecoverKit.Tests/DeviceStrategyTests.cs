@@ -20,8 +20,8 @@ public class DeviceStrategyTests
     [Fact]
     public void GpuFirstStrategiesFallBackToTheProcessorWithoutAGpu()
     {
-        Assert.Equal(["-D", "1"], Args(DeviceStrategy.GpuOnly, Cpu));
-        Assert.Equal(["-D", "1"], Args(DeviceStrategy.FastGpu, Cpu));
+        Assert.Equal(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], Args(DeviceStrategy.GpuOnly, Cpu));
+        Assert.Equal(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], Args(DeviceStrategy.FastGpu, Cpu));
     }
 
     [Fact]
@@ -40,13 +40,68 @@ public class DeviceStrategyTests
         => Assert.Empty(HashcatRunner.DeviceArguments(new Settings(), null));
 
     [Fact]
+    public void OptionalVendorBackendsAreIgnoredOnlyWithoutAnEnabledMatchingGpu()
+    {
+        BackendDevice nvidia = new() { Id = 1, Type = "GPU", Backend = "OpenCL", Vendor = "NVIDIA Corporation" };
+        BackendDevice amd = new() { Id = 2, Type = "GPU", Backend = "OpenCL", Vendor = "Advanced Micro Devices, Inc." };
+        var both = new[] { nvidia, amd };
+        var all = HashcatRunner.DeviceArguments(new Settings(), both);
+        Assert.DoesNotContain("--backend-ignore-cuda", all);
+        Assert.DoesNotContain("--backend-ignore-hip", all);
+        var onlyNvidia = HashcatRunner.DeviceArguments(new Settings { DisabledDevices = [2] }, both);
+        Assert.Contains("--backend-ignore-hip", onlyNvidia);
+        Assert.DoesNotContain("--backend-ignore-cuda", onlyNvidia);
+        var onlyAmd = HashcatRunner.DeviceArguments(new Settings(), both, exclude: [1]);
+        Assert.Contains("--backend-ignore-cuda", onlyAmd);
+        Assert.DoesNotContain("--backend-ignore-hip", onlyAmd);
+    }
+
+    [Fact]
+    public void IgnoringDisabledVendorBackendRemapsRemainingDeviceIds()
+    {
+        var known = HashcatTool.ParseDevices(TwoGpuInfo);
+        var args = HashcatRunner.DeviceArguments(new Settings { DisabledDeviceKeys = [known[0].Key] }, known);
+        Assert.Equal(["-d", "1", "--backend-ignore-cuda"], args);
+    }
+
+    [Fact]
+    public void CpuOnlyRemapsCpuIdAfterIgnoringGpuBackends()
+    {
+        BackendDevice cuda = new() { Id = 1, Backend = "CUDA", Type = "GPU", Name = "NVIDIA" };
+        BackendDevice hip = new() { Id = 2, Backend = "HIP", Type = "GPU", Name = "AMD" };
+        BackendDevice cpu = new() { Id = 3, Backend = "OpenCL", Type = "CPU" };
+        var args = HashcatRunner.DeviceArguments(new Settings { Strategy = DeviceStrategy.CpuOnly, DisabledDevices = [99] }, [cuda, hip, cpu]);
+        Assert.Equal(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip", "-d", "1"], args);
+    }
+
+    [Fact]
+    public void VendorOnAnOpenClAliasKeepsTheUsableNativeBackend()
+    {
+        BackendDevice cuda = new() { Id = 1, Backend = "CUDA", Type = "GPU", Name = "GeForce" };
+        BackendDevice alias = new() { Id = 2, AliasOf = 1, Backend = "OpenCL", Type = "GPU", Vendor = "NVIDIA Corporation" };
+        var args = HashcatRunner.DeviceArguments(new Settings(), [cuda, alias]);
+        Assert.DoesNotContain("--backend-ignore-cuda", args);
+        Assert.Contains("--backend-ignore-hip", args);
+    }
+
+    [Fact]
+    public void DisablingEveryGpuDoesNotReviveItsOpenClAlias()
+    {
+        var known = HashcatTool.ParseDevices(TwoGpuInfo);
+        var args = HashcatRunner.DeviceArguments(new Settings { DisabledDevices = [1, 2] }, known);
+        Assert.Contains("--backend-ignore-cuda", args);
+        Assert.Contains("--backend-ignore-hip", args);
+        Assert.Equal("1", args[args.IndexOf("-D") + 1]);
+    }
+
+    [Fact]
     public void HybridRunsKeepTheProcessorOutOfHashcat()
     {
         var known = new[] { Gpu, Cpu };
         Assert.Equal(["-D", "2"], HashcatRunner.DeviceArguments(new Settings(), known, gpuOnly: true));
         Assert.Equal(["-D", "2"], HashcatRunner.DeviceArguments(new Settings { Strategy = DeviceStrategy.GpuAndCpu }, known, gpuOnly: true));
         // Without a GPU "GPU only" has nothing to run on; the normal fallback applies.
-        Assert.Equal(["-D", "1"], HashcatRunner.DeviceArguments(new Settings(), [Cpu], gpuOnly: true));
+        Assert.Equal(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(new Settings(), [Cpu], gpuOnly: true));
     }
 
     [Fact]

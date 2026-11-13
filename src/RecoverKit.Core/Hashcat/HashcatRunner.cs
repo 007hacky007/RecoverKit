@@ -31,6 +31,8 @@ public sealed record RunRequest
     /// first confirmed password and caches only that one.
     /// </summary>
     public Func<byte[], bool>? ConfirmPassword { get; init; }
+    /// <summary>The target needs RecoverKit's ZIP kernel to check a partial encrypted entry.</summary>
+    public bool RequiresPartialZipKernel { get; init; }
 }
 
 public sealed class RunResult
@@ -158,13 +160,13 @@ public sealed class HashcatRunner(HashcatTool tool)
         var a = new List<string>();
         // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
         // instead of failing with "no devices found".
-        bool noGpu = known is not null && known.Count > 0 && !known.Any(d => d.IsGpu);
+        bool noGpu = known is { Count: > 0 } && !known.Any(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true);
         bool cpuDevice = known?.Any(d => !d.IsSkippedAlias && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)) == true;
         if (gpuOnly && !noGpu) a.AddRange(["-D", "2"]);
         else
             switch (s.Strategy)
             {
-                case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", "1,2"]); break;
+                case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", noGpu ? "1" : "1,2"]); break;
                 // hashcat reaches the processor only through OpenCL; skipping the GPU-only CUDA and HIP
                 // interfaces keeps a half-installed GPU runtime (for example AMD HIP without its compiler
                 // library) from aborting a CPU-only run.
@@ -189,6 +191,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             if (ids.Count > 0)
             {
                 a.AddRange(["-d", string.Join(',', ids)]);
+                AddBackendIgnores();
                 return a;
             }
         }
@@ -197,8 +200,35 @@ public sealed class HashcatRunner(HashcatTool tool)
             var enabled = known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).Select(d => d.Id).ToList();
             if (enabled.Count > 0) a.AddRange(["-d", string.Join(',', enabled)]);
         }
+        AddBackendIgnores();
         return a;
+
+        void AddBackendIgnores()
+        {
+            if (known is not { Count: > 0 }) return;
+            var enabled = known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
+            bool cpuOnly = s.Strategy == DeviceStrategy.CpuOnly && !gpuOnly;
+            // An unidentified GPU might still need either backend. Its aliases can supply the vendor.
+            bool unknown = enabled.Any(d => !new[] { d }.Concat(known.Where(alias => alias.AliasOf == d.Id))
+                .Any(device => device.Backend is "CUDA" or "HIP" or "Metal" ||
+                    HasVendor(device, "NVIDIA") || HasVendor(device, "AMD") || HasVendor(device, "Advanced Micro Devices") ||
+                    HasVendor(device, "Intel") || HasVendor(device, "Apple")));
+            bool ignoreCuda = cpuOnly || !unknown && !enabled.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
+            bool ignoreHip = cpuOnly || !unknown && !enabled.Any(d => d.Backend == "HIP" || HasVendor(d, "AMD") || HasVendor(d, "Advanced Micro Devices"));
+            if (ignoreCuda && !a.Contains("--backend-ignore-cuda")) a.Add("--backend-ignore-cuda");
+            if (ignoreHip && !a.Contains("--backend-ignore-hip")) a.Add("--backend-ignore-hip");
+            int selection = a.IndexOf("-d");
+            if (selection < 0) return;
+            var removed = known.Where(d => ignoreCuda && d.Backend == "CUDA" || ignoreHip && d.Backend == "HIP").ToList();
+            // Backend ignores remove devices before hashcat assigns ids, shifting later -d selections.
+            a[selection + 1] = string.Join(',', a[selection + 1].Split(',').Select(int.Parse)
+                .Where(id => !removed.Any(d => d.Id == id))
+                .Select(id => id - removed.Count(d => d.Id < id)));
+        }
     }
+
+    private static bool HasVendor(BackendDevice d, string vendor)
+        => d.Vendor.Contains(vendor, StringComparison.OrdinalIgnoreCase) || d.Name.Contains(vendor, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether the user unchecked this device (by its stable key; ids only for older settings files).</summary>
     public static bool IsDisabled(Settings s, BackendDevice d)
@@ -239,13 +269,73 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// <summary>How often the outfile is read for new hits when a confirmation check is set.</summary>
     internal TimeSpan OutfilePollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>The last attack mode on the rebuilt command line, including user arguments.</summary>
+    internal static int EffectiveAttackMode(PreparedAttack attack, string? extraArguments)
+    {
+        var args = attack.Args.Concat((extraArguments ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToList();
+        int mode = 0;
+        for (int i = 0; i < args.Count; i++)
+        {
+            string? value = args[i] switch
+            {
+                "-a" or "--attack-mode" => ++i < args.Count ? args[i] : "",
+                var arg when arg.StartsWith("--attack-mode=", StringComparison.Ordinal) => arg[14..],
+                var arg when arg.StartsWith("-a", StringComparison.Ordinal) && arg.Length > 2 => arg[2..],
+                _ => null,
+            };
+            if (value is not null) mode = int.TryParse(value, out int parsed) ? parsed : -1;
+        }
+        return mode;
+    }
+
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
         r.VolumeCredentials?.ValidateUnchanged();
-        HashcatKernels.EnsureFor(tool, r.Mode);
-        var args = BuildArguments(r);
+        int attackMode = EffectiveAttackMode(r.Attack, r.Settings.ExtraArguments);
+        bool kernelsReady = HashcatKernels.EnsureFor(tool, r.Mode, attackMode);
+        if (r.RequiresPartialZipKernel && !kernelsReady)
+            return new RunResult { Outcome = RunOutcome.Error, Error = "This partial ZIP target requires RecoverKit's ZIP kernel and a supported dictionary or mask attack. Check the hashcat installation and kernel settings." };
         string outFile = OutFile(r.SessionDir, r.SessionName);
         if (!r.Restore && File.Exists(outFile)) File.Delete(outFile);
+        var confirm = r.ConfirmPassword is { } cf ? new OutfileConfirmer(outFile, cf, FalsePositives) : null;
+        long progress = 0;
+        string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
+        if (!r.Restore && File.Exists(restoreFile)) File.Delete(restoreFile);
+        long checkpoint = Native.HybridRunner.ReadRestorePoint(restoreFile) ?? 0;
+        int failures = 0;
+        int cudaHintShown = 0;
+        void Output(string line)
+        {
+            OutputLine?.Invoke(line);
+            if (HashcatOutput.NeedsCudaCompilerHint(line) && Interlocked.Exchange(ref cudaHintShown, 1) == 0)
+                OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Download NVIDIA CUDA compiler to enable CUDA.");
+        }
+        while (true)
+        {
+            if (ct.IsCancellationRequested) return new RunResult { Outcome = RunOutcome.Aborted };
+            var result = await RunAttemptAsync(r, confirm, Output, ct);
+            if (result.Outcome != RunOutcome.Error || ct.IsCancellationRequested || !HashcatOutput.IsTransientFailure(result.Error)) return result;
+            long nextProgress = result.LastStatus?.ProgressDone ?? 0;
+            long nextCheckpoint = Native.HybridRunner.ReadRestorePoint(RestoreFile(r.SessionDir, r.SessionName)) ?? 0;
+            failures = nextProgress > progress || nextCheckpoint > checkpoint ? 0 : failures + 1;
+            progress = Math.Max(progress, nextProgress);
+            checkpoint = Math.Max(checkpoint, nextCheckpoint);
+            if (failures > 3) return result;
+            bool restore = r.Attack.Stdin is null && File.Exists(restoreFile);
+            OutputLine?.Invoke("The GPU backend stopped unexpectedly. Retrying " +
+                (restore ? "from the saved checkpoint." : r.Attack.Stdin is not null
+                    ? "from the start of this step (the candidate generator cannot resume)."
+                    : "from the start of this step (no checkpoint was saved)."));
+            try { await Task.Delay(TimeSpan.FromMilliseconds(100), ct); }
+            catch (OperationCanceledException) { return new RunResult { Outcome = RunOutcome.Aborted, LastStatus = result.LastStatus }; }
+            r = r with { Restore = restore };
+        }
+    }
+
+    private async Task<RunResult> RunAttemptAsync(RunRequest r, OutfileConfirmer? confirm, Action<string> output, CancellationToken ct)
+    {
+        var args = BuildArguments(r);
+        string outFile = OutFile(r.SessionDir, r.SessionName);
         OutputLine?.Invoke("hashcat " + string.Join(' ', args.Select(Quote)));
 
         bool useStdin = r.Attack.Stdin is not null && !r.Restore;
@@ -270,14 +360,14 @@ public sealed class HashcatRunner(HashcatTool tool)
                 return;
             }
             Remember(tail, e.Data);
-            if (e.Data.Length > 0) OutputLine?.Invoke(e.Data);
+            if (e.Data.Length > 0) output(e.Data);
         };
         p.ErrorDataReceived += (_, e) =>
         {
             if (string.IsNullOrEmpty(e.Data)) return;
             DebugLog.ProcessOutput(logId, "stderr", e.Data);
             Remember(tail, e.Data);
-            OutputLine?.Invoke(e.Data);
+            output(e.Data);
         };
 
         p.Start();
@@ -312,7 +402,6 @@ public sealed class HashcatRunner(HashcatTool tool)
         bool stopped = false;
         // Confirmation check: hashcat keeps guessing; each hit it writes to the outfile is checked here
         // and the first confirmed one stops it.
-        var confirm = r.ConfirmPassword is { } cf ? new OutfileConfirmer(outFile, cf, FalsePositives) : null;
         using var tailCts = new CancellationTokenSource();
         Task outfileTail = Task.CompletedTask;
         if (confirm is not null)
@@ -379,10 +468,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);
         if (stopped && outcome != RunOutcome.Cracked) outcome = RunOutcome.Aborted;
 
-        string? error = outcome == RunOutcome.Error
-            ? string.Join(Environment.NewLine, tail.Where(l => !l.StartsWith('{')).TakeLast(12))
-            : null;
-        if (outcome == RunOutcome.Error && string.IsNullOrWhiteSpace(error)) error = $"hashcat exited with code {code}.";
+        string? error = outcome == RunOutcome.Error ? HashcatOutput.FailureMessage(tail, code) : null;
         if (outcome == RunOutcome.Error && NoCpuDevice(r.Settings, KnownDevices))
             error = (OperatingSystem.IsMacOS()
                 ? "hashcat has no processor (CPU) device on this computer: Apple Silicon Macs expose only the GPU to hashcat. " +
@@ -453,6 +539,7 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     private static void Remember(Queue<string> q, string line)
     {
+        if (HashcatOutput.IsStartupAdvice(line) || string.IsNullOrWhiteSpace(line)) return;
         lock (q)
         {
             q.Enqueue(line);
