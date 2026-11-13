@@ -5,10 +5,10 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
-[Trait("Category", "Stay")]
 public class StayAttackTests
 {
     [Fact]
+    [Trait("Category", "Stay")]
     public void Stage3_recovers_exact_keys_from_true_survivor()
     {
         var zip = StayTestZip.MakeZip(5);
@@ -42,6 +42,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_recovers_keys_end_to_end()
     {
         var zip = StayTestZip.MakeZip(5, seed: 0x13579bdf);
@@ -58,6 +59,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_recovers_keys_winzip_variant()
     {
         var zip = StayTestZip.MakeZip(5, seed: 0x00c0ffee, variant: ZipRngVariant.WinZip);
@@ -73,6 +75,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_explains_prefix_and_verifies_all_matched()
     {
         var zip = StayTestZip.MakeZip(7, seed: 0x2468ace0, sessions: 5);
@@ -88,6 +91,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_recovers_keys_with_exotic_method_entries()
     {
         // method 12 among the explained files: no CRC verification possible, header-only match
@@ -111,6 +115,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_returns_null_for_incompatible()
     {
         // too few files
@@ -147,6 +152,7 @@ public class StayAttackTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Run_reports_progress_and_cancels()
     {
         var zip = StayTestZip.MakeZip(5);

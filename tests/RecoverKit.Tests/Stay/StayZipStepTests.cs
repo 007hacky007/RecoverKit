@@ -8,7 +8,6 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
-[Trait("Category", "Stay")]
 public class StayZipStepTests
 {
     private static Settings IsolatedSettings()
@@ -22,6 +21,7 @@ public class StayZipStepTests
         => StayTestZip.ExtractToTemp(StayTestZip.MakeZip(files, seed));
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Step_recovers_caches_and_decrypts()
     {
         var (path, target) = ZipTarget(5);
@@ -67,6 +67,7 @@ public class StayZipStepTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Step_skips_copy_when_output_exists()
     {
         var (path, target) = ZipTarget(5, 0x77c1a2b3);
@@ -88,6 +89,7 @@ public class StayZipStepTests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public async Task Session_runs_stay_step_and_reports_recovered_keys()
     {
         var (path, target) = ZipTarget(5, 0x2b4d6f81);

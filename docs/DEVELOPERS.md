@@ -94,8 +94,10 @@ dotnet build RecoverKit.sln -c Release
 dotnet test tests/RecoverKit.Tests
 ```
 
-The Stay ZIP attack tests (`Category=Stay`) run full key searches and take many minutes, so
-`dotnet test` skips them. Run them with `dotnet test tests/RecoverKit.Tests -p:RunStayTests=true`.
+Stay ZIP tests that search key spaces (`Category=Stay`) take many minutes, so `dotnet test`
+skips them. Run them with `dotnet test tests/RecoverKit.Tests -p:RunStayTests=true --filter Category=Stay`.
+Fast payload extraction, archive generation, decryption, filter and key verification tests run
+in the normal suite, even when their files are under `Stay/`.
 Tests that run hashcat on the GPU (`Category=Slow`, for example `ZipGpuKernelSlowTests`) are skipped
 as well; run them with `-p:RunSlowTests=true` or an explicit `--filter`.
 CI runs them in a separate workflow (`stay-tests.yml`) only when the attack's code or tests change.

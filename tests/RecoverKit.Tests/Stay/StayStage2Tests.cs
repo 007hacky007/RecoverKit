@@ -4,7 +4,6 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
-[Trait("Category", "Stay")]
 public class StayStage2Tests
 {
     [Fact]
@@ -40,6 +39,7 @@ public class StayStage2Tests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public void Search_refines_true_stage1_survivor()
     {
         var zip = StayTestZip.MakeZip();
@@ -56,6 +56,7 @@ public class StayStage2Tests
     }
 
     [Fact]
+    [Trait("Category", "Stay")]
     public void Constraints_are_satisfied_by_true_Y()
     {
         var zip = StayTestZip.MakeZip();
@@ -88,7 +89,6 @@ public class StayStage2Tests
 }
 
 
-[Trait("Category", "Stay")]
 public class StayYConstraintTests
 {
     [Fact]

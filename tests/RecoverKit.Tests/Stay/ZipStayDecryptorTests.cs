@@ -7,7 +7,6 @@ using Xunit;
 
 namespace RecoverKit.Tests.Stay;
 
-[Trait("Category", "Stay")]
 public class ZipStayDecryptorTests
 {
     private static List<GeneratedEntry> MixedSpecs(int count) => Enumerable.Range(0, count).Select(i => new GeneratedEntry
