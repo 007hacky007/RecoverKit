@@ -259,7 +259,7 @@ public static class WalletExtractor
         byte[] body = truncated ? data[37..1061] : data[..^32];
         Set(d, "ELCT", "Electrum encrypted wallet (2.8+)", "PBKDF2-SHA512, 1024 iterations, secp256k1, AES-128-CBC", truncated ? 21800 : 21700,
             $"$electrum${(truncated ? 5 : 4)}*{Bin.Hex(data[4..37])}*{Bin.Hex(body)}*{Bin.Hex(data[^32..])}", SpeedClass.Slow,
-            truncated ? "Large wallet: truncated zlib/plaintext verification without the MAC. Verify the recovered password in Electrum. Hashcat mode 21800 is unavailable on Apple GPUs; use a compatible GPU or OpenCL CPU runtime." : "Verifies the complete wallet HMAC-SHA256.");
+            truncated ? "Large wallet: truncated zlib/plaintext verification without the MAC. Verify the recovered password in Electrum." : "Verifies the complete wallet HMAC-SHA256.");
         return true;
     }
 

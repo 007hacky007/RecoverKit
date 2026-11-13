@@ -31,7 +31,8 @@ All notable changes to RecoverKit. Downloads are on the
   without installing the CUDA Toolkit.
 
 ### Changed
-- hashcat 8.0.0 instead of 7.1.2. On Macs, ZIP archives with compressed files now run on the GPU.
+- hashcat 8.0.0 instead of 7.1.2. On Macs, ZIP archives with compressed files and large Electrum
+  wallets now run on the GPU.
   hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ## [1.3.0] - 2026-11-12

@@ -525,8 +525,8 @@ notes are taken from it, and the release job fails if the section is missing.
     supported record is selected; it may be an older vault with a different password.
   - Electrum supports encrypted seeds, BIP32/private keys and BIE1 full-file encryption. Large
     Electrum wallets and MetaMask vaults use partial plaintext checks; verify found passwords in
-    the original wallet. Large Electrum wallets (mode 21800) need a compatible GPU or OpenCL CPU
-    runtime; hashcat disables this mode on Apple GPUs. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
+    the original wallet. hashcat 7 refused large Electrum wallets (mode 21800) on Apple GPUs;
+    hashcat 8 runs them. Hardware-encrypted BIE2 files are unsupported. Legacy Electrum 1.x
     Python dictionaries support string keys, strings, numbers, booleans and null values.
   - Blockchain.com recovery handles the main password (legacy base64 with 10 PBKDF2 iterations,
     or version 2-4 JSON backups with explicit iterations), not the second spending password.
@@ -596,9 +596,10 @@ End-to-end validation used the CLI and bundled hashcat 7.1.2 on an Apple M1 Pro,
 three-word dictionary recovering `wallet-test-42` for all generated wallets except mode 21800:
 Ethereum 15600/15700, Electrum salt types 1-3 (16600) and full HMAC (21700), MetaMask
 10000/600000 iterations (26600) and large vaults (26610), Blockchain.com v1/v2 (12700/15200).
-Mode 21800 extraction matches the reference electrum2john output, but hashcat disables this
-mode on Apple GPUs because of Metal/OpenCL runtime limitations. Its cracking check remains
-unverified on a compatible device. No live funds or personal wallets were used.
+Mode 21800 extraction matches the reference electrum2john output. hashcat 7.1.2 disabled this
+mode on Apple GPUs; with hashcat 8.0.0 the CLI recovered `wallet-test-42` from the
+`electrum-large` fixture on the M1 Pro (OpenCL), and the module's example also cracks on Metal.
+No live funds or personal wallets were used.
 
 ### PDF permission removal
 
