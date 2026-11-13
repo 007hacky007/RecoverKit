@@ -262,6 +262,10 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 // With a GPU: hashcat on the GPUs and the built-in engine on the CPU, each on its own part.
                 var hybridPlan = nativePlan is null && pmkTable is null
                     ? Native.HybridRunner.Plan(mode, target.HashLines, attack, settings, Devices, target.VolumeCredentials) : null;
+                if (nativePlan is null && hybridPlan is null && settings.HybridCpuGpu && Native.HybridRunner.CpuAddsTooLittle(settings, Devices, mode)
+                    && Native.NativeRunner.Plan(mode, target.HashLines, attack, settings, Devices, ignoreGpu: true, credentials: target.VolumeCredentials) is not null)
+                    Log?.Invoke(LogKind.Info, $"The CPU added less than a quarter of the GPU's speed in the last hybrid attack on this format, " +
+                                              "and on an integrated GPU it slows the GPU down: hashcat runs alone.");
                 string restoreFile = nativePlan is not null
                     ? Native.NativeRunner.RestoreFile(settings.SessionsDir, resume?.HashcatSession ?? "")
                     : hybridPlan is not null

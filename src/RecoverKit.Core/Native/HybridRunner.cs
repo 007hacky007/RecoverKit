@@ -98,6 +98,7 @@ public sealed class HybridRunner
     {
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
+        if (CpuAddsTooLittle(settings, devices, mode)) return null;
         if (NativeRunner.Plan(mode, hashLines, attack, settings, devices, ignoreGpu: true, credentials) is not { } p) return null;
         // Every length must fit in 64 bits (hashcat's counters) and in hashcat's eight custom charsets.
         for (int l = p.Space.MinLength; l <= p.Space.MaxLength; l++)
@@ -106,6 +107,21 @@ public sealed class HybridRunner
             if (HashcatOrder.MaskArgs(HashcatOrder.SortedPositions(p.Space, l)) is null) return null;
         }
         return new HybridPlan(p.Kernel, p.Space);
+    }
+
+    /// <summary>
+    /// True when every GPU in use is integrated (Apple silicon, a processor's own graphics) and the
+    /// last hybrid attack on this mode measured the CPU at less than a quarter of hashcat's speed.
+    /// Integrated GPUs share the processor's power budget and memory, so a busy CPU slows them:
+    /// RAR 3 on an M1 Pro ran 8,000-11,000/s on the GPU next to the CPU engine instead of
+    /// 11,500-14,000/s alone, while the CPU added about 1,700/s. hashcat then runs alone.
+    /// </summary>
+    public static bool CpuAddsTooLittle(Settings s, IReadOnlyList<BackendDevice>? devices, int mode)
+    {
+        var gpus = HashcatRunner.ActiveGpus(s, devices);
+        if (gpus.Count == 0 || !gpus.All(d => d.IsIntegratedGpu)) return false;
+        return s.CpuSpeedByMode.TryGetValue(mode, out var cpu) && s.GpuSpeedByMode.TryGetValue(mode, out var gpu)
+               && cpu > 0 && gpu > 0 && cpu < 0.25 * gpu;
     }
 
     /// <summary>
@@ -256,6 +272,7 @@ public sealed class HybridRunner
         private bool _rebalanceRequested;
         private bool _correctedThisRun;
         private readonly SemaphoreSlim _work = new(0);
+        private readonly ManualResetEventSlim _decided = new(false);   // the first hashcat decision is made
         private readonly CancellationTokenSource _found = new();
         private CancellationTokenSource? _rebalance;
 
@@ -313,7 +330,13 @@ public sealed class HybridRunner
 
         private int Threads(bool hashcatRunning)
         {
-            lock (_lock) return _owner.ThreadsOverride ?? CpuThreads(_r.Settings, _owner.Devices, hashcatRunning, _excluded);
+            lock (_lock)
+            {
+                int n = _owner.ThreadsOverride ?? CpuThreads(_r.Settings, _owner.Devices, hashcatRunning, _excluded);
+                // While hashcat starts (self-test, autotune) it needs the processor: with every core busy
+                // its start took 60-70 s instead of a few seconds on an M1 Pro (RAR 3).
+                return _hcRunning && !_hcReported ? Math.Max(1, n / 2) : n;
+            }
         }
 
         public async Task<LengthOutcome> RunAsync(CancellationToken ct)
@@ -348,6 +371,7 @@ public sealed class HybridRunner
                         drained = !_hcRunning && _top <= _lo && _top == _doneFrom && _pending is null;
                         if (!_hcRunning && _cpuDead && (_top > _lo || _doneFrom > _top) && (_gpuDead || !_gpuUsable)) drained = true;   // nobody left
                     }
+                    _decided.Set();
                     if (count > 0)
                     {
                         runSkip = skip;
@@ -430,9 +454,19 @@ public sealed class HybridRunner
             long x = _lo + (long)Math.Min(_top - _lo, Math.Floor(gpuCandidates / _a));
             if (x <= _lo) return _lo;
             if (x >= _top) return _top;
-            // A boundary on a coarse digit keeps the CPU's boxes large.
+            // A boundary between values of the last character (or else on a coarse digit) keeps the
+            // CPU's boxes large.
+            long unit = _order.LastPositionUnit;
+            if (UnitIsSmall() && _top - _lo >= 4 * unit)
+            {
+                long rounded = (x + unit / 2) / unit * unit;
+                return Math.Clamp(rounded, _lo, _top);
+            }
             return Math.Max(_lo + 1, _order.AlignDown(x, Math.Max(1, (x - _lo) / 64), _lo));
         }
+
+        /// <summary>One value of the last character is at most a minute of CPU work.</summary>
+        private bool UnitIsSmall() => _order.LastPositionUnit > 1 && (double)_order.LastPositionUnit * _a / CpuSpeed <= 60;
 
         private void OnGpuStatus(HashcatStatus st)
         {
@@ -586,6 +620,7 @@ public sealed class HybridRunner
 
         private void CpuLoop(CancellationToken stop)
         {
+            try { _decided.Wait(TimeSpan.FromSeconds(5), stop); } catch (OperationCanceledException) { return; }
             try
             {
                 while (!stop.IsCancellationRequested)
@@ -610,6 +645,10 @@ public sealed class HybridRunner
                             else
                             {
                                 long size = Math.Max(1, (long)(CpuSpeed * _owner.BatchSeconds / _a));
+                                // Whole values of the last character when one takes at most a minute.
+                                long unit = _order.LastPositionUnit;
+                                bool starting = _hcRunning && !_hcReported;   // short batches until hashcat is up
+                                if (!starting && unit > size && UnitIsSmall() && _top - floor >= unit) size = unit;
                                 hi = _top;
                                 lo = _order.AlignDown(hi - size, size, floor);
                                 if (lo >= hi) lo = Math.Max(floor, hi - 1);

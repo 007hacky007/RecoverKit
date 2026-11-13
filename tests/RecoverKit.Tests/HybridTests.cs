@@ -257,7 +257,7 @@ public class HybridTests
 
     [Theory]
     [InlineData(50_000.0, 20)]       // GPU guess about right
-    [InlineData(1_000.0, 40)]        // GPU guessed far too slow: it finishes early and comes back for more
+    [InlineData(8_000.0, 40)]        // GPU guessed far too slow: it finishes early and comes back for more
     [InlineData(50_000_000.0, 1)]    // GPU guessed far too fast: the CPU runs out, hashcat is stopped and the rest split again
     public async Task EveryCandidateIsTestedExactlyOnce(double gpuGuess, long wordsPerStep)
     {
@@ -371,9 +371,10 @@ public class HybridTests
     {
         using var rig = new Rig();
         var statuses = new ConcurrentQueue<HashcatStatus>();
-        var runner = Rig.Runner(50_000);
+        // The GPU is given most of the work, so its runs last long enough to show up in the status.
+        var runner = Rig.Runner(500_000_000);
         runner.StatusReceived += statuses.Enqueue;
-        await runner.RunAsync(new HybridPlan(new RecordingKernel(rig.Seen, null), Space), "hash", rig.Request(), new FakeGpu(rig.Seen, null, 5), CancellationToken.None);
+        await runner.RunAsync(new HybridPlan(new RecordingKernel(rig.Seen, null), Space), "hash", rig.Request(), new FakeGpu(rig.Seen, null, 1), CancellationToken.None);
         Assert.NotEmpty(statuses);
         Assert.All(statuses, s => Assert.Contains(s.Devices, d => d.Name == "CPU (built-in engine)"));
         Assert.Contains(statuses, s => s.Devices.Any(d => d.Name == "Fake GPU") && s.Devices.Count == 2);
@@ -422,6 +423,22 @@ public class HybridTests
         var dict = new PreparedAttack { Description = "dict" };
         dict.Args.AddRange(["-a", "0", "words.txt"]);
         Assert.Null(HybridRunner.Plan(17210, hash, dict, new Settings(), [gpu]));
+    }
+
+    [Fact]
+    public void IntegratedGpusRunAloneWhenTheCpuAddsTooLittle()
+    {
+        var attack = new PreparedAttack { Description = "mask" };
+        attack.Args.AddRange(["-a", "3", "?l?l?l?l"]);
+        string hash = NativeKernels.BenchmarkHashes[17210];
+        var igpu = new BackendDevice { Id = 1, Type = "GPU", Name = "Apple M1 Pro", Unified = true };
+        var dgpu = new BackendDevice { Id = 2, Type = "GPU", Name = "RTX" };
+        var slowCpu = new Settings { CpuSpeedByMode = { [17210] = 1_000 }, GpuSpeedByMode = { [17210] = 10_000 } };
+        var fastCpu = new Settings { CpuSpeedByMode = { [17210] = 5_000 }, GpuSpeedByMode = { [17210] = 10_000 } };
+        Assert.Null(HybridRunner.Plan(17210, hash, attack, slowCpu, [igpu]));
+        Assert.NotNull(HybridRunner.Plan(17210, hash, attack, fastCpu, [igpu]));
+        Assert.NotNull(HybridRunner.Plan(17210, hash, attack, slowCpu, [igpu, dgpu]));   // a discrete GPU does not slow down
+        Assert.NotNull(HybridRunner.Plan(17210, hash, attack, new Settings(), [igpu]));    // nothing measured yet
     }
 
     [Fact]

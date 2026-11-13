@@ -152,6 +152,14 @@ public sealed class HashcatOrder
     }
 
     /// <summary>
+    /// Base words per value of the last position (hashcat's most significant base digit). The
+    /// built-in kernels run through the last character themselves and are fastest with all of it
+    /// (RAR 3: about twice as fast as with one fixed last character), so CPU batches of whole units
+    /// keep it free.
+    /// </summary>
+    public long LastPositionUnit => _unit.Length >= 2 ? _unit[^2] : BaseCount;
+
+    /// <summary>
     /// A start in [lo, hi) close to <paramref name="target"/> on a boundary of the coarsest base digit
     /// whose blocks are no larger than <paramref name="size"/>, so batches split into few, large boxes.
     /// </summary>
