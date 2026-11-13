@@ -9,6 +9,20 @@ namespace RecoverKit.Tests;
 public sealed class FiniteDiagnosticWorkerTests
 {
     [Fact]
+    public void LiveRatesSurviveFinalIdleStatus()
+    {
+        var samples = new FiniteDiagnosticWorker.EngineSamples();
+        samples.Add(new() { Devices = [new() { Id = 0, Type = "CPU", Speed = 100 }, new() { Id = 2, Speed = 300 }] });
+        samples.Add(new() { Devices = [new() { Id = 0, Type = "CPU", Speed = 200 }, new() { Id = 2, Speed = 500 }] });
+        samples.Add(new() { Devices = [new() { Id = 0, Type = "CPU", Speed = 0 }] });
+        var details = new Dictionary<string, string>();
+        samples.WriteTo(details);
+        Assert.Equal("150.00", details["Engine speed 0 CPU"]);
+        Assert.Equal("400.00", details["Engine speed 2 GPU"]);
+        Assert.Equal("2", details["Concurrent CPU/GPU samples"]);
+    }
+
+    [Fact]
     public void RequestContainsOnlySyntheticWorkloadAndNumericPreferences()
     {
         var settings = new Settings { ExtraArguments = "PRIVATE-EXTRA", DefaultDictionary = "PRIVATE-DICTIONARY", DataPath = "PRIVATE-DATA", ExecuteOnSuccess = "PRIVATE-COMMAND",

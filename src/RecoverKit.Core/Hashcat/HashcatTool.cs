@@ -253,6 +253,9 @@ public sealed partial class HashcatTool
         catch (OperationCanceledException)
         {
             try { p.Kill(true); } catch (InvalidOperationException) { }
+            await p.WaitForExitAsync(CancellationToken.None);
+            try { await Task.WhenAll(outTask, errTask); } catch (OperationCanceledException) { }
+            ct.ThrowIfCancellationRequested();
             DebugLog.Warn($"#{logId} timed out after {timeout.TotalSeconds:F0} s and was killed");
             throw new TimeoutException("hashcat did not finish in time.");
         }

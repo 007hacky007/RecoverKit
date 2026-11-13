@@ -86,7 +86,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                             throw new InvalidOperationException("GPU benchmark skipped: hashcat benchmark output cannot enforce the pause/duty guard. Finite hybrid jobs retain the configured guard.");
                         if (section == "gpu") await GpuAsync(local!, report, Update, ct);
                         if (section == "zip") await ZipAsync(local!, report, Update, ct);
-                        if (section == "hybrid") await HybridAsync(local!, isolated!, report, Update, ct);
+                        if (section == "hybrid") await HybridAsync(local!, report, Update, ct);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
@@ -263,7 +263,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
         }
     }
 
-    private async Task HybridAsync(HashcatTool local, string isolated, DiagnosticReport report, Action<string> progress, CancellationToken ct)
+    private async Task HybridAsync(HashcatTool local, DiagnosticReport report, Action<string> progress, CancellationToken ct)
     {
         var physical = devices.Where(d => d.IsGpu && !d.IsSkippedAlias && !HashcatRunner.IsDisabled(settings, d)).ToList();
         if (physical.Count == 0)
@@ -271,12 +271,13 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
             report.Measurements.Add(new() { Section = "hybrid", Step = "Device selection", Error = "Finite GPU and hybrid jobs skipped: every physical GPU is disabled." });
             return;
         }
-        var groups = new List<List<BackendDevice>> { physical };
-        if (physical.Any(d => d.IsIntegratedGpu) && physical.Any(d => !d.IsIntegratedGpu)) groups.Add(physical.Where(d => !d.IsIntegratedGpu).ToList());
+        var previous = PerformanceProfiles.Load();
+        PerformanceProfiles.Invalidate(previous, PerformanceProfiles.CpuFingerprint, PerformanceProfiles.GpuFingerprint(local, devices));
         int limit = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
         var workers = new[] { Math.Max(1, SystemFacts.PhysicalCores() - 1), SystemFacts.PhysicalCores(), Math.Max(1, Environment.ProcessorCount - 1) }.Select(n => Math.Min(n, limit)).Distinct().ToArray();
         foreach (int mode in new[] { 13000, 17210 })
         {
+            var groups = HybridBenchmarkDevices.Groups(settings, devices, mode, report.Measurements, previous);
             var hash = NativeKernels.BenchmarkHashes[mode];
             var kernel = NativeKernels.TryCreate(mode, hash);
             if (kernel is null) { report.Measurements.Add(new() { Section = "hybrid", Mode = mode, Step = "CPU kernel", Error = "Built-in kernel unavailable." }); continue; }
@@ -286,12 +287,14 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                 report.Measurements.Add(new() { Section = "hybrid", Mode = mode, Step = "CPU correctness FAIL", Engine = "cpu", Correct = false, Error = correctness.Error });
                 continue;
             }
-            int length = mode == 13000 ? 5 : 8;
+            // ZIP must outlast the scheduler's CPU-only shortcut to measure concurrent engines.
+            int length = mode == 13000 ? 5 : 9;
             foreach (var group in groups)
             foreach (int count in new[] { 0, -1 }.Concat(workers).Append(HybridRunner.CpuThreads(settings, group, true)).Distinct())
             for (int repeat = 1; repeat <= 2; repeat++)
             {
                 ct.ThrowIfCancellationRequested();
+                if (count < 0 && !group.Select(d => d.Key).SequenceEqual(physical.Select(d => d.Key))) continue;
                 string engine = count == 0 ? "gpu" : count < 0 ? "cpu" : "hybrid";
                 string label = $"Mode {mode}, {engine}, {(count < 0 ? limit : count)} workers, {(count < 0 ? 0 : group.Count)} GPU(s), repeat {repeat}/2";
                 progress(label);
@@ -299,7 +302,7 @@ public sealed class DetailedBenchmarkRunner(HashcatTool? tool, Settings settings
                 var clock = Stopwatch.StartNew();
                 try
                 {
-                    row.Details["Default"] = (group.SequenceEqual(physical) && (settings.HybridCpuGpu ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
+                    row.Details["Default"] = (group.Select(d => d.Key).SequenceEqual(physical.Select(d => d.Key)) && (settings.HybridCpuGpu ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
                     var result = await FiniteDiagnosticWorker.ExecuteAsync(local, settings, group, mode, count, length, limit, ct);
                     row.Correct = result.Correct;
                     row.Speed = result.Speed;

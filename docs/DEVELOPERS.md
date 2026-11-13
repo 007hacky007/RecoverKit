@@ -51,7 +51,8 @@ Automatic calibration currently measures CPU variants and worker counts, with a 
 only for masks of up to ten characters whose estimated duration is at least twelve seconds. It
 keeps the engine strategy until a detailed finite comparison is available. Detailed whole-job
 engine comparisons cover RAR 5 and stored ZipCrypto; other formats retain their existing engine
-strategy. GPU backend choices are measured per physical device, never by adding aliases.
+strategy. GPU backend choices are measured per physical device, never by adding aliases. The finite jobs
+compare the current backend with any repeatable backend winner found earlier in the test.
 ZIP GPU source variants are applied when a single physical GPU runs the job; a mixed-device
 process keeps the replacement default because it shares one kernel source tree and kernel flag.
 If a temperature or duty guard is active, the raw hashcat benchmark and ZIP comparison are skipped;

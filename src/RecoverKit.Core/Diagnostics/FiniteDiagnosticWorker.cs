@@ -172,11 +172,27 @@ public static class FiniteDiagnosticWorker
             Settings = settings, Guard = HashcatRunner.GuardFor(settings, devices), UseOptimizedKernel = optimized,
         };
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var samples = new EngineSamples();
         var timer = Stopwatch.StartNew();
         RunResult completed;
-        if (value.Count < 0) completed = await new NativeRunner().RunAsync(kernel!, space, hash, run, timeout.Token);
-        else if (value.Count == 0) completed = await new HashcatRunner(tool) { KnownDevices = devices }.RunAsync(run, timeout.Token);
-        else completed = await new HybridRunner { Devices = devices, ThreadsOverride = value.Count }.RunAsync(new HybridPlan(kernel!, space), hash, run, tool, timeout.Token);
+        if (value.Count < 0)
+        {
+            var runner = new NativeRunner();
+            runner.StatusReceived += samples.Add;
+            completed = await runner.RunAsync(kernel!, space, hash, run, timeout.Token);
+        }
+        else if (value.Count == 0)
+        {
+            var runner = new HashcatRunner(tool) { KnownDevices = devices };
+            runner.StatusReceived += samples.Add;
+            completed = await runner.RunAsync(run, timeout.Token);
+        }
+        else
+        {
+            var runner = new HybridRunner { Devices = devices, ThreadsOverride = value.Count };
+            runner.StatusReceived += samples.Add;
+            completed = await runner.RunAsync(new HybridPlan(kernel!, space), hash, run, tool, timeout.Token);
+        }
         bool correct = completed.Outcome == RunOutcome.Exhausted;
         var result = new Result
         {
@@ -185,10 +201,51 @@ public static class FiniteDiagnosticWorker
             Error = correct ? null : $"Finite job did not exhaust the synthetic keyspace ({completed.Outcome}); not eligible for selection.",
             Details = new() { ["Optimized"] = optimized.ToString(), ["Isolation"] = "Finite job ran in a separate process.", ["GPU temperature guard"] = (run.Guard?.TemperatureGuard ?? false).ToString(), ["GPU duty percent"] = limits.GpuDutyPercent.ToString(CultureInfo.InvariantCulture), ["Configured power limit"] = limits.GpuPowerLimit.ToString() },
         };
-        if (completed.LastStatus is { } status)
-            foreach (var device in status.Devices)
-                result.Details[$"Engine speed {device.Id} {(device.Type is "GPU" or "CPU" ? device.Type : "device")}"] = device.Speed.ToString("F2", CultureInfo.InvariantCulture);
+        samples.WriteTo(result.Details);
+        if (value.Count > 0)
+            result.Details["Actual execution"] = samples.ConcurrentSamples > 0 ? "Concurrent CPU and GPU" : "Adaptive scheduler; no concurrent CPU/GPU sample observed";
         return result;
+    }
+
+    internal sealed class EngineSamples
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<(int Id, string Type), List<double>> _speeds = new();
+        public int ConcurrentSamples { get; private set; }
+
+        public void Add(HashcatStatus status)
+        {
+            lock (_gate)
+            {
+                bool cpu = false, gpu = false;
+                foreach (var device in status.Devices.Where(d => d.Speed > 0 && double.IsFinite(d.Speed)))
+                {
+                    string type = device.Type == "CPU" ? "CPU" : "GPU";
+                    cpu |= type == "CPU";
+                    gpu |= type == "GPU";
+                    var key = (device.Id, type);
+                    if (!_speeds.TryGetValue(key, out var rates)) _speeds[key] = rates = [];
+                    rates.Add(device.Speed);
+                }
+                if (cpu && gpu) ConcurrentSamples++;
+            }
+        }
+
+        public void WriteTo(Dictionary<string, string> details)
+        {
+            lock (_gate)
+            {
+                foreach (var (key, rates) in _speeds)
+                {
+                    var sorted = rates.Order().ToArray();
+                    double median = (sorted[(sorted.Length - 1) / 2] + sorted[sorted.Length / 2]) / 2;
+                    details[$"Engine speed {key.Id} {key.Type}"] = median.ToString("F2", CultureInfo.InvariantCulture);
+                    details[$"Engine samples {key.Id} {key.Type}"] = rates.Count.ToString(CultureInfo.InvariantCulture);
+                }
+                details["Engine speed metric"] = "Median positive live speed in candidates/second; whole-job rate includes startup and scheduling.";
+                details["Concurrent CPU/GPU samples"] = ConcurrentSamples.ToString(CultureInfo.InvariantCulture);
+            }
+        }
     }
 
     internal static Result ReadResult(int exitCode, string json)

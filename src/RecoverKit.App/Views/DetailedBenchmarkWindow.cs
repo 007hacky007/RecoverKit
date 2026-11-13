@@ -140,7 +140,7 @@ public sealed class DetailedBenchmarkWindow : Window
         var progress = new Progress<DiagnosticProgress>(p =>
         {
             if (!_running) return;
-            _section.Text = p.Section;
+            _section.Text = DetailedBenchmarkRunner.Sections.FirstOrDefault(section => section.Id == p.Section)?.Title ?? p.Section;
             _step.Text = p.Step;
             _remaining = p.EstimatedRemaining;
             _lastElapsed = _elapsed.Elapsed;
