@@ -5,15 +5,18 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-13
+
 ### Added
-- Exportable synthetic benchmark files with matched comparison rates, exact attack instructions
-  and a results template, available from Save test files and `bench-full --export-tests`.
-- Two-minute detailed performance test with enforced section/step budgets, short samples, shared
-  GPU kernel cache and a Thorough option for the full sweep.
-- Detailed performance test with selectable sections, live progress, partial reports and a
-  privacy-scrubbed HTML/JSON report; measured performance profiles and automatic calibration.
-- Native ZipCrypto CPU header filters, with measured ARM CRC acceleration on Apple silicon and
-  selectable AVX-512, AVX2, NEON and scalar paths for testing and benchmarks.
+- Detailed performance test (Tools > Benchmark): measures every engine and device on this computer in
+  about two minutes, saves a report to send to the developers, and can save test files for comparing
+  RecoverKit with another program. "Thorough" runs the full, much slower measurement.
+- RecoverKit learns the fastest method for each format on this computer (GPU, CPU or both, number of
+  CPU workers, GPU interface) from the detailed test, or by measuring for a few seconds before the
+  first attack on a format. Preferences shows this performance profile and can reset it; your own
+  settings always win.
+- Faster classic ZIP (ZipCrypto) recovery on the CPU of Apple silicon Macs: about 44% faster on an
+  M1 Pro.
 - 7-Zip archives (.7z), with visible or encrypted file names, solid or not, and self-extracting.
 - KeePass databases: KeePass 1 (.kdb) and KeePass 2 / KeePassXC (.kdbx, including KDBX 4 with
   Argon2), with an optional keyfile.
@@ -52,15 +55,18 @@ All notable changes to RecoverKit. Downloads are on the
   hashcat 8 ignores the Workload setting (it always uses the former level 3).
 
 ### Fixed
-- Large classic ZIP entries now use a bounded GPU prefix and streamed whole-file password checks.
-  Uncompressed large entries and installations without the ZIP GPU kernels use the built-in CPU engine.
-- Optional HIP/CUDA startup advice no longer obscures hashcat's actual failure; NVIDIA OpenCL fallback
-  points to the CUDA compiler download in Tools.
-- GPU runtime failures resume the current attack from its checkpoint, with up to three retries
-  without progress, including the GPU side of hybrid attacks.
-- Resumed hashcat attacks keep their original optimized-kernel choice, even after Preferences change.
-- Optimized kernels use hashcat's reported limit for each mode and attack, avoiding skipped long masks.
-  Unknown limits, dictionaries and rule attacks use pure kernels; benchmarks share the same decision.
+- Classic ZIP archives whose encrypted files are all larger than 320 KB (for example camera photos)
+  failed every GPU attack with "Token length exception" and "No hashes loaded". The GPU now checks the
+  beginning of the file and every hit is checked against the whole file; large uncompressed files are
+  searched by the built-in CPU engine.
+- hashcat's notes about a missing AMD HIP or CUDA installation were shown as the error instead of the
+  real cause. The real cause is now shown in plain words, and NVIDIA GPUs that fall back to OpenCL get
+  a pointer to Tools > Download NVIDIA CUDA compiler.
+- A GPU error in the middle of an attack (seen on Macs while another program used the GPU) ended the
+  attack. RecoverKit now resumes from the last checkpoint, up to three times in a row.
+- A resumed attack ran without hashcat's optimized kernel (RAR 3 about 1.8 times slower).
+- Masks longer than the optimized kernel allows for a format (for example 21 or more characters for
+  RAR 3) were skipped by hashcat without being searched. RecoverKit now uses the slower kernel for them.
 - "CPU only" on Windows PCs without a CPU OpenCL runtime failed with "Failed to initialize AMD HIP
   RTC library" (or no devices). hashcat now skips the GPU-only CUDA and HIP interfaces in that mode,
   and RecoverKit explains the missing CPU runtime and offers to download it.
@@ -134,6 +140,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.4.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.0
 [1.3.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.3.0
 [1.2.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.2.0
 [1.1.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.1.0
