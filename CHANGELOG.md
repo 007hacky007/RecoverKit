@@ -35,10 +35,11 @@ All notable changes to RecoverKit. Downloads are on the
   the beginning of the compressed data first, which takes a fraction of a microsecond.
 - After upgrading from an earlier RecoverKit, the hashcat 7.1.2 it had installed stayed in use.
   RecoverKit's fast ZIP GPU kernels need hashcat 8.0.0, so ZIP attacks silently ran on the CPU.
-  RecoverKit now offers hashcat 8.0.0 at start whenever the hashcat it uses reports an older version,
-  wherever that copy came from (an earlier RecoverKit, a path set in Preferences, Homebrew, PATH), and
-  the attack log says why the GPU kernels are not used. Your own hashcat is left in place, and a "No"
-  for it is remembered until it changes.
+  The copy an earlier RecoverKit installed now gives way to the bundled hashcat 8.0.0. When the hashcat
+  in use is your own and older (a path set in Preferences, Homebrew, PATH), the dependencies page
+  shows it as a yellow light with a switch to the bundled copy, and the attack log says why the GPU
+  kernels are not used. Your own hashcat is left in place, and skipping the switch on the start page
+  is remembered until that hashcat changes.
 - An attack step that a large ZIP file cannot run on the CPU (rules, extra hashcat options) ended
   the whole recovery with an error. The step is skipped with the reason and the other steps run.
 

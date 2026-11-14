@@ -31,9 +31,9 @@ installer\out\RecoverKit-1.0.0-x64.msi
 ```
 
 By default the publish is **self-contained**: the MSI carries the .NET runtime, so
-the installed app runs on any 64-bit Windows with no prerequisites (larger MSI,
-about 40 MB). For a small MSI that relies on the machine having the
-.NET 10 Runtime:
+the installed app runs on any 64-bit Windows with no prerequisites (a larger MSI;
+the bundled hashcat adds to its size as well). For a smaller MSI that relies on the
+machine having the .NET 10 Runtime:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build.ps1 -FrameworkDependent
