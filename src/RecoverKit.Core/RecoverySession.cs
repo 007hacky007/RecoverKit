@@ -58,7 +58,7 @@ public sealed class SessionState
     public static SessionState? Load(Settings s, HashTarget t)
     {
         var p = PathFor(s, KeyFor(t));
-        if (!File.Exists(p)) return null;
+        if (!File.Exists(p)) return t.LegacyZipTarget is { } old ? Load(s, old) : null;
         try { return JsonSerializer.Deserialize<SessionState>(File.ReadAllText(p), Json); }
         catch (JsonException) { return null; }
     }
@@ -103,6 +103,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
+        if (resume is not null && target.LegacyZipTarget is { } old && resume.Key == SessionState.KeyFor(old)) target = old;
         target.VolumeCredentials?.ValidateUnchanged();
         string key = SessionState.KeyFor(target);
         string potfile = SessionState.PasswordCacheFor(settings, target);
@@ -304,6 +305,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
                 // Apply measured choices to this step only. Preferences and their explicit limits stay intact.
                 var runSettings = settings;
+                bool checkBytes = false;
                 var mask = Native.MaskSpace.FromHashcatArgs(attack.Args);
                 int measuredLength = mask?.MaxLength ?? 0;
                 if (target.VolumeCredentials is null)
@@ -316,6 +318,22 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                             : PerformanceProfiles.Load();
                         PerformanceProfiles.Invalidate(profile, PerformanceProfiles.CpuFingerprint, PerformanceProfiles.GpuFingerprint(tool, Devices ?? []));
                         runSettings = ProfileSettings.ForAttack(settings, profile, Devices ?? [], mode, measuredLength, target.HashLines, (double)attack.Keyspace, maskAttack: mask is not null);
+                        if (resume is null && target.ZipCheckBytes is { } filter && target.ZipPartial?.Method != 0
+                            && HashcatRunner.EffectiveAttackMode(attack, runSettings.ExtraArguments) is 0 or 3 && attack.Stdin is null)
+                            profile = await PerformanceCalibration.EnsureZipAsync(tool, runSettings, Devices ?? [], mode, target.HashLines,
+                                filter, message => Log?.Invoke(LogKind.Info, message), ct);
+                        checkBytes = target.ZipCheckBytes is not null && target.ZipPartial?.Method != 0
+                            && (resume is not null
+                                ? File.Exists(HashcatRunner.ZipFilterStateFile(settings.SessionsDir, resume.HashcatSession))
+                                : ZipCheckBytesTarget.IsFaster(profile, runSettings, Devices ?? [], mode));
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        state.StepIndex = si;
+                        state.ModeIndex = mi;
+                        state.Restorable = false;
+                        state.Save(settings);
+                        return new SessionResult { Outcome = SessionOutcome.Stopped };
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     { Log?.Invoke(LogKind.Warning, "Performance profile is unavailable; using preferences."); }
@@ -324,13 +342,14 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     runSettings = ProfileSettings.PreserveResumeEngine(runSettings, mode, settings.SessionsDir, resume.HashcatSession);
                 using var cpuSelection = ProfileSettings.CpuSelection(runSettings, mode);
                 int attackMode = HashcatRunner.EffectiveAttackMode(attack, runSettings.ExtraArguments);
+                checkBytes &= attackMode is 0 or 3 && attack.Stdin is null;
                 bool resumeDictionary = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex
                     && File.Exists(Native.ZipDictionaryRunner.RestoreFile(runSettings.SessionsDir, resume.HashcatSession));
                 bool zipKernelsMissing = false;
-                bool partialCpu = target.ZipPartial is { } partial && (partial.Method == 0
+                bool partialCpu = target.ZipPartial is { } partial && (!checkBytes && partial.Method == 0
                     || resumeDictionary
                     || runSettings.Strategy == DeviceStrategy.CpuOnly || Devices is not null && HashcatRunner.ActiveGpus(runSettings, Devices).Count == 0
-                    || (zipKernelsMissing = !HashcatKernels.EnsureFor(tool, mode, attackMode)));
+                    || !checkBytes && (zipKernelsMissing = !HashcatKernels.EnsureFor(tool, mode, attackMode)));
                 var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices,
                     ignoreGpu: partialCpu, credentials: target.VolumeCredentials, partial: target.ZipPartial);
                 bool cpuDictionary = partialCpu && runSettings.UseNativeCpuEngine
@@ -375,6 +394,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex && !restore)
                     Log?.Invoke(LogKind.Warning, "The saved engine cannot resume this step with the current settings; starting the step again.");
                 string session = restore ? resume!.HashcatSession : $"rk_{key}_{si}_{mi}";
+                if (resume is null) File.Delete(HashcatRunner.ZipFilterStateFile(settings.SessionsDir, session));
 
                 StepStarted?.Invoke(si, state.Steps.Count, attack.Description + (state.Modes.Count > 1 ? $" [mode {mode}]" : ""), attack.Keyspace);
                 Log?.Invoke(LogKind.Step, $"Step {si + 1}/{state.Steps.Count}: {attack.Description}" +
@@ -406,6 +426,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     Guard = HashcatRunner.GuardFor(runSettings, Devices),
                     ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
                     RequiresPartialZipKernel = target.ZipPartial is not null,
+                    ZipCheckBytes = checkBytes && nativePlan is null && !cpuDictionary ? target.ZipCheckBytes : null,
                 };
                 stepsRun++;
                 var result = cpuDictionary
@@ -587,7 +608,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         foreach (var f in new[] { HashcatRunner.RestoreFile(settings.SessionsDir, session), HashcatRunner.OutFile(settings.SessionsDir, session),
                                   Native.NativeRunner.RestoreFile(settings.SessionsDir, session),
                                   Native.ZipDictionaryRunner.RestoreFile(settings.SessionsDir, session),
-                                  Native.HybridRunner.RestoreFile(settings.SessionsDir, session) })
+                                  Native.HybridRunner.RestoreFile(settings.SessionsDir, session),
+                                  HashcatRunner.ZipFilterStateFile(settings.SessionsDir, session),
+                                  Path.Combine(settings.SessionsDir, session + ".headers.hash") })
             try { File.Delete(f); } catch (IOException) { }
     }
 }

@@ -225,7 +225,7 @@ version is left alone. hashcat 8 keys its kernel cache on the kernel
 source and on every non-kernel file in `OpenCL/`, so the new kernel is compiled on first use.
 `RECOVERKIT_HASHCAT_ZIP_KERNELS=0` keeps hashcat's kernels. Combinator and hybrid attacks
 (`-a 1/6/7`, hashcat's `_a1` kernels), multi-file hashes (17220/17225) and checksum-only hashes
-(17230) still run hashcat's kernels; RecoverKit's ZIP targets use none of them.
+(17230) still run hashcat's kernels. Eligible archives can use 17230 as a speculative filter (below).
 
 Why hashcat's kernels are slow: each candidate runs the key schedule and decrypts the 12-byte
 encryption header; when the check byte matches (1 in 128 with the CRC and time check bytes,
@@ -311,13 +311,55 @@ also use the CPU. Masks/brute-force and plain dictionaries are supported; CPU di
 does not interpret hashcat rule files or extra options and explains that limit before starting.
 The CLI and GUI Notes describe partial targets. GPU tests are opt-in through `RunSlowTests`.
 
+### Check-byte GPU filter
+
+`ZipCheckBytesTarget` optionally adds a mode 17230 hash with up to eight distinct encryption
+headers, drawn only from the attacked entry and the entries used by `ZipPasswordConfirmer`.
+It preserves the existing all-selected-entries password policy; mixed-password recovery is not added.
+
+Mode 17230 accepts either the CRC checksum field's high byte or the timestamp checksum field's
+high byte for each entry, exactly as the confirmer does. Both fields are retained, including for
+data-descriptor entries whose encryption header uses the CRC convention. The filter uses method 0
+to avoid hashcat's additional deflate-byte test. A second check byte is used only for old entries
+whose full verifier also enforces it; header-only sibling checks cannot supply a second byte.
+
+Eight one-byte entries provide 64 nominal bits, or at least 56 effective bits when each accepts
+two distinct alternatives. At 100 billion candidates/s and 0.1 s per launch, the false-hit estimate
+is at most 1e10/2^56 = 1.4e-7 per launch (five such entries would give 0.29). Four fully verified old
+two-byte entries provide 64 effective bits. Duplicate headers do not count twice. These estimates
+are not a correctness guarantee: an observed rejected hit requires replay of that assigned range
+on the original target, because hashcat can hide another hit in the same launch. A clean exhausted
+range is complete and is never replayed.
+
+The original hash, mode, CPU kernel and sibling checks stay intact. A `.zip-filter.json` sidecar
+records the actual GPU phase and hash for resume. A clean stop keeps hashcat's real restore point
+and resumes mode 17230. After a rejected hit, the sidecar records that the original range needs
+rechecking; a stop before replay starts invalidates only that range's progress. Once original-entry
+replay starts, its own checkpoints resume normally. Hybrid rebalances retain valid filter progress,
+and mode switches require equal base-word counts so `--skip` and `--limit` keep their meaning.
+Sessions saved before speed-based entry selection continue to use the legacy target.
+
+Without measurements the original GPU path is retained. With automatic calibration enabled
+(the default), the first eligible ZIP attack measures both original verification and the filter
+on the exact active GPU set, including multiple GPUs: two alternating two-second windows per mode,
+plus hashcat startup and shader compilation. The conservative comparison uses the slowest filter
+sample and fastest original sample, and requires a 5% gain. Results are cached for the device set
+and policy; a changed hybrid exclusion set is measured separately. Incomplete comparisons retain
+the original path and can retry on the next attack. Calibration is skipped when disabled or when
+raw probes would bypass an active temperature guard or duty limit. No benchmark-window visit is
+needed. The ZIP section of `bench-full` and `bench-zip` also include a separate check-byte row.
+Mode 17230 uses hashcat's stock kernel; no native or OpenCL kernel changes are required.
+
 ### False positives
 
 The hash covers one entry. For a stored entry a wrong password passes the check byte and the CRC-32
 about once in 5 * 10^11 candidates, a few minutes of GPU work; deflated entries must also inflate to
 the stored length, so they are far safer. `ZipExtractor` therefore attacks the smallest deflated
-entry unless a stored one is at least 8 times smaller (entries within hashcat's 320 KB limit first),
-and when the archive has other classic ZipCrypto entries it sets `HashTarget.ConfirmPassword`
+entry when there is no confirmation. With confirmation it estimates survivor work from encrypted
+bytes and the measured stored/deflated rates (2484/781 M/s). A stored entry can be about 3.18 times
+larger and still win. Entries within hashcat's 320 KB limit come first; large stored entries keep
+the deflated fallback because their GPU prefix check is unsafe. The constants live in `ChooseClassic`.
+When the archive has other classic ZipCrypto entries it sets `HashTarget.ConfirmPassword`
 (`ZipPasswordConfirmer`): up to 16 other entries, each checked by its header's check byte and, for
 stored or deflated entries up to 1 MB (4 MB in all), by decrypting, inflating and comparing the
 CRC-32. A single stored entry gets a note to confirm the password by opening the archive.

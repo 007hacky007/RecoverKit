@@ -14,7 +14,11 @@ namespace RecoverKit.Core.Formats;
 public sealed class ZipPasswordConfirmer
 {
     /// <summary>One entry: its stored header, the accepted check bytes and, when kept, a full verifier.</summary>
-    internal sealed record Check(string Name, byte[] Header, byte CrcCheck, byte TimeCheck, ZipCryptoKernel? Full);
+    internal sealed record Check(string Name, byte[] Header, ushort CrcChecksum, ushort TimeChecksum, ZipCryptoKernel? Full, bool TwoCheckBytes = false)
+    {
+        public byte CrcCheck => (byte)(CrcChecksum >> 8);
+        public byte TimeCheck => (byte)(TimeChecksum >> 8);
+    }
 
     private readonly Check[] _checks;
 
@@ -22,6 +26,8 @@ public sealed class ZipPasswordConfirmer
 
     /// <summary>Entries the candidate is checked against.</summary>
     public int Entries => _checks.Length;
+
+    internal IReadOnlyList<Check> Checks => _checks;
 
     /// <summary>Entries checked with their whole data (CRC-32), not only the header's check byte.</summary>
     public int FullChecks => _checks.Count(c => c.Full is not null);

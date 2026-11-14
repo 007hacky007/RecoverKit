@@ -135,8 +135,8 @@ public sealed partial class DetailedBenchmarkRunner
                 report.Measurements.Add(await MeasureComparisonAsync(local!, Chosen(0)!, file, "replacement", 1, token));
             }, () => gpuAllowed && Chosen(0) is not null && !report.Measurements.Any(r => r.Correct && r.Details.GetValueOrDefault("Test file") == file.FileName));
         foreach (int repeat in new[] { 1, 2 })
-        foreach (var sample in ComparisonZipSamples().Where(s => s.Label.Contains("stored, 453 bytes, check1") || s.Label == "deflated, 1 KB, crc"))
-        foreach (string variant in new[] { "replacement", "hashcat" })
+        foreach (var sample in ComparisonZipSamples().Where(s => s.Label.Contains("stored, 453 bytes, check1") || s.Label == "deflated, 1 KB, crc" || s.Mode == 17230))
+        foreach (string variant in sample.Mode == 17230 ? new[] { "replacement" } : new[] { "replacement", "hashcat" })
             Add("zip", $"{sample.Label}, {variant}, chosen backend", 6, async token =>
             {
                 var dev = Chosen(0)!;

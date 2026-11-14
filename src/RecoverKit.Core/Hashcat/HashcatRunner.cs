@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Formats;
 
@@ -33,6 +34,9 @@ public sealed record RunRequest
     public Func<byte[], bool>? ConfirmPassword { get; init; }
     /// <summary>The target needs RecoverKit's ZIP kernel to check a partial encrypted entry.</summary>
     public bool RequiresPartialZipKernel { get; init; }
+    public ZipCheckBytesTarget? ZipCheckBytes { get; init; }
+    internal string? CacheHashFile { get; init; }
+    internal Func<bool>? ZipFilterReplayPending { get; init; }
 }
 
 public sealed class RunResult
@@ -44,6 +48,7 @@ public sealed class RunResult
     public List<string> RawPasswords { get; init; } = new();
     public string? Error { get; init; }
     public HashcatStatus? LastStatus { get; init; }
+    public bool RecheckFromStart { get; init; }
 }
 
 /// <summary>
@@ -303,6 +308,8 @@ public sealed class HashcatRunner(HashcatTool tool)
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
         r.VolumeCredentials?.ValidateUnchanged();
+        if (r.ZipCheckBytes is { } filter)
+            return await RunCheckBytesAsync(r, filter, ct);
         int attackMode = EffectiveAttackMode(r.Attack, r.Settings.ExtraArguments);
         bool kernelsReady = HashcatKernels.EnsureFor(tool, r.Mode, attackMode);
         if (r.RequiresPartialZipKernel && !kernelsReady)
@@ -343,6 +350,110 @@ public sealed class HashcatRunner(HashcatTool tool)
             try { await Task.Delay(TimeSpan.FromMilliseconds(100), ct); }
             catch (OperationCanceledException) { return new RunResult { Outcome = RunOutcome.Aborted, LastStatus = result.LastStatus }; }
             r = r with { Restore = restore };
+        }
+    }
+
+    public static string ZipFilterStateFile(string directory, string session) => Path.Combine(directory, session + ".zip-filter.json");
+
+    private sealed class ZipFilterState
+    {
+        public string Phase { get; set; } = "headers";
+        public string HashLines { get; set; } = "";
+    }
+
+    private async Task<RunResult> RunCheckBytesAsync(RunRequest r, ZipCheckBytesTarget filter, CancellationToken ct)
+    {
+        string stateFile = ZipFilterStateFile(r.SessionDir, r.SessionName);
+        string hash = Path.Combine(r.SessionDir, r.SessionName + ".headers.hash");
+        string restore = RestoreFile(r.SessionDir, r.SessionName);
+        var state = new ZipFilterState { HashLines = filter.HashLines };
+        if (File.Exists(stateFile))
+        {
+            try { state = JsonSerializer.Deserialize<ZipFilterState>(File.ReadAllText(stateFile)) ?? new() { Phase = "replay" }; }
+            catch (JsonException) { state.Phase = "replay"; }
+        }
+        if (!r.Restore && state.Phase == "headers") state.HashLines = filter.HashLines;
+        void Save()
+        {
+            File.WriteAllText(stateFile + ".tmp", JsonSerializer.Serialize(state));
+            File.Move(stateFile + ".tmp", stateFile, true);
+        }
+        bool finished = false;
+        try
+        {
+            if (state.Phase == "headers")
+            {
+                if (!r.Restore) File.Delete(restore);
+                if (r.ExcludeDevices is { Count: > 0 } && KnownDevices is { } known && !r.Restore)
+                {
+                    var profile = await Diagnostics.PerformanceCalibration.EnsureZipAsync(tool, r.Settings, known, r.Mode,
+                        PasswordConfirmation.FirstHashLine(r.HashFile), filter, message => OutputLine?.Invoke(message), ct, r.ExcludeDevices);
+                    if (!ZipCheckBytesTarget.IsFaster(profile, r.Settings, known, r.Mode, r.ExcludeDevices)) state.Phase = "replay";
+                }
+                if (r.GpuOnly && state.Phase == "headers")
+                {
+                    // Hybrid ranges count base words; switching modes must preserve the amplifier split.
+                    var original = await tool.KeyspaceAsync(r.Mode, r.Attack.Args, ct, r.UseOptimizedKernel);
+                    var headers = await tool.KeyspaceAsync(17230, r.Attack.Args, ct);
+                    if (original is null || headers != original) state.Phase = "replay";
+                }
+                if (state.Phase == "headers")
+                {
+                    Save();
+                    File.WriteAllText(hash, state.HashLines + "\n");
+                    bool Confirm(byte[] password)
+                    {
+                        if (filter.ConfirmPassword(password)) return true;
+                        if (state.Phase != "replay")
+                        {
+                            state.Phase = "replay";
+                            Save(); // Persist before allowing a checkpoint to outlive the rejected hit.
+                        }
+                        return false;
+                    }
+                    OutputLine?.Invoke("ZIP check bytes on the GPU, full entry confirmation on the CPU (mode 17230).");
+                    var result = await RunAsync(r with
+                    {
+                        Mode = 17230, HashFile = hash, UseOptimizedKernel = false, RequiresPartialZipKernel = false,
+                        ZipCheckBytes = null, ConfirmPassword = Confirm, CacheHashFile = r.HashFile,
+                        ZipFilterReplayPending = () => state.Phase == "replay",
+                    }, ct);
+                    if (result.Outcome == RunOutcome.Cracked || state.Phase == "headers")
+                    {
+                        finished = result.Outcome is RunOutcome.Cracked or RunOutcome.Exhausted;
+                        return result;
+                    }
+                    if (result.Outcome == RunOutcome.Aborted || ct.IsCancellationRequested)
+                        return new RunResult { Outcome = RunOutcome.Aborted, RecheckFromStart = true,
+                            LastStatus = result.LastStatus?.With(restorePoint: 0) ?? new() };
+                    OutputLine?.Invoke("A ZIP header hit was rejected; rechecking this assigned range on the original entry.");
+                }
+            }
+            if (state.Phase != "original")
+            {
+                File.Delete(restore); // A header checkpoint is not an original-entry checkpoint.
+                state.Phase = "original";
+                Save();
+                r = r with { Restore = false };
+            }
+            var replay = await RunAsync(r with { ZipCheckBytes = null }, ct);
+            finished = replay.Outcome is RunOutcome.Cracked or RunOutcome.Exhausted;
+            if (replay.Outcome == RunOutcome.Error)
+                return new RunResult { Outcome = replay.Outcome, Error = replay.Error, ExitCode = replay.ExitCode,
+                    LastStatus = replay.LastStatus, RecheckFromStart = true };
+            return replay;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            bool recheck = state.Phase == "replay";
+            return new RunResult { Outcome = RunOutcome.Aborted, RecheckFromStart = recheck,
+                LastStatus = new() { RestorePoint = recheck ? 0 : Native.HybridRunner.ReadRestorePoint(restore) ?? 0 } };
+        }
+        finally
+        {
+            if (finished)
+                foreach (string file in new[] { hash, stateFile })
+                    try { File.Delete(file); } catch (IOException) { }
         }
     }
 
@@ -388,6 +499,7 @@ public sealed class HashcatRunner(HashcatTool tool)
                             Id = id, Name = d.Name, Type = d.Type, Speed = d.Speed,
                             Temperature = d.Temperature, Utilization = d.Utilization,
                         } : d).ToList());
+                if (r.ZipFilterReplayPending?.Invoke() == true) st = st.With(restorePoint: 0);
                 last = st;
                 GpuTemperature.Record(st);
                 StatusReceived?.Invoke(guard?.Adjust(st) ?? st);
@@ -496,7 +608,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             else if (outcome == RunOutcome.Cracked) outcome = RunOutcome.Exhausted;
             if (confirm.Confirmed is { } plain && !r.Settings.DontUsePasswordCache)
                 await PasswordConfirmation.AppendAsync(r.PasswordCachePath ?? r.Settings.PotfilePath,
-                    PasswordConfirmation.FirstHashLine(r.HashFile), PasswordConfirmation.PlainBytes(plain));
+                    PasswordConfirmation.FirstHashLine(r.CacheHashFile ?? r.HashFile), PasswordConfirmation.PlainBytes(plain));
         }
         else if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
             passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);

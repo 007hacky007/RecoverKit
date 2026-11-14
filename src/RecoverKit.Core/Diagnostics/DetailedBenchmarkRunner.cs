@@ -244,7 +244,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
             }
             var checks = new Dictionary<(int Mode, string Variant), bool>();
             foreach (var mode in samples.GroupBy(s => s.Mode))
-            foreach (string variant in new[] { "hashcat", "replacement", "amplifier-cache" })
+            foreach (string variant in mode.Key == 17230 ? new[] { "replacement" } : new[] { "hashcat", "replacement", "amplifier-cache" })
                 plan.Add("zip", $"GPU family {slot.Id}, mode {mode.Key}, checking {variant}", 3, async () =>
                 {
                     var device = Device(mode.Key);
@@ -271,7 +271,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                     report.Measurements.Add(row);
                 }
                 foreach (int repeat in new[] { 1, 2 })
-                foreach (string variant in new[] { "hashcat", "replacement", "amplifier-cache" })
+                foreach (string variant in sample.Mode == 17230 ? new[] { "replacement" } : new[] { "hashcat", "replacement", "amplifier-cache" })
                     plan.Add("zip", $"GPU family {slot.Id}, {sample.Label}, {variant}, sample {repeat}", Thorough ? 10 : 5,
                         () => Measure(variant, repeat), () => checks.GetValueOrDefault((sample.Mode, variant)) && (repeat == 1 || Thorough
                             || DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Variant == variant)?.Speed ?? 0, rows.Select(r => r.Speed))), conditional: !Thorough && repeat == 2);

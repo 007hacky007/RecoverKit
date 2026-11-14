@@ -6,7 +6,7 @@ namespace RecoverKit.Core.Diagnostics;
 public sealed partial class DetailedBenchmarkRunner
 {
     private static List<ZipKernelBenchmark.Sample> ComparisonZipSamples() => BenchmarkTestFiles.Create().Where(f => f.Format == "ZIP / ZipCrypto")
-        .Select(f => new ZipKernelBenchmark.Sample(ZipLabel(f.FileName), f.Mode, f.Hash)).ToList();
+        .Select(f => new ZipKernelBenchmark.Sample(ZipLabel(f.FileName), f.Mode, f.Hash)).Append(ZipKernelBenchmark.CheckBytesSample()).ToList();
 
     private static string ZipLabel(string file)
     {
@@ -17,6 +17,7 @@ public sealed partial class DetailedBenchmarkRunner
 
     private static Dictionary<string, string> ComparisonDetails(ZipKernelBenchmark.Sample sample)
     {
+        if (sample.Mode == 17230) return new() { ["Attack"] = BenchmarkTestFiles.Attack, ["Optimized"] = "False", ["Correctness"] = "Header filter checked against full CPU verification" };
         var file = BenchmarkTestFiles.Create().First(f => f.Hash == sample.HashLine);
         return new() { ["Test file"] = file.FileName, ["Attack"] = BenchmarkTestFiles.Attack, ["Optimized"] = "False", ["Correctness"] = "GPU match set checked against scalar verification for this entry type" };
     }
