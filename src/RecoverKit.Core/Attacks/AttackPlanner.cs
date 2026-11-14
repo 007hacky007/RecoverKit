@@ -31,6 +31,21 @@ public static class AttackPlanner
 {
     public static PreparedAttack Prepare(AttackSpec a, HashTarget target, PlannerContext ctx, Func<string, long>? lineCounter = null)
     {
+        if (a.DictionaryKernel is { Arguments: { } args } pass)
+        {
+            string label = pass.Pass == 1 ? "optimized pass" : pass.Pass == 2 ? "pure long-word pass" : "pure pass";
+            var step = a.Clone();
+            step.DictionaryKernel = null;
+            step.Dictionaries = [args[2], null, null, null];
+            step.SkipShorterThan = step.SkipLongerThan = 0;
+            step.Rules = pass.Rules.Count == 0 ? RulesPreset.AsIs : RulesPreset.CustomFile;
+            step.RulesFile = pass.Rules.FirstOrDefault()?.Path;
+            var prepared = Dictionary(step, ctx, _ => pass.Words, rawFile: true, description: a.Describe() + $" [{label}]");
+            prepared.Args.Clear();
+            prepared.Args.AddRange(args);
+            prepared.Keyspace = (BigInteger)pass.Words * pass.RuleCount;
+            return prepared;
+        }
         lineCounter ??= p => Wordlists.CountLines(p);
         int maxLen = target.MaxPasswordLength ?? 256;
         return a.Kind switch
@@ -116,7 +131,7 @@ public static class AttackPlanner
 
     // ---------------------------------------------------------------- dictionary
 
-    private static PreparedAttack Dictionary(AttackSpec a, PlannerContext ctx, Func<string, long> lines)
+    private static PreparedAttack Dictionary(AttackSpec a, PlannerContext ctx, Func<string, long> lines, bool rawFile = false, string? description = null)
     {
         var dicts = a.Dictionaries.Select(d => ResolveDictionary(d, ctx)).ToList();
         if (dicts[0] is null) throw new AttackPlanException("Select a primary dictionary.");
@@ -126,8 +141,8 @@ public static class AttackPlanner
         string d1 = dicts[0]!;
         int min = a.SkipShorterThan, max = a.SkipLongerThan;
         bool filter = min > 0 || max > 0;
-        bool direct = Wordlists.HashcatCanReadDirectly(d1) && !filter;
-        var p = new PreparedAttack { Description = a.Describe() };
+        bool direct = (rawFile || Wordlists.HashcatCanReadDirectly(d1)) && !filter;
+        var p = new PreparedAttack { Description = description ?? a.Describe() };
         long n1 = lines(d1);
 
         switch (a.Rules)

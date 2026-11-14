@@ -46,6 +46,7 @@ public sealed class AttackSpec
     public string?[] Dictionaries { get; set; } = new string?[4];
     public int SkipShorterThan { get; set; }
     public int SkipLongerThan { get; set; }
+    public DictionaryKernelPass? DictionaryKernel { get; set; }
 
     public AttackSpec Clone()
     {
