@@ -44,6 +44,11 @@ public sealed class HashTarget
     /// </summary>
     public Func<byte[], bool>? ConfirmPassword { get; set; }
 
+    public ZipCheckBytesTarget? ZipCheckBytes { get; set; }
+
+    /// <summary>The pre-speed-selection target, for sessions saved by older releases.</summary>
+    public HashTarget? LegacyZipTarget { get; set; }
+
     public string? Notes { get; init; }
 }
 

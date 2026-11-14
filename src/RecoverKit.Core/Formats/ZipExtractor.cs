@@ -24,7 +24,9 @@ public static class ZipExtractor
 
     public static bool LooksLikeZip(Stream s) => FindEocd(s) >= 0;
 
-    public static void Extract(Stream s, Detection d)
+    public static void Extract(Stream s, Detection d) => Extract(s, d, legacy: false);
+
+    private static void Extract(Stream s, Detection d, bool legacy)
     {
         var entries = ReadCentralDirectory(s, out long delta, out _, out _);
         d.TypeName = "ZIP archive";
@@ -52,13 +54,18 @@ public static class ZipExtractor
         var aes = enc.Where(e => e.AesStrength > 0).OrderBy(e => e.CompSize).FirstOrDefault();
         if (aes is not null) { d.Target = WinZipAes(s, aes, delta, d); return; }
 
-        var classic = ChooseClassic(enc);
+        var classic = ChooseClassic(enc, legacy);
         if (classic is null)
         {
             d.Message = "Encrypted entries use a compression method that hashcat cannot verify (only stored/deflate are supported).";
             return;
         }
         var confirmer = BuildConfirmer(s, enc, classic, delta);
+        if (!legacy && confirmer is null && ChooseClassic(enc, legacy: true) is { } safer && safer != classic)
+        {
+            classic = safer;
+            confirmer = BuildConfirmer(s, enc, classic, delta);
+        }
         d.Target = Pkzip(s, classic, delta, d, confirmer, confirmer is null && classic.Method == 0
             ? "The archive has only one encrypted file and it is stored (not compressed): very rarely a wrong password " +
               "passes its check. Open the archive with the recovered password to make sure it is the right one."
@@ -76,19 +83,23 @@ public static class ZipExtractor
             d.Target.ConfirmPassword = password => (confirmer?.Confirm(password) ?? true) && kernel.Verify(password);
         }
         d.Target.StayZip = CollectStayTarget(s, enc, delta);
+        if (!legacy)
+        {
+            d.Target.ZipCheckBytes = BuildCheckBytes(s, classic, delta, d.Target, confirmer);
+            if (ChooseClassic(enc, legacy: true) != classic)
+            {
+                var old = new Detection { FilePath = d.FilePath };
+                Extract(s, old, legacy: true);
+                d.Target.LegacyZipTarget = old.Target;
+            }
+        }
     }
 
-    /// <summary>
-    /// The entry the hash is made from. A wrong password passes a stored entry's check byte and CRC-32
-    /// about once in 5 * 10^11 candidates; a deflated entry must also inflate to the stored length, which
-    /// random data practically never does, so false positives are far rarer. The GPU kernels verify
-    /// only the candidates that pass the check byte, so the entry size costs little speed. So the
-    /// smallest deflated entry is preferred, and a stored one only when it is much smaller (a large
-    /// entry makes a long hash line and a slower full check); the other entries then still confirm
-    /// each hit (<see cref="ZipPasswordConfirmer"/>). Entries within hashcat's limit for the embedded
-    /// data (320 KB, module 17200/17210) come first.
-    /// </summary>
-    private static ZipEntry? ChooseClassic(List<ZipEntry> enc)
+    // Live replacement-kernel estimates: stored 2484 M/s, deflate 781 M/s on Apple GPU.
+    // Scale by encrypted bytes for survivor verification. Retune these two rates after NVIDIA runs.
+    internal const double StoredRate = 2484, DeflatedRate = 781;
+
+    private static ZipEntry? ChooseClassic(List<ZipEntry> enc, bool legacy)
     {
         var usable = enc.Where(e => e.Method is 0 or 8 && e.CompSize > 12).ToList();
         var fits = usable.Where(e => e.CompSize <= HashcatMaxData).ToList();
@@ -96,7 +107,34 @@ public static class ZipExtractor
         var deflated = usable.Where(e => e.Method == 8).MinBy(e => e.CompSize);
         var stored = usable.Where(e => e.Method == 0).MinBy(e => e.CompSize);
         if (deflated is null || stored is null) return deflated ?? stored;
-        return stored.CompSize * 8 <= deflated.CompSize ? stored : deflated;
+        // A stored prefix cannot be checked safely on the GPU; keep a deflated fallback.
+        if (!legacy && stored.CompSize > HashcatMaxData) return deflated;
+        bool confirmation = enc.Any(e => e != stored && e.LocalOffset != stored.LocalOffset && e.AesStrength == 0 && e.CompSize >= 12);
+        double ratio = !legacy && confirmation ? StoredRate / DeflatedRate : 1.0 / 8;
+        return stored.CompSize <= deflated.CompSize * ratio ? stored : deflated;
+    }
+
+    private static ZipCheckBytesTarget? BuildCheckBytes(Stream s, ZipEntry attacked, long delta, HashTarget target, ZipPasswordConfirmer? confirmer)
+    {
+        ushort crc = (ushort)(attacked.Crc >> 16), time = (attacked.Flags & 8) != 0 ? attacked.ModTime : crc;
+        var checks = new[] { new ZipPasswordConfirmer.Check(attacked.Name,
+                Bin.ReadAt(s, EntryDataOffset(s, attacked, delta), 12), crc, time, null,
+                attacked.VersionNeeded is > 0 and < 20 && (attacked.Flags & 8) == 0) }
+            .Concat(confirmer?.Checks ?? []).DistinctBy(c => Bin.Hex(c.Header)).ToList();
+        // A sibling's second byte is constrained only when its full verifier checks it too.
+        var old = checks.Where(c => c.TwoCheckBytes).ToList();
+        int checkBytes = old.Count * 16 >= ZipCheckBytesTarget.MinimumCheckBits ? 2 : 1;
+        var used = (checkBytes == 2 ? old : checks).Take(ZipCheckBytesTarget.MaximumEntries).ToList();
+        if (used.Count * checkBytes * 8 < ZipCheckBytesTarget.MinimumCheckBits) return null;
+        var fields = new List<string> { "$pkzip2$" + used.Count, checkBytes.ToString() };
+        foreach (var c in used)
+            // 17230 accepts either field's high byte, exactly as the confirmer does. Method 0
+            // prevents its extra deflate-byte check from narrowing that accepted set.
+            fields.AddRange(["1", "0", "0", "c", c.CrcChecksum.ToString("x4"), c.TimeChecksum.ToString("x4"), Bin.Hex(c.Header)]);
+        fields.Add("$/pkzip2$");
+        var kernel = Native.Kernels.ZipCryptoKernel.TryParse(target.HashLines, target.ZipPartial);
+        return kernel is null ? null : new(string.Join('*', fields),
+            password => (target.ConfirmPassword?.Invoke(password) ?? true) && kernel.Verify(password));
     }
 
     private const long HashcatMaxData = 320 * 1024;
@@ -135,9 +173,10 @@ public static class ZipExtractor
                     kernel = Native.Kernels.ZipCryptoKernel.TryParse(PkzipLine(e, data));
                     budget -= e.CompSize;
                 }
-                byte crcCheck = (byte)(e.Crc >> 24);
-                byte timeCheck = (e.Flags & 8) != 0 ? (byte)(e.ModTime >> 8) : crcCheck;
-                checks.Add(new ZipPasswordConfirmer.Check(e.Name, data[..12], crcCheck, timeCheck, kernel));
+                ushort crcCheck = (ushort)(e.Crc >> 16);
+                ushort timeCheck = (e.Flags & 8) != 0 ? e.ModTime : crcCheck;
+                checks.Add(new ZipPasswordConfirmer.Check(e.Name, data[..12], crcCheck, timeCheck, kernel,
+                    kernel is not null && e.VersionNeeded is > 0 and < 20 && (e.Flags & 8) == 0));
             }
             catch (Exception ex) when (ex is FormatException or UnsupportedFormatException or IOException or OverflowException or ArgumentOutOfRangeException)
             {

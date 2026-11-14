@@ -46,6 +46,7 @@ public sealed class GpuRangeResult
     public long DoneUpTo { get; init; }
     public List<string> Passwords { get; init; } = new();
     public string? Error { get; init; }
+    public bool RecheckFromStart { get; init; }
 }
 
 /// <summary>
@@ -532,6 +533,7 @@ public sealed class HybridRunner
             lock (_lock)
             {
                 long end = _hcEnd;
+                if (res.RecheckFromStart) _hcLive = runSkip;
                 _hcRunning = false;
                 _hcProgress = 0;
                 switch (res.Outcome)
@@ -759,7 +761,7 @@ public sealed class HybridRunner
             finally { runner.StatusReceived -= h; }
 
             string restore = HashcatRunner.RestoreFile(req.SessionDir, req.SessionName);
-            long done = res.Outcome switch
+            long done = res.RecheckFromStart ? skip : res.Outcome switch
             {
                 RunOutcome.Exhausted => skip + count,
                 _ => ReadRestorePoint(restore) ?? (res.LastStatus ?? lastSeen)?.RestorePoint ?? skip,
@@ -771,6 +773,7 @@ public sealed class HybridRunner
                 DoneUpTo = Math.Clamp(done, skip, skip + count),
                 Passwords = res.Passwords,
                 Error = res.Error,
+                RecheckFromStart = res.RecheckFromStart,
             };
         }
     }

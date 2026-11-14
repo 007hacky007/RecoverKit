@@ -28,6 +28,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
     public ProcessPriority? Priority { get; init; }
     internal bool Optimized { get; init; }
     internal bool BoundedTuning { get; init; }
+    internal IReadOnlyList<string>? DeviceArgumentsOverride { get; init; }
 
     /// <summary>The brute-force mask: eight printable characters, far more than any run gets through.</summary>
     internal string? Charset1 { get; init; }
@@ -54,7 +55,16 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             Make("stored, 4 KB", 4096, false),
             Make("deflated, 1 KB text", 1024, true),
             Make("deflated, 16 KB text", 16384, true),
+            CheckBytesSample(),
         ];
+    }
+
+    public static Sample CheckBytesSample(string password = "Benche-not-in-mask")
+    {
+        var rng = new Random(317);
+        var archive = ZipCryptoSample.Archive(Enumerable.Range(0, 8).Select(i =>
+            new ZipCryptoSample.Entry($"sample{i}.dat", ZipCryptoSample.Text(1024, rng), true, DataDescriptor: true)).ToArray(), Encoding.UTF8.GetBytes(password), rng);
+        return new("check bytes, 8 entries", 17230, ZipCryptoSample.Extract(archive).ZipCheckBytes!.HashLines);
     }
 
     private static byte[] RandomBytes(int n, Random rng)
@@ -87,11 +97,16 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
                     HashcatKernels.Restore(tool.Directory);
                     Progress?.Invoke($"Device #{dev.Id}, {s.Label}: hashcat's kernel ...");
                     double original = await SpeedAsync(s.Mode, file, dev.Id, ct);
+                    if (s.Mode == 17230)
+                    {
+                        rows.Add(new Row(dev, s, original, 0, 0));
+                        continue;
+                    }
                     HashcatKernels.Install(tool.Directory);
                     Progress?.Invoke($"Device #{dev.Id}, {s.Label}: RecoverKit's kernel ...");
                     double replacement = await SpeedAsync(s.Mode, file, dev.Id, ct);
                     double ampCache = 0;
-                    if (WithAmpCache)
+                    if (WithAmpCache && s.Mode != 17230)
                     {
                         var include = Path.Combine(tool.Directory, "OpenCL", HashcatKernels.IncludeFile);
                         File.WriteAllText(include, HashcatKernels.Sources[HashcatKernels.IncludeFile].Replace("#define RK_AMP_CACHE 0", "#define RK_AMP_CACHE 1"));
@@ -132,12 +147,13 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
     {
         var args = new List<string>
         {
-            "-m", mode.ToString(), "-a", "3", hashFile, Mask, "-d", device.ToString(),
+            "-m", mode.ToString(), "-a", "3", hashFile, Mask,
             "--runtime", Seconds.ToString(), "--status", "--status-json", "--status-timer", "1",
             // ZipCrypto has false positives: about one candidate in 2^39 passes the check byte and the
             // CRC-32 of a stored entry (one of the 8-character runs here hit one). Keep going after it.
             "--keep-guessing", "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-bench-zip", "--quiet",
         };
+        args.AddRange(DeviceArgumentsOverride ?? ["-d", device.ToString()]);
         if (Charset1 is not null) args.AddRange(["-1", Charset1]);
         if (Optimized) args.Add("-O");
         var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
@@ -173,7 +189,7 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
             foreach (var r in g)
             {
                 string gain = r.Original > 0 && r.Replacement > 0 ? $"{r.Replacement / r.Original:F2}x" : "-";
-                sb.AppendLine($"  {r.Sample.Label,-36} {Mhs(r.Original),14} {Mhs(r.Replacement),14} {gain,7}" + (nc ? $" {Mhs(r.AmpCache),14}" : ""));
+                sb.AppendLine($"  {r.Sample.Label,-36} {Mhs(r.Original),14} {(r.Sample.Mode == 17230 ? "-" : Mhs(r.Replacement)),14} {gain,7}" + (nc ? $" {(r.Sample.Mode == 17230 ? "-" : Mhs(r.AmpCache)),14}" : ""));
             }
         }
         return sb.ToString();

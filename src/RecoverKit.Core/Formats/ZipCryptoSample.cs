@@ -13,7 +13,7 @@ namespace RecoverKit.Core.Formats;
 public static class ZipCryptoSample
 {
     /// <param name="Header">The first 10 bytes of the encryption header (random when null), for fixed test archives.</param>
-    public sealed record Entry(string Name, byte[] Content, bool Deflate, bool DataDescriptor = false, byte[]? Header = null, bool TwoCheckBytes = false);
+    public sealed record Entry(string Name, byte[] Content, bool Deflate, bool DataDescriptor = false, byte[]? Header = null, bool TwoCheckBytes = false, bool DescriptorUsesCrc = false);
 
     private static readonly uint[] Crc = BuildCrc();
 
@@ -77,7 +77,7 @@ public static class ZipCryptoSample
             var keys = new Keys(password);
             var body = new byte[12 + comp.Length];
             for (int j = 0; j < 10; j++) body[j] = keys.Encrypt(e.Header?[j] ?? (byte)rng.Next(256));
-            ushort check = e.DataDescriptor ? dosTime : (ushort)(crc >> 16);
+            ushort check = e.DataDescriptor && !e.DescriptorUsesCrc ? dosTime : (ushort)(crc >> 16);
             body[10] = keys.Encrypt((byte)check);
             body[11] = keys.Encrypt((byte)(check >> 8));
             for (int j = 0; j < comp.Length; j++) body[12 + j] = keys.Encrypt(comp[j]);
