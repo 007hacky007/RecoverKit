@@ -61,6 +61,7 @@ public class AppUpdaterTests
     [Fact]
     public void FindsTheAppBundleOfTheRunningFolder()
     {
+        if (OperatingSystem.IsWindows()) return;   // .app bundles and these Unix paths exist only on macOS
         Assert.Equal("/Applications/RecoverKit.app", AppUpdater.BundleOf("/Applications/RecoverKit.app/Contents/MacOS/"));
         Assert.Null(AppUpdater.BundleOf("/Users/me/RecoverKit/bin/Release/net10.0/"));
     }
@@ -79,15 +80,15 @@ public class AppUpdaterTests
         string portable = AppUpdater.ApplyScript(new PreparedUpdate(InstallKind.WindowsPortable, "v1.5.0", @"C:\u\p.zip", @"C:\u\portable\"), 1,
             @"D:\Tools\RecoverKit\", @"D:\Tools\RecoverKit\RecoverKit.exe");
         Assert.Contains(@"robocopy ""C:\u\portable"" ""D:\Tools\RecoverKit"" /E /IS /IT", portable);   // no trailing backslash before a quote
+        Assert.Throws<InvalidOperationException>(() => AppUpdater.ApplyScript(new PreparedUpdate(InstallKind.Unknown, "v1", "f", null), 1, "/a", "/a/b"));
 
+        if (OperatingSystem.IsWindows()) return;   // the macOS script resolves Unix paths of an .app bundle
         string mac = AppUpdater.ApplyScript(new PreparedUpdate(InstallKind.MacBundle, "v1.5.0", "/u/x.dmg", "/u/RecoverKit.app"), 7,
             "/Applications/RecoverKit.app/Contents/MacOS/", "/Applications/RecoverKit.app/Contents/MacOS/RecoverKit");
         Assert.StartsWith("#!/bin/sh\n", mac);
         Assert.Contains("while kill -0 7 2>/dev/null; do sleep 1; done", mac);
         Assert.Contains("mv '/Applications/RecoverKit.app' '/Applications/RecoverKit.app.old' && mv '/u/RecoverKit.app' '/Applications/RecoverKit.app'", mac);
         Assert.Contains("open '/Applications/RecoverKit.app'", mac);
-
-        Assert.Throws<InvalidOperationException>(() => AppUpdater.ApplyScript(new PreparedUpdate(InstallKind.Unknown, "v1", "f", null), 1, "/a", "/a/b"));
     }
 
     [Fact]
