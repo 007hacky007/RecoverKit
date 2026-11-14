@@ -17,6 +17,12 @@ if (args.Length > 0 && args[0] == FiniteDiagnosticWorker.Command) return FiniteD
 if (args.Length > 0 && args[0] == CpuDiagnosticWorker.Command) return CpuDiagnosticWorker.Run(args);
 var argv = args.ToList();
 if (argv.Count < 1) return Usage();
+if (argv.Contains("--debug"))
+{
+    DebugLog.Start("recoverkit-cli", typeof(Settings).Assembly.GetName().Version?.ToString() ?? "", args);
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => DebugLog.Stop();
+    Console.WriteLine("Debug log: " + DebugLog.CurrentFile);
+}
 // The elevated NVIDIA power limit helper (started by RecoverKit itself, see PowerLimiter).
 if (argv[0] == PowerHelper.Command) return PowerHelper.Run(args);
 string cmd = argv[0];
@@ -262,6 +268,7 @@ try
             var d = Open(argv[1], argv);
             Print(d);
             if (d.Target is null) return 2;
+            DebugLog.RegisterHashes(d.Target.HashLines);
 
             var steps = BuildSteps(argv, d.Target);
             if (argv.Contains("--no-stay")) steps = steps.Where(s => s.Kind != AttackKind.StayZip).ToList();
@@ -313,7 +320,10 @@ try
             if (Opt(argv, "--stop-after") is { } sa) cts.CancelAfter(TimeSpan.FromSeconds(int.Parse(sa)));
             var resume = argv.Contains("--new") ? null : SessionState.Load(settings, d.Target);
             if (resume is not null) Console.WriteLine($"Resuming interrupted session from {resume.SavedUtc.ToLocalTime():g} (pass --new to start over).");
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
             var res = await session.RunAsync(d.Target, d.FilePath, steps, resume, cts.Token);
+            elapsed.Stop();
+            DebugLog.Info($"Recovery completed: {res.Outcome}, elapsed {elapsed.Elapsed.TotalSeconds:F3} s");
             var persisted = Settings.Load(); // command-line overrides are not persisted
             persisted.SpeedByMode = settings.SpeedByMode;
             persisted.GpuSpeedByMode = settings.GpuSpeedByMode;
@@ -321,6 +331,7 @@ try
             persisted.GpuStartupByMode = settings.GpuStartupByMode;
             persisted.Save();
             Console.WriteLine($"RESULT: {res.Outcome}");
+            Console.WriteLine($"Elapsed: {elapsed.Elapsed.TotalSeconds:F3} s");
             foreach (var p in res.Passwords) Console.WriteLine($"PASSWORD: {p}");
             if (res.Key is not null) Console.WriteLine($"KEY: {res.Key}");
             if (res.DecryptedCopy is not null) Console.WriteLine($"DECRYPTED: {res.DecryptedCopy}");
@@ -478,5 +489,6 @@ static int Usage()
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
     Console.WriteLine("Device options: --strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly; --no-hybrid hashcat alone on the GPUs (no built-in CPU engine next to them); --hashcat-cpu also run hashcat on the CPU for formats without a built-in kernel; --threads N CPU thread limit");
+    Console.WriteLine("Diagnostics: --debug write a detailed log, including hashcat starts and CPU batch timings");
     return 64;
 }

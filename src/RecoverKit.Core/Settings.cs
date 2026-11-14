@@ -37,7 +37,7 @@ public sealed class Settings
     public bool UseNativeCpuEngine { get; set; } = true;      // built-in CPU kernels when no GPU is used
     /// <summary>
     /// With a GPU, run the built-in CPU engine at the same time as hashcat on another part of the
-    /// keyspace (brute-force and mask attacks on formats with a built-in kernel).
+    /// keyspace (masks and supported file dictionaries on formats with a built-in kernel).
     /// </summary>
     public bool HybridCpuGpu { get; set; } = true;
     /// <summary>

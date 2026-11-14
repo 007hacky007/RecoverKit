@@ -116,8 +116,12 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         {
             foreach (var mode in target.Modes)
             {
+                bool dictionaryBytes = mode is 12500 or 13000 or 10700 or 29331 && target.VolumeCredentials is null
+                    && steps.Any(step => step.Kind == AttackKind.Dictionary);
                 var cached = target.ConfirmPassword is { } confirm
-                    ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm)
+                    ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm, dictionaryBytes)
+                    : dictionaryBytes ? (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
+                        .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList()
                     : await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
                 if (cached.Count > 0)
                 {
@@ -151,9 +155,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     /// checked again. Passwords cached before the check existed, or by hashcat elsewhere, may be false
     /// positives; they are dropped.
     /// </summary>
-    private async Task<List<string>> ConfirmedCacheAsync(int mode, string hashFile, string potfile, HashTarget target, Func<byte[], bool> confirm)
+    private async Task<List<string>> ConfirmedCacheAsync(int mode, string hashFile, string potfile, HashTarget target, Func<byte[], bool> confirm, bool preserveBytes = false)
     {
-        var (confirmed, rejected) = await ConfirmedCacheAsync(tool, mode, hashFile, potfile, target, confirm);
+        var (confirmed, rejected) = await ConfirmedCacheAsync(tool, mode, hashFile, potfile, target, confirm, preserveBytes);
         if (rejected > 0)
         {
             DebugLog.Info($"Password cache: {rejected} cached password(s) rejected by the confirmation check");
@@ -164,9 +168,9 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     }
 
     internal static async Task<(List<string> Confirmed, int Rejected)> ConfirmedCacheAsync(HashcatTool tool, int mode, string hashFile,
-        string potfile, HashTarget target, Func<byte[], bool> confirm)
+        string potfile, HashTarget target, Func<byte[], bool> confirm, bool preserveBytes = false)
     {
-        var raw = await tool.ShowRawAsync(mode, hashFile, potfile);
+        var raw = await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: preserveBytes);
         raw.AddRange(PasswordConfirmation.OwnEntries(potfile, target.HashLines.Replace("\r", "").Split('\n')[0]));
         var confirmed = new List<string>();
         int rejected = 0;
@@ -174,7 +178,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         {
             if (confirm(PasswordConfirmation.PlainBytes(plain)))
             {
-                string pw = HashcatTool.DecodePlain(plain, target.VolumeCredentials);
+                string pw = preserveBytes ? Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(plain))
+                    : HashcatTool.DecodePlain(plain, target.VolumeCredentials);
                 if (!confirmed.Contains(pw)) confirmed.Add(pw);
             }
             else rejected++;
@@ -395,8 +400,21 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                         : "RecoverKit's ZIP GPU kernels are unavailable for this attack; using the built-in CPU engine to check the whole file.");
                 }
                 // With a GPU: hashcat on the GPUs and the built-in engine on the CPU, each on its own part.
+                bool resumeHybridDictionary = resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex
+                    && Native.DictionaryAttack.Parse(attack.Args) is not null
+                    && File.Exists(Native.HybridRunner.RestoreFile(runSettings.SessionsDir, resume.HashcatSession));
                 var hybridPlan = nativePlan is null && !cpuDictionary && pmkTable is null
-                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, target.VolumeCredentials, target.ZipPartial) : null;
+                    ? Native.HybridRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, target.VolumeCredentials, target.ZipPartial, resumeHybridDictionary) : null;
+                // A planned optimized wordlist pass keeps hashcat on its own: the optimized kernel numbers
+                // words differently, so the CPU engine cannot share the range.
+                if (hybridPlan?.Dictionary is not null && spec.DictionaryKernel is { Optimized: true }) hybridPlan = null;
+                // A pre-dictionary-hybrid session keeps its original hashcat restore numbering and engine.
+                if (hybridPlan?.Dictionary is not null && resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex
+                    && File.Exists(HashcatRunner.RestoreFile(runSettings.SessionsDir, resume.HashcatSession))
+                    && !File.Exists(Native.HybridRunner.RestoreFile(runSettings.SessionsDir, resume.HashcatSession))) hybridPlan = null;
+                // A deferred wordlist's restore position must never be applied to the original dictionary.
+                bool restartHybridDictionary = resumeHybridDictionary && hybridPlan is null;
+                if (restartHybridDictionary) Cleanup(resume!.HashcatSession);
                 if (nativePlan is null && hybridPlan is null && runSettings.HybridCpuGpu && Native.HybridRunner.CpuAddsTooLittle(runSettings, Devices, mode)
                     && Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices, ignoreGpu: true,
                         credentials: target.VolumeCredentials, partial: target.ZipPartial) is not null)
@@ -411,7 +429,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                         : hybridPlan is not null
                             ? Native.HybridRunner.RestoreFile(runSettings.SessionsDir, resume?.HashcatSession ?? "")
                             : HashcatRunner.RestoreFile(runSettings.SessionsDir, resume?.HashcatSession ?? "");
-                bool restore = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
+                bool restore = !restartHybridDictionary && resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
                                && File.Exists(restoreFile);
                 if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex && !restore)
                     Log?.Invoke(LogKind.Warning, "The saved engine cannot resume this step with the current settings; starting the step again.");
@@ -429,7 +447,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 bool optimized;
                 try
                 {
-                    optimized = nativePlan is null && !cpuDictionary && await SelectOptimizedKernelAsync(tool, mode, attack, optimizedAllowed,
+                    optimized = nativePlan is null && !cpuDictionary && hybridPlan?.Dictionary is null && await SelectOptimizedKernelAsync(tool, mode, attack, optimizedAllowed,
                         restore, state.UseOptimizedKernel, runSettings.ExtraArguments, ct, spec.DictionaryKernel?.Optimized,
                         (done, total) => Log?.Invoke(LogKind.Info, $"Checking word lengths ... {(total > 0 ? 100.0 * done / total : 100):F0}%"));
                 }
@@ -512,8 +530,11 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                         return new SessionResult { Outcome = SessionOutcome.Stopped };
                     case RunOutcome.Error:
                         Log?.Invoke(LogKind.Error, result.Error ?? "hashcat failed.");
-                        SessionState.Delete(settings, key);
-                        Cleanup(session);
+                        if (hybridPlan?.Dictionary is null || !File.Exists(Native.HybridRunner.RestoreFile(runSettings.SessionsDir, session)))
+                        {
+                            SessionState.Delete(settings, key);
+                            Cleanup(session);
+                        }
                         return new SessionResult { Outcome = SessionOutcome.Error, Error = result.Error };
                     default:
                         Log?.Invoke(LogKind.Info, $"Step {si + 1} finished, password not found ({result.LastStatus?.ProgressDone ?? 0:N0} candidates tested).");
@@ -675,7 +696,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                                   Native.ZipDictionaryRunner.RestoreFile(settings.SessionsDir, session),
                                   Native.HybridRunner.RestoreFile(settings.SessionsDir, session),
                                   HashcatRunner.ZipFilterStateFile(settings.SessionsDir, session),
-                                  Path.Combine(settings.SessionsDir, session + ".headers.hash") })
+                                  Path.Combine(settings.SessionsDir, session + ".headers.hash"),
+                                  Native.HybridRunner.LeftoverFile(settings.SessionsDir, session) })
             try { File.Delete(f); } catch (IOException) { }
     }
 }

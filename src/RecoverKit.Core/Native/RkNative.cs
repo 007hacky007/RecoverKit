@@ -175,6 +175,22 @@ internal sealed unsafe class NativeFilterWorker(NativeKernel kernel, INativeFilt
 
     public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last) => SearchBatch(prefix, 1, last);
 
+    public override int SearchPasswords(ReadOnlySpan<byte> passwords, int length, int count)
+    {
+        if (!RkNative.Available) return fallback.SearchPasswords(passwords, length, count);
+        int nh;
+        fixed (byte* p = passwords)
+        fixed (int* h = _hits)
+            nh = filter.Filter(p, length, count, h, _hits.Length);
+        if (nh < 0 || nh > _hits.Length) return fallback.SearchPasswords(passwords, length, count);
+        for (int q = 0; q < nh; q++)
+        {
+            int idx = _hits[q];
+            if (kernel.Verify(passwords.Slice(idx * length, length))) return idx;
+        }
+        return -1;
+    }
+
     public override int SearchBatch(ReadOnlySpan<byte> prefixes, int count, ReadOnlySpan<byte> last)
     {
         int plen = prefixes.Length / count, len = plen + 1, n = count * last.Length;

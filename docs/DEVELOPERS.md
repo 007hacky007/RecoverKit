@@ -13,7 +13,8 @@ scenarios, the wizard GUI and session management.
 For formats where hashcat's CPU kernels are slow, a built-in CPU engine runs brute-force and mask
 attacks: managed .NET kernels plus a small native C library (`native/rknative.c`, built with
 `zig cc`). Without a GPU it runs them alone; with a GPU it runs next to hashcat on another part of
-the keyspace (hybrid CPU + GPU, below). See [benchmarks.md](benchmarks.md).
+the keyspace and can also share supported file dictionaries (hybrid CPU + GPU, below).
+See [benchmarks.md](benchmarks.md).
 
 The one exception on the GPU side is classic ZIP (ZipCrypto, modes 17200/17210): RecoverKit ships
 its own versions of those two hashcat kernel sources and installs them into hashcat's `OpenCL/`
@@ -651,6 +652,91 @@ prefix changes, 64-byte passwords, stored/deflated entries and one/two-check-byt
 builds; its first comment gives build commands.
 
 ## Hybrid CPU + GPU
+
+File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for RAR 5
+(13000), encrypted-header RAR 3 (12500), PDF R6 (10700) and TrueCrypt Whirlpool (29331).
+`DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
+through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
+`$HEX[...]` output. Binary recovered passwords retain `$HEX[...]` when UTF-8 text would lose bytes.
+Equal-length passwords fill the existing native vector exports through
+`KernelWorker.SearchPasswords`; the reference workers provide the managed fallback. No native ABI
+change is needed. Each export buffers at most 65,536 candidates. Larger rule amplifiers use hashcat
+alone. Dictionary hybrid uses pure GPU kernels to avoid optimized-kernel length rejections in the GPU share.
+
+The CPU prefetches one batch while hashing the current one. Hashcat receives a predicted share
+from the bottom; the CPU works down from the top, including otherwise idle work below hashcat's
+limit. Both stop when hashcat's restore frontier meets the CPU's committed frontier. If hashcat
+finishes first, a remainder starts it again only when its estimated CPU time exceeds four
+startups. Mask splitting and rebalancing are unchanged.
+RAR 5 candidates beyond the
+127-byte mask limit use the managed PBKDF2 reference check up to the pure GPU kernel's 256-byte
+limit. Other overlong candidates and non-ASCII RAR 3 candidates are saved as exact expanded
+`$HEX[...]` strings in a deferred wordlist while the CPU continues on supported candidates.
+Hashcat checks that list at the end without reapplying the original rules. The checkpoint stores
+its committed byte length and cursor, so a stop in either phase can resume; any uncommitted file
+suffix is truncated. The file remains alongside a stopped session and is removed on completion.
+Fast formats, RAR 3 data-only modes 23700/23800 (no built-in kernel), attacks 1/6/7,
+stdin/generators, extra hashcat arguments and TrueCrypt keyfiles keep their existing paths.
+Dictionary checkpoints fingerprint the wordlist, rules and arguments; changed input or invalid
+checkpoint bounds are refused, retaining the saved session so the original input can be restored.
+A deterministic sort by byte length and bytes supplies a saved candidate ordinal within the CPU
+batch. All claimed vector groups finish before a stop is saved, so CPU groups are not replayed.
+Hashcat retains its own restore-point behavior, which can replay work still in flight at a stop.
+Old GPU-only dictionary sessions continue with their original engine.
+Disabling hybrid before resume restarts the original step, so a deferred wordlist's cursor cannot
+be mistaken for an original-wordlist position.
+`DictionaryHybridTests` checks coverage, overlap, prefetch, deferred candidates and stop/resume with a fake GPU;
+`DictionaryHybridHashcatTests` checks real stdout/cracking ranges and RAR first/middle/last finds.
+Set `RECOVERKIT_TEST_HASHCAT` to a private hashcat 8 binary and run
+`dotnet test --filter FullyQualifiedName~DictionaryHybridHashcatTests` for the latter.
+
+For a Windows RAR 5 comparison, use a hash file whose password is absent from the fixed job,
+a private hashcat 8 copy and a separate settings directory. The commands below preserve the
+wordlist bytes when taking the first two million lines. They require PowerShell and .NET 10.
+
+```powershell
+$env:RECOVERKIT_HOME = Join-Path $PWD 'dictionary-benchmark-home'
+$hc = Join-Path $PWD 'private-hashcat\hashcat.exe'
+$rule = Join-Path $PWD 'private-hashcat\rules\best66.rule'
+$cli = 'src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.dll'
+dotnet build src\RecoverKit.Cli -c Release
+$src = [IO.File]::OpenRead((Join-Path $PWD 'rockyou.txt'))
+$dst = [IO.File]::Create((Join-Path $PWD 'rockyou-2m.txt'))
+$buf = [byte[]]::new(65536)
+$lines = 0
+try {
+    while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+        $take = $n
+        for ($i = 0; $i -lt $n; $i++) {
+            if ($buf[$i] -eq 10) { $lines++; if ($lines -eq 2000000) { $take = $i + 1; break } }
+        }
+        $dst.Write($buf, 0, $take)
+        if ($lines -eq 2000000) { break }
+    }
+} finally { $src.Dispose(); $dst.Dispose() }
+
+foreach ($pair in 1..3) {
+    dotnet $cli crack rar5.hash --hash-mode 13000 --dict rockyou-2m.txt --rules $rule --hashcat $hc --strategy GpuOnly --no-hybrid --no-potfile --new --debug | Tee-Object "gpu-$pair.txt"
+    dotnet $cli crack rar5.hash --hash-mode 13000 --dict rockyou-2m.txt --rules $rule --hashcat $hc --strategy GpuOnly --hybrid --no-potfile --new --debug | Tee-Object "hybrid-$pair.txt"
+}
+Get-Content gpu-*.txt,hybrid-*.txt | Select-String 'RESULT:|Elapsed:'
+Get-ChildItem "$env:RECOVERKIT_HOME\logs\recoverkit-cli-*.log" | ForEach-Object {
+    $starts = @(Select-String -Path $_.FullName -Pattern ' CMD .* --session ')
+    "{0}: {1} cracking starts" -f $_.Name, $starts.Count
+    $starts.Line
+    Select-String -Path $_.FullName -Pattern 'Hybrid GPU first status|Hybrid CPU export ready|Hybrid CPU hashed|fronts met|deferred GPU|Recovery completed'
+}
+```
+
+Use `--dict rockyou.txt` in both commands for the full requested rockyou/best66 job. Do not use
+`--stop-after`: `RESULT: NotFound` and `Elapsed:` measure completion, including startup and cleanup.
+The status row's total H/s sums the device rows; `CPU (built-in engine)` is the CPU share and
+the named GPU is hashcat's share. The debug log path prints at startup. `CMD ... --session` counts
+cracking process starts, excluding device/count probes and `--stdout` exporters; matching `EXIT`
+lines identify their stops. A nonempty deferred wordlist adds a separate cracking start.
+On an integrated GPU, a remembered CPU contribution below one quarter of the GPU rate keeps
+fresh jobs on the GPU; a saved hybrid job still resumes its pending CPU/deferred work.
+
 
 With a GPU, brute-force and mask attacks on formats with a built-in kernel run on both engines at
 once (`HybridRunner`; on by default, Preferences > Performance, `--no-hybrid`): hashcat on the GPUs
