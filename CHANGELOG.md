@@ -246,6 +246,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.6.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.1
 [1.6.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.0
 [1.5.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.5.0
 [1.4.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.1
