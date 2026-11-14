@@ -77,6 +77,71 @@ public class SevenZipExtractorTests
     }
 
     [Fact]
+    public void SplitArchivesAreReadAcrossTheirParts()
+    {
+        byte[] archive = File.ReadAllBytes(Fixture("many-on"));
+        var dir = Directory.CreateTempSubdirectory("rk-7z-split").FullName;
+        try
+        {
+            string whole = Path.Combine(dir, "whole.7z");
+            File.WriteAllBytes(whole, archive);
+            var expected = FormatDetector.Detect(whole).Target!.HashLines;
+            // Uneven parts, as 7-Zip writes them with -v<size>; the last one is shorter.
+            int size = archive.Length / 3 + 1;
+            for (int i = 0; i * size < archive.Length; i++)
+                File.WriteAllBytes(Path.Combine(dir, $"set.7z.{i + 1:000}"), archive.AsSpan(i * size, Math.Min(size, archive.Length - i * size)).ToArray());
+
+            foreach (var opened in new[] { "set.7z.001", "set.7z.002", "set.7z.003" })
+            {
+                var d = FormatDetector.Detect(Path.Combine(dir, opened));
+                Assert.Equal(expected, d.Target!.HashLines);
+                Assert.Contains(d.Info, pair => pair.Key == "Parts" && pair.Value.StartsWith("3 ", StringComparison.Ordinal));
+            }
+
+            // A missing last part, and a missing first part.
+            File.Move(Path.Combine(dir, "set.7z.003"), Path.Combine(dir, "aside"));
+            var cut = FormatDetector.Detect(Path.Combine(dir, "set.7z.001"));
+            Assert.Null(cut.Target);
+            Assert.Contains("set.7z.002", cut.Message);
+            File.Move(Path.Combine(dir, "aside"), Path.Combine(dir, "set.7z.003"));
+            File.Delete(Path.Combine(dir, "set.7z.001"));
+            var headless = FormatDetector.Detect(Path.Combine(dir, "set.7z.003"));
+            Assert.Null(headless.Target);
+            Assert.Contains("set.7z.001", headless.Message);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void MultiVolumeStreamReadsAcrossPartBoundaries()
+    {
+        var dir = Directory.CreateTempSubdirectory("rk-7z-mv").FullName;
+        try
+        {
+            byte[] data = Enumerable.Range(0, 1000).Select(i => (byte)i).ToArray();
+            var paths = new[] { (0, 300), (300, 0), (300, 699), (999, 1) }.Select((r, i) =>
+            {
+                var p = Path.Combine(dir, $"p{i}");
+                File.WriteAllBytes(p, data.AsSpan(r.Item1, r.Item2).ToArray());
+                return p;
+            }).ToList();
+            using var s = new MultiVolumeStream(paths);
+            Assert.Equal(1000, s.Length);
+            var all = new byte[1000];
+            s.ReadExactly(all);
+            Assert.Equal(data, all);
+            s.Position = 290;
+            var mid = new byte[20];
+            s.ReadExactly(mid);
+            Assert.Equal(data.AsSpan(290, 20).ToArray(), mid);
+            s.Position = 999;
+            Assert.Equal(1, s.Read(mid));
+            Assert.Equal(0, s.Read(mid));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void DetectsContentAndSelfExtractingPrefix()
     {
         byte[] archive = File.ReadAllBytes(Fixture("7zz-copy-on"));
@@ -96,15 +161,6 @@ public class SevenZipExtractorTests
             Assert.Equal(expected, FormatDetector.Detect(path).Target!.HashLines);
         }
         finally { File.Delete(path); }
-    }
-
-    [Fact]
-    public void ExplainsSplitVolumes()
-    {
-        var d = new Detection { FilePath = "archive.7z.001" };
-        using var s = File.OpenRead(Fixture("7zz-copy-on"));
-        var e = Assert.Throws<UnsupportedFormatException>(() => SevenZipExtractor.Extract(s, d));
-        Assert.Contains("Join all", e.Message);
     }
 
     [Fact]

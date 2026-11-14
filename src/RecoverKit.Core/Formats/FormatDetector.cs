@@ -27,7 +27,10 @@ public static class FormatDetector
         var d = new Detection { FilePath = path };
         try
         {
-            using var s = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            // A split 7z archive (.7z.001, .002, ...) is read across its parts as one file.
+            var parts = MultiVolumeStream.SevenZipParts(path);
+            using Stream s = parts is not null ? new MultiVolumeStream(parts) : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (parts is not null) d.Add("Parts", parts.Count == 1 ? Path.GetFileName(parts[0]) : $"{parts.Count} ({Path.GetFileName(parts[0])} to {Path.GetFileName(parts[^1])})");
             d.Add("File size", $"{s.Length:N0} bytes");
             if (s.Length == 0) { d.Message = "File is empty."; return d; }
             var head = Bin.ReadAt(s, 0, 4096);

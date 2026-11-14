@@ -222,7 +222,8 @@ quickest guesses.
   password. Split (multi-volume) archives and files that need earlier files of a solid archive
   cannot be used.
 - **7-Zip:** archives with encrypted or visible file names, solid or not, and self-extracting .exe
-  archives work. Split archives (.7z.001, .7z.002, ...) must be joined into one file first. 7-Zip's
+  archives work. Split archives (.7z.001, .7z.002, ...) open directly: keep all parts in one folder
+  and open any of them. 7-Zip's
   encryption is deliberately slow, so only short or guessable passwords are realistic.
 - **GPU temperature and load:** Preferences > GPU can pause the attack while the GPU is too hot (it resumes once the GPU has
   cooled by the amount you choose) and can let the GPU work only part of the time to cut heat and

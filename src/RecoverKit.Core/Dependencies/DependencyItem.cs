@@ -7,7 +7,7 @@ public enum Light { Green, Yellow, Red }
 /// <summary>The external components, in install order.</summary>
 public enum DependencyId { Hashcat, Nvrtc, CpuRuntime }
 
-public enum DependencyAction { None, CopyBundledHashcat, UseBundledHashcat, DownloadNvrtc, DownloadCpuRuntime }
+public enum DependencyAction { None, CopyBundledHashcat, UseBundledHashcat, DownloadNvrtc, DownloadCpuRuntime, RepairHashcat }
 
 public sealed record DependencyItem(
     DependencyId Id,

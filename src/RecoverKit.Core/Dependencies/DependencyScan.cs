@@ -21,6 +21,7 @@ public sealed record DependencyScan(
         var tool = Probe(() => HashcatTool.Locate(settings.HashcatPath), null);
         string version = "";
         string? error = null;
+        bool startTimedOut = false;
         List<BackendDevice>? devices = null;
 
         if (tool is not null)
@@ -36,6 +37,7 @@ public sealed record DependencyScan(
             catch (Exception ex) when (ex is TimeoutException or Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
             {
                 error = ex is TimeoutException ? ex.Message : "hashcat could not run: " + ex.Message;
+                startTimedOut = ex is HashcatStartTimeoutException;
                 devices = null;
             }
         }
@@ -51,6 +53,7 @@ public sealed record DependencyScan(
             HashcatExe = tool?.Exe,
             HashcatIsManaged = tool?.IsManaged ?? false,
             HashcatRunsInPlace = tool?.IsInPlaceBundle ?? false,
+            HashcatStartTimedOut = startTimedOut,
             HashcatVersion = tool is null ? null : version,
             HashcatError = error,
             Devices = devices,

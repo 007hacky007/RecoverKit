@@ -5,6 +5,17 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-14
+
+### Added
+- Split 7-Zip archives (.7z.001, .7z.002, ...) open directly: RecoverKit reads the parts as one
+  archive, without joining them on disk. Open any part; a missing part is named.
+- When hashcat does not start at all, the dependencies page offers Repair: it stops hashcat
+  processes left from earlier attempts, copies hashcat again and checks that it starts. If the
+  copy still does not start while the hashcat that came with RecoverKit does, antivirus software
+  is holding that folder, and Repair moves hashcat to `C:\RecoverKit` (or a RecoverKit folder in
+  your user folder) and uses it from there. If hashcat starts nowhere, it says where to allow it.
+
 ## [1.6.0] - 2026-11-14
 
 ### Changed

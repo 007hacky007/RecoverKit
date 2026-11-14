@@ -36,9 +36,8 @@ public static class SevenZipExtractor
     public static void Extract(Stream s, Detection d)
     {
         d.TypeName = "7-Zip archive";
-        // A split stream has no volume flag: its numbered filename is the only reliable hint.
-        if (System.Text.RegularExpressions.Regex.IsMatch(d.FilePath, @"\.7z\.\d{3,}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            throw new UnsupportedFormatException("Multi-volume 7z archives are not supported. Join all .7z.001, .002, ... parts in order, then open the combined .7z file.");
+        // A split archive has no volume flag; FormatDetector reads its numbered parts as one stream.
+        bool split = s is MultiVolumeStream;
         long offset = FindSignature(s);
         if (offset < 0) throw new FormatException("7z signature not found.");
         if (offset > 0) d.Add("Self-extracting prefix", $"{offset:N0} bytes");
@@ -49,7 +48,10 @@ public static class SevenZipExtractor
         ulong nextOffset = Bin.U64(start, 12), nextSize = Bin.U64(start, 20);
         if (nextSize == 0) { d.Message = "Archive is empty and not password protected."; return; }
         if (nextSize > HeaderLimit) throw new UnsupportedFormatException("7z metadata exceeds the 16 MiB parsing limit.");
-        if (nextOffset > (ulong)s.Length - dataBase) throw new FormatException("7z end header is outside the file (possibly an incomplete multi-volume archive).");
+        if (nextOffset > (ulong)s.Length - dataBase)
+            throw new FormatException(split
+                ? $"The archive continues after {Path.GetFileName(((MultiVolumeStream)s).Paths[^1])}: a later part is missing. Put all parts in the same folder."
+                : "7z end header is outside the file (possibly an incomplete multi-volume archive: open its .7z.001 part).");
         ulong headerStart = dataBase + nextOffset;
         byte[] header = Read(s, headerStart, nextSize);
         CheckCrc(header, Bin.U32(start, 28));

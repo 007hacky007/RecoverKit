@@ -76,6 +76,8 @@ public sealed partial class HashcatTool
 
     private readonly Dictionary<(string Version, int Mode, int AttackMode), HashModeInfo?> _modeInfo = new();
 
+    internal static HashcatTool ForExe(string exe) => new(exe);
+
     private HashcatTool(string exe)
     {
         Exe = exe;
@@ -316,7 +318,7 @@ public sealed partial class HashcatTool
             var (_, o, _) = await RunAsync(["--version"], VersionTimeout, ct: ct);
             return _fullVersion = o.Trim();
         }
-        catch (TimeoutException) { throw new TimeoutException(StartTimeoutMessage(Directory, VersionTimeout)); }
+        catch (TimeoutException) { throw new HashcatStartTimeoutException(StartTimeoutMessage(Directory, VersionTimeout)); }
     }
 
     // ---------------------------------------------------------------- devices
@@ -602,3 +604,6 @@ public sealed partial class HashcatTool
         return s;
     }
 }
+
+/// <summary>hashcat did not answer <c>--version</c> in time: the program itself did not start.</summary>
+public sealed class HashcatStartTimeoutException(string message) : TimeoutException(message);

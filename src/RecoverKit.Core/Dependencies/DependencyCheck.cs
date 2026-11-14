@@ -12,6 +12,8 @@ public sealed record MachineFacts
     public bool HashcatIsManaged { get; init; }
     /// <summary>The portable version's bundled hashcat, run where it is (always the pinned build).</summary>
     public bool HashcatRunsInPlace { get; init; }
+    /// <summary>hashcat did not answer <c>--version</c> in time (it did not start at all).</summary>
+    public bool HashcatStartTimedOut { get; init; }
     /// <summary>Raw output of <c>hashcat --version</c>.</summary>
     public string? HashcatVersion { get; init; }
     public string? HashcatError { get; init; }
@@ -57,6 +59,11 @@ public static class DependencyCheck
         }
         if (!string.IsNullOrEmpty(f.HashcatError))
         {
+            // RecoverKit's own copy did not start (antivirus, a stuck process, a damaged copy): repair it.
+            if (f.HashcatStartTimedOut && f.BundleAvailable && f.HashcatIsManaged)
+                return new(DependencyId.Hashcat, pinnedName, Light.Red,
+                    f.HashcatError + " Repair stops stuck hashcat processes, copies hashcat again and, if it still does not start, moves it to another folder.",
+                    DependencyAction.RepairHashcat);
             // A broken hashcat of the user's own (or an older managed copy) gives way to the bundled one.
             return f.BundleAvailable && !IsPinnedManagedCopy(f)
                 ? new(DependencyId.Hashcat, pinnedName, Light.Red,

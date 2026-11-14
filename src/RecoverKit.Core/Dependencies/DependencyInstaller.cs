@@ -14,7 +14,7 @@ public sealed class DependencyInstaller(
     Func<Action<Settings>, Task>? updateSettings = null)
 {
     private readonly Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> _run =
-        run ?? DefaultRun(updateSettings ?? (change => { change(settings); settings.Save(); return Task.CompletedTask; }));
+        run ?? DefaultRun(settings, updateSettings ?? (change => { change(settings); settings.Save(); return Task.CompletedTask; }));
 
     public async Task<IReadOnlyList<(DependencyItem Item, Exception? Error)>> InstallAllAsync(
         IEnumerable<DependencyItem> items,
@@ -56,7 +56,7 @@ public sealed class DependencyInstaller(
     /// <summary>Points the settings at the copy in the engines folder (the data folder is fixed per user).</summary>
     internal static void PointAtEnginesCopy(Settings s, string enginesExe) => s.HashcatPath = enginesExe;
 
-    private static Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> DefaultRun(Func<Action<Settings>, Task> updateSettings)
+    private static Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> DefaultRun(Settings settings, Func<Action<Settings>, Task> updateSettings)
         => async (item, progress, ct) =>
         {
             switch (item.Action)
@@ -86,6 +86,13 @@ public sealed class DependencyInstaller(
                     await updateSettings(s => PointAtEnginesCopy(s, exe));
                     // The copy reports "done" itself; switching to a copy already in place needs its own report.
                     if (!copy) progress?.Report(new InstallProgress { Stage = "done", Message = "Done." });
+                    break;
+                }
+                case DependencyAction.RepairHashcat:
+                {
+                    var exe = await HashcatRepair.RepairAsync(settings.HashcatPath, progress, ct);
+                    await updateSettings(s => s.HashcatPath = HashcatTool.IsInside(exe, HashcatInstaller.InPlaceBundle) ? null : exe);
+                    progress?.Report(new InstallProgress { Stage = "done", Message = "Done." });
                     break;
                 }
                 case DependencyAction.DownloadNvrtc:

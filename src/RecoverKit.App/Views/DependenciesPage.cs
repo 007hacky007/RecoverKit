@@ -232,6 +232,7 @@ public sealed class DependenciesPage : UserControl
         _checkAgain.IsEnabled = !busy;
         bool licensed = _licenses.Where(l => l.Line.IsVisible).All(l => l.Accept.IsChecked == true);
         _install.IsEnabled = !busy && selected.Count > 0 && licensed;
+        _install.Content = selected.Count > 0 && selected.All(i => i.Action == DependencyAction.RepairHashcat) ? "Repair" : "Install all";
         // Nothing to install (opened from Tools with every row green or fixable only outside RecoverKit).
         bool nothingToDo = !_items.Any(HasCheckBox);
         _sub.Text = !nothingToDo
