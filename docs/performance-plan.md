@@ -355,7 +355,7 @@ Candidates then run in byte order instead of hashcat's likely-characters-first o
 is the same, but a typical human password is found later. Worth weighing against the CPU's share
 on formats where a discrete GPU does almost all the work.
 
-## RAR 3 on macOS runs through Metal
+## Every format on macOS runs through Metal
 
 hashcat 8.0.0 on the M1 Pro can end a RAR 3 (12500) wordlist attack without the password and
 without an error when it runs on Apple's OpenCL device. Measured on an idle machine with hashcat
@@ -379,8 +379,20 @@ middle, last, in a 10-word list, in a 200,000-word list and reached through a ru
   all found the password.
 - Cost: the pure kernel is 36% slower on Metal; the optimized kernel is the same speed. Metal also
   starts in about 4 s where OpenCL took about 47 s in these runs.
-- Not examined: other formats on Apple's OpenCL. Formats with a confirmation step (ZIP) already
-  run on Metal for a separate reason; the rest still use OpenCL.
+
+The same check for every format the application hands to hashcat (46 modes, hashcat's example
+hashes, a mask, the password first and in the middle of a wordlist, and through a rule; both
+kernels where the mode has them) found a second format that OpenCL skips: PDF 1.7 Level 8 (10700)
+with the pure kernel missed the password in 6 of 17 runs. Metal found it in every run of the 13
+modes measured on both devices.
+
+- Every format on macOS now runs Metal only (`HashcatRunner.MustAvoidAppleOpenCl`), the ZIP
+  header filter and its calibration included. Formats measured only on Metal were moved before
+  their runs finished; a mode where Metal misses goes into `HashcatRunner.MetalMisses` and is
+  decided on its own measurements.
+- Cost, Metal rate against OpenCL rate: 0.88 to 1.00 for most formats; RAR 3 pure 0.63 (and
+  RAR 3 compressed 0.96), Office 2003 0.67 to 0.83, PDF 1.1-1.3 0.68, PDF R6 optimized 0.79,
+  7-Zip pure 0.88, ZIP 0.96. PDF R6 pure is faster on Metal (1.31).
 
 ## Checked, not worth doing
 
@@ -388,7 +400,8 @@ middle, last, in a 10-word list, in a 200,000-word list and reached through a ru
   with `-w 3`, 2,314 M/s with `-w 4`.
 - **`--self-test-disable`.** Saves under 1 s of a 12 s start (first speed after 12.2 s against
   12.9 s).
-- **Metal instead of OpenCL for ZIP on Apple silicon.** 2,258 against 2,351 M/s.
+- **Metal instead of OpenCL for ZIP on Apple silicon (for speed).** 2,258 against 2,351 M/s. ZIP
+  runs on Metal anyway, because OpenCL can skip passwords.
 - **Manual `-n`, `-u`, `-T` tuning.** The earlier research note found no gain on Office 2007, and
   hashcat 8 refuses these options without `--force`.
 - **Engine counters and locks.** Touched once per chunk of about 20 ms; no contention.

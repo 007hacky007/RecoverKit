@@ -61,9 +61,9 @@ All notable changes to RecoverKit. Downloads are on the
   is remembered until that hashcat changes.
 - An attack step that a large ZIP file cannot run on the CPU (rules, extra hashcat options) ended
   the whole recovery with an error. The step is skipped with the reason and the other steps run.
-- On a Mac, a RAR 3 dictionary attack could end without finding a password that was in the list:
-  hashcat skipped candidates on Apple's OpenCL without reporting an error. RAR 3 now runs through
-  Metal, which found the password in every test run.
+- On a Mac, a RAR 3 or PDF 1.7 Level 8 dictionary attack could end without finding a password that
+  was in the list: hashcat skipped candidates on Apple's OpenCL without reporting an error. Every
+  format now runs through Metal, which found the password in every test run.
 - The Benchmark showed 7-Zip and Electrum wallets as "not supported on this device" with hashcat 8.
 
 ## [1.4.1] - 2026-11-13

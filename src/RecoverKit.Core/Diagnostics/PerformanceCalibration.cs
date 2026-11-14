@@ -27,8 +27,7 @@ public static class PerformanceCalibration
             var probes = new ZipKernelBenchmark(tool)
             {
                 Seconds = 2, WithAmpCache = false, Priority = settings.Priority,
-                DeviceArgumentsOverride = HashcatRunner.DeviceArguments(settings, devices, gpuOnly: true,
-                    exclude: exclude, preferMetal: OperatingSystem.IsMacOS()),
+                DeviceArgumentsOverride = HashcatRunner.GpuArguments(settings, devices, mode, exclude),
             };
             var baseline = new List<double>();
             var headers = new List<double>();

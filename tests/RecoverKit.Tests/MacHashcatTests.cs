@@ -1,4 +1,5 @@
 using RecoverKit.Core;
+using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
 using Xunit;
 
@@ -149,11 +150,26 @@ public class MacHashcatTests
     [Theory]
     [InlineData(12500, true, true)]
     [InlineData(23700, true, true)]
-    [InlineData(23800, true, true)]
-    [InlineData(13000, true, false)]
+    [InlineData(13000, true, true)]
+    [InlineData(10700, true, true)]
+    [InlineData(17230, true, true)]
     [InlineData(12500, false, false)]
-    public void Rar3AvoidsOpenClOnlyOnMacOS(int mode, bool isMacOS, bool expected)
+    [InlineData(13000, false, false)]
+    public void EveryFormatAvoidsOpenClOnlyOnMacOS(int mode, bool isMacOS, bool expected)
         => Assert.Equal(expected, HashcatRunner.MustAvoidAppleOpenCl(mode, isMacOS));
+
+    [Fact]
+    public void ZipHeaderFilterRunsOnMetalOnMacOS()
+    {
+        var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
+        var args = HashcatRunner.GpuArguments(new Settings(), devs, 17230);
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.Equal(["-D", "2", "-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip", "--backend-ignore-opencl"], args);
+            Assert.Equal([devs.First(d => d.IsMetal).Key], ZipCheckBytesTarget.ActiveDevices(new Settings(), devs).Select(d => d.Key));
+        }
+        else Assert.DoesNotContain("--backend-ignore-opencl", args);
+    }
 
     [Fact]
     public void MetalOnlyArgumentsReplaceEveryGpuAndCloseOpenCl()

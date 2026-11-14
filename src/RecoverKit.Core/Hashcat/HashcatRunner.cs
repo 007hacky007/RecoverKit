@@ -251,11 +251,16 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     /// <summary>The GPUs hashcat will run on with these settings (not skipped as an alias, not unchecked).</summary>
     /// <summary>
-    /// RAR 3 on macOS must not run on Apple's OpenCL. On an idle M1 Pro hashcat 8.0.0 ended wordlist
-    /// attacks without the password and without an error in 3 of 33 runs with the pure kernel on the
-    /// OpenCL device; the Metal device found it in 66 of 66 runs with both kernels.
+    /// On macOS hashcat never runs a format on Apple's OpenCL. On an idle M1 Pro hashcat 8.0.0 ended
+    /// wordlist attacks without the password and without an error on the OpenCL device with the pure
+    /// kernel: RAR 3 in 3 of 33 runs, PDF 1.7 Level 8 in 6 of 17. The Metal device found the password
+    /// in every run of every format measured. A format where Metal misses a password goes into
+    /// <see cref="MetalMisses"/> and is decided on its own measurements.
     /// </summary>
-    public static bool MustAvoidAppleOpenCl(int mode, bool isMacOS) => isMacOS && mode is 12500 or 23700 or 23800;
+    public static bool MustAvoidAppleOpenCl(int mode, bool isMacOS) => isMacOS && !MetalMisses.Contains(mode);
+
+    /// <summary>Modes where hashcat on Metal missed a password; none so far.</summary>
+    internal static readonly IReadOnlySet<int> MetalMisses = new HashSet<int>();
 
     /// <summary>
     /// Device arguments that keep hashcat off OpenCL: every selected GPU is replaced by its Metal
@@ -278,6 +283,12 @@ public sealed class HashcatRunner(HashcatTool tool)
         a.Add("--backend-ignore-opencl");
         return a;
     }
+
+    /// <summary>GPU-only device arguments for <paramref name="mode"/>: Metal only on macOS, as in a recovery run.</summary>
+    internal static List<string> GpuArguments(Settings s, IReadOnlyList<BackendDevice>? known, int mode, IReadOnlyCollection<int>? exclude = null)
+        => MustAvoidAppleOpenCl(mode, OperatingSystem.IsMacOS())
+            ? MetalOnlyArguments(s, known, gpuOnly: true, exclude)
+            : DeviceArguments(s, known, gpuOnly: true, exclude, preferMetal: OperatingSystem.IsMacOS());
 
     public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
     {
