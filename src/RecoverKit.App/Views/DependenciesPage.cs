@@ -43,6 +43,8 @@ public sealed class DependenciesPage : UserControl
     private readonly ProgressBar _bar = new() { Minimum = 0, Maximum = 1000, Height = 6, MinHeight = 6, IsVisible = false };
     private readonly TextBlock _status = L.Text("", dim: true, wrap: true);
 
+    private readonly Dictionary<DependencyId, string> _lastMessage = [];
+
     private CancellationTokenSource? _cts;
     private bool _scanning;
 
@@ -250,7 +252,7 @@ public sealed class DependenciesPage : UserControl
             _items = await _rescan();
             ShowStatus("");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             RecoverKit.Core.DebugLog.Error("Dependency check failed", ex);
             ShowStatus("Could not check again: " + ex.Message);
@@ -258,8 +260,8 @@ public sealed class DependenciesPage : UserControl
         finally
         {
             _scanning = false;
+            BuildRows();
         }
-        BuildRows();
     }
 
     private async Task InstallAsync()
@@ -272,6 +274,7 @@ public sealed class DependenciesPage : UserControl
         Installing = true;
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
+        _lastMessage.Clear();
         _bar.Value = 0;
         _bar.IsVisible = true;
         ShowStatus("Starting...");
@@ -287,30 +290,32 @@ public sealed class DependenciesPage : UserControl
             }
             catch (OperationCanceledException)
             {
-                _bar.IsVisible = false;
+                // Rows that finished before the cancel were already marked green by their "done" report.
                 ShowStatus("Cancelled.");
                 return;
             }
             progress.Stop();
-            _bar.Value = _bar.Maximum;
 
             var failures = new Dictionary<DependencyId, string>();
             foreach (var (item, error) in results)
             {
-                if (error is null) MarkRow(item with { Light = Light.Green, Reason = "Installed.", Pending = false });
+                if (error is null) SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
                 else
                 {
                     failures[item.Id] = error.Message;
-                    MarkRow(item with { Light = Light.Red, Reason = error.Message, Pending = false });
+                    SetItem(item.Id, i => i with { Reason = error.Message });
                 }
             }
+            BuildRows();
+            foreach (var id in failures.Keys)
+                if (_items.FirstOrDefault(i => i.Id == id) is { } failed) MarkRow(failed with { Light = Light.Red, Pending = false });
 
             ShowStatus(failures.Count > 0 ? "Some components could not be installed. Checking again..." : "Checking again...");
-            IReadOnlyList<DependencyItem> fresh;
             _scanning = true;
             Refresh();
+            IReadOnlyList<DependencyItem> fresh;
             try { fresh = await _rescan(); }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
                 RecoverKit.Core.DebugLog.Error("Dependency check failed", ex);
                 ShowStatus("Could not check again: " + ex.Message);
@@ -328,19 +333,27 @@ public sealed class DependenciesPage : UserControl
             // Stay open with the new rows; a failed row keeps the error as its reason.
             _items = [.. fresh.Select(i => failures.TryGetValue(i.Id, out var msg) && i.Light != Light.Green && !i.Pending ? i with { Reason = msg } : i)];
             ShowStatus(failures.Count > 0 ? "Some components could not be installed." : "");
-            _bar.IsVisible = false;
             BuildRows();
+        }
+        catch (Exception ex)
+        {
+            RecoverKit.Core.DebugLog.Error("Installing dependencies failed", ex);
+            ShowStatus("Install failed: " + ex.Message);
         }
         finally
         {
             progress.Stop();
             Installing = false;
             _scanning = false;
+            _bar.IsVisible = false;
             _cts.Dispose();
             _cts = null;
             Refresh();
         }
     }
+
+    private void SetItem(DependencyId id, Func<DependencyItem, DependencyItem> change)
+        => _items = [.. _items.Select(i => i.Id == id ? change(i) : i)];
 
     private void MarkRow(DependencyItem item)
     {
@@ -348,11 +361,21 @@ public sealed class DependenciesPage : UserControl
         Paint(item, parts.Light, ring, parts.Reason);
     }
 
+    /// <summary>The row turns green as soon as its component finishes and leaves the checked set and the total, also if the user cancels later.</summary>
+    private void OnDone(DependencyItem item)
+    {
+        if (_done.Task.IsCompleted || _items.FirstOrDefault(i => i.Id == item.Id) is not { } row || row.Light == Light.Green) return;
+        SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
+        BuildRows();
+    }
+
     private void OnProgress(DependencyItem item, InstallProgress p)
     {
-        if (!Installing || p.Stage == "done") return;
+        if (!Installing) return;
+        // Byte reports carry no message; keep the last one this component gave ("Downloading NVIDIA NVRTC 12.8.93 ...").
         string msg = p.Message.TrimEnd('.', ' ');
-        if (msg.Length == 0) msg = "Installing " + item.Name;
+        if (msg.Length > 0) _lastMessage[item.Id] = msg;
+        else if (!_lastMessage.TryGetValue(item.Id, out msg!)) msg = "Installing " + item.Name;
         if (p.BytesTotal > 0)
         {
             _bar.IsIndeterminate = false;
@@ -379,8 +402,10 @@ public sealed class DependenciesPage : UserControl
 
         public void Report((DependencyItem Item, InstallProgress Progress) value)
         {
-            if (_stopped) return;
-            Dispatcher.UIThread.Post(() => { if (!_stopped) page.OnProgress(value.Item, value.Progress); });
+            // A finished component is never dropped, even when it arrives after a cancel ended the install.
+            bool done = value.Progress.Stage == "done";
+            if (_stopped && !done) return;
+            Dispatcher.UIThread.Post(() => { if (done) page.OnDone(value.Item); else if (!_stopped) page.OnProgress(value.Item, value.Progress); });
         }
     }
 }
