@@ -11,6 +11,7 @@ supporting clean uninstall and in-place upgrades.
 
 - Windows x64 (WiX is Windows-only; the macOS app is built by `macos/package.sh`).
 - .NET 10 SDK (to publish the app).
+- 7-Zip (`7z.exe` on `PATH` or in `Program Files\7-Zip`), used to unpack the hashcat archive.
 - Windows PowerShell 5.1 or PowerShell 7. The default execution policy blocks
   scripts, hence `-ExecutionPolicy Bypass`. The build script installs the WiX CLI as a global dotnet tool on
   first run; nothing else is needed.
@@ -36,6 +37,19 @@ about 40 MB). For a small MSI that relies on the machine having the
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build.ps1 -FrameworkDependent
+```
+
+## hashcat
+
+Every build bundles hashcat 8.0.0. The script downloads the pinned official archive from
+hashcat.net into `installer\cache` (kept between builds), verifies its SHA-256, extracts it with
+7-Zip, removes the non-Windows binaries, writes a `RECOVERKIT_BUNDLE` stamp and stages the result as
+`hashcat\` next to `RecoverKit.exe`. The MSI installs that folder and the portable zip contains it.
+RecoverKit copies it into the user's engines folder at first start. For an offline build pass a
+copy of the archive (it must match the pinned SHA-256):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1 -HashcatArchive C:\path\hashcat-8.0.0.7z
 ```
 
 ## Notes

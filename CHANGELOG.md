@@ -6,6 +6,13 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- One dependencies page (Tools > Dependencies) shows hashcat, NVIDIA's CUDA compiler and Intel's CPU
+  runtime as green, yellow or red lights and installs what is missing with one "Install all" button
+  after you accept the licenses. It appears at start only when something needs attention and stays
+  hidden otherwise; optional items you skip are remembered. It replaces the separate download prompts.
+- hashcat 8.0.0 is now included in the Windows installer and portable zip, as it already was on the
+  Mac, and is set up silently at first start. The Windows build downloads and verifies the official
+  archive (7-Zip is needed on the build machine; `-HashcatArchive` allows an offline build).
 - Help > Check for updates now installs a newer version from here: the release file is downloaded,
   checked against its published SHA-256 and installed (the installer on Windows, the app bundle on
   Macs, the folder of a portable copy), and RecoverKit starts again. The download page remains the
@@ -13,6 +20,12 @@ All notable changes to RecoverKit. Downloads are on the
 - RecoverKit checks for a newer version when it starts, at most once an hour. When one is out, an
   Update button appears in the toolbar: one click downloads, verifies and installs it. The check can
   be turned off in Preferences > Other.
+
+### Removed
+- The run-time hashcat download and the 7-Zip extractor (7zr.exe) download. The "Download hashcat",
+  "Download CPU runtime" and "Download NVIDIA CUDA compiler" items in the Tools menu are replaced by
+  Tools > Dependencies, and "Install hashcat" in `recoverkit-cli` only copies the bundled build or
+  `--from <folder>`. In Preferences the hashcat "Download/Install" button is now "Default".
 
 ### Fixed
 - Classic ZIP archives whose encrypted files are all larger than 320 KB (for example photos) were

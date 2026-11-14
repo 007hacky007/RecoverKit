@@ -180,10 +180,14 @@ limits are respected; some GPU comparisons are skipped when those limits cannot 
      stick) and run `RecoverKit.exe`. Nothing is installed.
    - Mac (Apple silicon, macOS 15 or later): `RecoverKit-x.y.z-macos-arm64.dmg`. Open it and drag
      RecoverKit to Applications. The disk image shows how to open it the first time (see below).
-2. **First start:** on Windows, RecoverKit offers to download the free recovery engine
-   ([hashcat](https://hashcat.net)). If your computer has no graphics card, it also offers Intel's free
-   processor driver. Both come from their official sources, are checked, and are stored in your user
-   folder only. The Mac version already contains hashcat and sets it up by itself.
+2. **First start:** the free recovery engine ([hashcat](https://hashcat.net)) is included in every
+   download and sets itself up silently. If something else is needed, RecoverKit shows one
+   **Dependencies** page with a green, yellow or red light per item and a single **Install all**
+   button. On Windows that can be NVIDIA's CUDA compiler (faster on NVIDIA graphics cards) or, if your
+   computer has no graphics card driver, Intel's free processor driver. Both are optional downloads
+   from their official sources, are checked, need your OK on their license, and are stored in your
+   user folder only. The page stays hidden when everything is fine, and an optional item you skip is
+   not offered again at start. You can open it any time with **Tools > Dependencies**.
 3. **Open the protected file** (File > Open, or drag it onto the window) and follow the wizard.
 
 Not sure which method to choose? Keep the suggested plan and click **Finish**. It starts with the
