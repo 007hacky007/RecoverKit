@@ -93,15 +93,15 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
             prefixCount = checked(prefixCount * pos[i].Length);
         long total = checked(prefixCount * last.Length);
 
-        // Chunks of about 20 ms of work per thread keep scheduling overhead negligible and make
-        // stopping responsive.
+        // PrefixBatch favors full vector groups and can take much longer than the 20 ms estimate.
+        // Taper claims near the end so one large batch does not leave the other threads idle.
         int batch = Math.Max(1, kernel.PrefixBatch(last.Length));
         long chunk = Math.Max(batch, (long)(kernel.SpeedHint * 0.02 / last.Length));
+        // A fixed suffix needs the full prefix batch to fill the kernel's lanes or candidate pool.
+        int minimum = last.Length == 1 ? batch : 1;
         long next = startPrefix;
         long done = startPrefix * last.Length;
         int threads = Math.Max(1, Threads);
-        var inFlight = new long[threads];
-        Array.Fill(inFlight, long.MaxValue);
         byte[]? found = null;
         Exception? failure = null;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -115,10 +115,15 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
             var packed = new byte[prefixLen * batch];
             while (!stop.IsCancellationRequested)
             {
-                long s = Interlocked.Add(ref next, chunk) - chunk;
-                if (s >= prefixCount) break;
-                Volatile.Write(ref inFlight[t], s);
-                long e = Math.Min(s + chunk, prefixCount);
+                long s, e;
+                do
+                {
+                    s = Volatile.Read(ref next);
+                    if (s >= prefixCount) return;
+                    long remaining = prefixCount - s;
+                    long size = Math.Min(remaining, Math.Min(chunk, Math.Max(minimum, 1 + (remaining - 1) / threads)));
+                    e = s + size;
+                } while (Interlocked.CompareExchange(ref next, e, s) != s);
 
                 // Decode the first prefix of the chunk (last prefix position varies fastest).
                 long rem = s;
@@ -167,14 +172,10 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         }
                         from = hit + 1;
                     }
-                    long before = p;
+                    // Finish every claimed prefix on stop: next is then an exact, contiguous checkpoint.
                     p += count;
-                    if ((before >> 6) != (p >> 6) && stop.IsCancellationRequested) break;
                 }
-                // A chunk left early (stop) stays marked in flight, so the resume point does not pass it.
-                if (p < e) return;
                 Interlocked.Add(ref done, (e - s) * last.Length);
-                Volatile.Write(ref inFlight[t], long.MaxValue);
             }
         }
 
@@ -222,8 +223,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
         if (found is not null) return new NativeResult { Outcome = NativeOutcome.Found, Password = found };
         if (ct.IsCancellationRequested)
         {
-            long resumeAt = Math.Min(Volatile.Read(ref next), inFlight.Min());
-            return new NativeResult { Outcome = NativeOutcome.Stopped, ResumeAt = new NativeResumePoint { Length = len, PrefixIndex = Math.Min(resumeAt, prefixCount) } };
+            return new NativeResult { Outcome = NativeOutcome.Stopped, ResumeAt = new NativeResumePoint { Length = len, PrefixIndex = Volatile.Read(ref next) } };
         }
         return null; // this length exhausted
     }

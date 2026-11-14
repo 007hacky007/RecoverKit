@@ -259,6 +259,9 @@ public sealed class HybridRunner
                     }
                 }
                 bool gpuUsable = gpuAlive && order is not null;
+                // A short remainder may now run on the CPU alone; keep the checkpoint's numbering.
+                if (order is null && resume is not null && resume.Length == len && plan.Dictionary is null)
+                    order = HashcatOrder.FromKeyspace(sorted, resume.BaseCount);
                 order ??= HashcatOrder.WithAmplifier(sorted, len);
                 var lr = resume is not null && resume.Length == len && resume.BaseCount == order.BaseCount ? resume : null;
                 var job = new LengthJob(this, plan.Kernel, order, len, r, gpu, gpuUsable, lr, cpuSpeed, gpuSpeed, excluded);
@@ -405,11 +408,17 @@ public sealed class HybridRunner
                 if (resume.Box >= 0 && _top < _doneFrom)
                 {
                     _pending = resume;
+                    _box = resume.Box;
+                    _boxPrefix = resume.BoxPrefix;
                     if (_order.Dictionary is not null)
                     {
-                        _box = resume.Box;
-                        _boxPrefix = resume.BoxPrefix;
                         _batchDone = resume.BoxPrefix;
+                    }
+                    else
+                    {
+                        var boxes = _order.Boxes(_top, _doneFrom);
+                        _batchDone = boxes.Take(resume.Box).Sum(b => (long)b.Keyspace(_len));
+                        if (resume.Box < boxes.Count) _batchDone += resume.BoxPrefix * boxes[resume.Box].Positions[_len - 1].Length;
                     }
                 }
                 else _top = _doneFrom;
@@ -793,7 +802,8 @@ public sealed class HybridRunner
                                 box0 = 0; prefix0 = 0;
                             }
                         }
-                        _batchDone = _order.Dictionary is not null ? prefix0 : 0;
+                        if (_order.Dictionary is not null) _batchDone = prefix0;
+                        else if (box0 == 0 && prefix0 == 0) _batchDone = 0;
                         if (box0 >= 0) { _box = box0; _boxPrefix = prefix0; }
                     }
                     if (box0 < 0)
@@ -1024,7 +1034,11 @@ public sealed class HybridRunner
                         _found.Cancel();
                         return false;
                     case NativeOutcome.Stopped:
-                        lock (_lock) { _box = b; _boxPrefix = res.ResumeAt?.PrefixIndex ?? 0; }
+                        lock (_lock)
+                        {
+                            _box = b; _boxPrefix = res.ResumeAt?.PrefixIndex ?? 0;
+                            _batchDone = boxBefore + _boxPrefix * box.Positions[_len - 1].Length;
+                        }
                         return false;
                 }
                 before += (long)box.Keyspace(_len);

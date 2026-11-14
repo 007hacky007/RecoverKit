@@ -349,15 +349,65 @@ public class HybridTests
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(30 + 10 * stops));
             res = await Rig.Runner(50_000).RunAsync(plan, "hash", rig.Request(restore), new FakeGpu(rig.Seen, null, 2), cts.Token);
             restore = true;
-            if (res.Outcome == RunOutcome.Aborted) Assert.True(File.Exists(HybridRunner.RestoreFile(rig.Dir, "rk_test")));
+            if (res.Outcome == RunOutcome.Aborted)
+            {
+                Assert.True(File.Exists(HybridRunner.RestoreFile(rig.Dir, "rk_test")));
+                Assert.All(rig.Seen.Values, n => Assert.Equal(1, n));
+            }
         } while (res.Outcome == RunOutcome.Aborted && ++stops < 200);
         Assert.Equal(RunOutcome.Exhausted, res.Outcome);
         Assert.True(stops >= 2, "the attack should have been stopped at least twice");
-        // Nothing skipped. The CPU engine redoes the work its threads had in hand at the stop (as it
-        // always has on resume); the simulated hashcat stops exactly at its restore point.
-        Assert.Equal((long)Space.TotalKeyspace, rig.Seen.Count);
-        long repeats = rig.Seen.Values.Sum(v => v - 1L);
-        Assert.True(repeats < (long)Space.TotalKeyspace / 4, $"{repeats} repeats");
+        AssertExactlyOnce(rig.Seen, Space);
+    }
+
+    [Theory]
+    [InlineData(0, 5, 17)]       // inside the first box
+    [InlineData(0, 6, 18)]       // exactly at its end
+    [InlineData(1, 1, 19)]       // inside the last box
+    [InlineData(1, 18, 36)]      // exactly at the last box's end
+    public async Task RestoredMaskCountsCompletedBoxesAndPrefixes(int box, long prefix, long completed)
+    {
+        using var rig = new Rig();
+        var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "ab", "-2", "012", "-3", "WXYZ", "-4", "!?", "?1?2?3?4"])!;
+        // Eight base words, six amplifier candidates each. GPU word 0 and CPU word 7 are done.
+        // Pending CPU words [3,7) form boxes Z! and [WXY]?. Their prefix counts are 6 and 18.
+        foreach (char a in "ab")
+            foreach (char b in "012")
+                foreach (string suffix in new[] { "W!", "Z?" }) rig.Seen[$"{a}{b}{suffix}"] = 1;
+        var pending = new List<string>();
+        foreach (char a in "ab") foreach (char b in "012") pending.Add($"{a}{b}Z!");
+        foreach (char a in "ab") foreach (char b in "012") foreach (char c in "WXY") pending.Add($"{a}{b}{c}?");
+        foreach (string candidate in pending.Take((box == 0 ? 0 : 6) + (int)prefix)) rig.Seen[candidate] = 1;
+        Assert.Equal(completed, rig.Seen.Count);
+        var checkpoint = new HybridResumePoint { Length = 4, BaseCount = 8, Lo = 1, BatchLo = 3, BatchHi = 7, Box = box, BoxPrefix = prefix };
+        File.WriteAllText(HybridRunner.RestoreFile(rig.Dir, "rk_test"), System.Text.Json.JsonSerializer.Serialize(checkpoint));
+        using (var stop = new CancellationTokenSource())
+        {
+            stop.Cancel();
+            var paused = await Rig.Runner(50_000).RunAsync(new HybridPlan(new RecordingKernel(rig.Seen, null), space), "hash",
+                rig.Request(true), new FakeGpu(rig.Seen, null, 1), stop.Token);
+            Assert.Equal(RunOutcome.Aborted, paused.Outcome);
+            Assert.Equal(completed, paused.LastStatus!.ProgressDone);
+            var saved = System.Text.Json.JsonSerializer.Deserialize<HybridResumePoint>(
+                File.ReadAllText(HybridRunner.RestoreFile(rig.Dir, "rk_test")))!;
+            Assert.Equal(box, saved.Box);
+            Assert.Equal(prefix, saved.BoxPrefix);
+            Assert.Equal(completed, rig.Seen.Count);
+        }
+        var runner = Rig.Runner(50_000);
+        var statuses = new List<HashcatStatus>();
+        runner.StatusReceived += statuses.Add;
+        var result = await runner.RunAsync(new HybridPlan(new RecordingKernel(rig.Seen, null), space), "hash", rig.Request(true),
+            new FakeGpu(rig.Seen, null, 1), CancellationToken.None);
+        Assert.Equal(RunOutcome.Exhausted, result.Outcome);
+        AssertExactlyOnce(rig.Seen, space);
+        Assert.NotEmpty(statuses);
+        Assert.All(statuses, s =>
+        {
+            Assert.Equal(completed, s.ResumedFrom);
+            Assert.InRange(s.ProgressDone, completed, 48);
+        });
+        Assert.Equal(48, statuses[^1].ProgressDone);
     }
 
     [Fact]
