@@ -39,7 +39,7 @@ number at the end"), and it tests those combinations until it finds the right on
 - **Long, random passwords** can take far longer than anyone can wait. The program shows an
   estimated time before you start, so you know what to expect.
 - **A graphics card (GPU) helps a lot.** NVIDIA, AMD and Intel Arc cards are supported and can be
-  tens of times faster than the processor. On a Mac the Apple silicon GPU is used. Without a graphics
+  tens of times faster than the processor. On a Mac the Apple silicon GPU is used, through Metal. Without a graphics
   card RecoverKit uses the processor, with its own fast engine for the most common formats (on Apple
   silicon it uses the chip's NEON and crypto instructions).
 
@@ -253,7 +253,8 @@ quickest guesses.
   old .xls files it shows the password.
 - **CPU and GPU together:** brute-force and mask attacks on ZIP, Office 97-2003, PDF, RAR 3 and
   TrueCrypt (Whirlpool) use all your GPUs and the processor at the same time, each on its own part
-  of the passwords. Preferences > Performance can turn this off.
+  of the passwords. Dictionary attacks (with or without rules) on RAR 5, RAR 3, current PDF files and
+  TrueCrypt (Whirlpool) share the word list the same way. Preferences > Performance can turn this off.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
@@ -261,6 +262,9 @@ quickest guesses.
 Building from source, the command-line tool and the scenario file format are described in
 [docs/DEVELOPERS.md](docs/DEVELOPERS.md).
 
+Classic ZIP archives with eight or more encrypted files are searched on the GPU by the files'
+check bytes only, and the processor confirms the few candidates that pass; RecoverKit measures
+this against the normal GPU path before the first ZIP attack and keeps the faster one.
 Classic ZIP archives with large encrypted files use a prefix on the GPU and check each hit against
 the whole file. Large uncompressed entries use the CPU because their short GPU check can hide the
 real password among wrong matches. Without RecoverKit's ZIP GPU kernels, large entries also use

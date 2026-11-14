@@ -346,6 +346,54 @@ the engine fed the GPU at 2,500/s instead of 9,600/s. On macOS neither is lowere
 Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without `--no-hybrid`, and
 `--strategy CpuOnly`; the status lines list each device's speed.
 
+## Version 1.5.0 performance work
+
+Measured on 2026-11-14 on the Apple M1 Pro (16-core GPU, hashcat 8.0.0) and on the Xeon VM above,
+on a machine that was not isolated unless noted. The method and the open items are in
+[performance-plan.md](performance-plan.md).
+
+| Change | Measurement | Before | After |
+|---|---|---:|---:|
+| RAR 3 CPU fills every vector lane | mask `?l?l?l?l2024`, CPU only, M1 Pro (NEON, 8 threads) | 1,144/s | 2,094/s |
+| | same, Xeon VM (AVX2, 8 threads) | 1,660/s | 3,438/s |
+| ZIP CPU fills every lane next to the GPU | CPU share of a hybrid ZIP attack, M1 Pro | 1.8-3.8 M/s | 8.3-25.3 M/s |
+| ZIP GPU checks only check bytes (8+ encrypted files) | archive of 25 large photos, 34.3 billion candidates, GPU only, whole job | 47.6-77.0 s | 13.6-25.3 s |
+| | same, hybrid | 53.7-170.6 s | 19.2-41.8 s |
+| Optimized kernels for dictionaries, long words in a second pass | RAR 3, 480,004 candidates, whole job | 112-262 s | 49-86 s |
+| CPU joins the GPU in dictionary attacks | RAR 5 word list, 9.6 million candidates, whole job | 840-935 s | 622-674 s |
+
+- The dictionary rows are complete jobs with start-up, three to five alternating pairs. In the
+  RAR 5 hybrid job the CPU hashed at 5,579/s, close to its 5,762-5,958/s in a mask attack.
+- The integrated GPU of the M1 Pro shares its power budget with the CPU, so a desktop with a
+  discrete GPU should gain more from the CPU's share. That has not been measured.
+- RAR 3 also has an AVX-512 path. It checks itself against known answers before first use; no
+  AVX-512 machine has run it yet. The AVX2 and NEON rates were unchanged by it (3,575 against
+  3,573/s and 3,693 against 3,693/s).
+
+### Metal instead of OpenCL on macOS
+
+hashcat 8.0.0 on Apple's OpenCL device ended some wordlist attacks without the password and
+without an error: RAR 3 with the pure kernel in 3 of 33 runs, PDF 1.7 Level 8 in 6 of 17. The
+Metal device found the password in every run, so RecoverKit 1.5.0 runs every format through Metal
+on a Mac. Each format was checked with a mask, the password first and in the middle of a word
+list, and through a rule, one hashcat at a time.
+
+| Format (hashcat mode) | Kernel | OpenCL | Metal | Metal / OpenCL |
+|---|---|---:|---:|---:|
+| RAR 5 (13000) | pure | 11,545/s | 11,556/s | 1.00 |
+| RAR 3 -p (23700) | pure | 8,365/s | 5,309/s | 0.63 |
+| RAR 3 -p (23700) | optimized | 16,545/s | 15,068/s | 0.91 |
+| PDF 1.7 Level 8 (10700) | pure | 2,190/s | 2,860/s | 1.31 |
+| PDF 1.7 Level 8 (10700) | optimized | 11,572/s | 9,097/s | 0.79 |
+| PDF 1.4-1.6 (10500) | pure | 4.83 M/s | 5.29 M/s | 1.10 |
+| PDF 1.1-1.3 (10400) | optimized | 119.7 M/s | 81.1 M/s | 0.68 |
+| Office 2007 (9400) | pure | 42,398/s | 42,590/s | 1.00 |
+| Office 2013 (9600) | pure | 1,845/s | 1,780/s | 0.96 |
+| Office 2003 SHA-1 (9800) | optimized | 87.0 M/s | 58.6 M/s | 0.67 |
+| 7-Zip (11600) | optimized | 133,625/s | 130,665/s | 0.98 |
+
+Metal also starts faster: about 4 s against about 47 s for RAR 3 in these runs.
+
 ## RAR 5 (PBKDF2-HMAC-SHA256)
 
 RAR 5 costs 32,800 PBKDF2-HMAC-SHA256 iterations per password (2^15 for the key plus 32 for the
