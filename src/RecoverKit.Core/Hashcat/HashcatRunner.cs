@@ -259,8 +259,12 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// </summary>
     public static bool MustAvoidAppleOpenCl(int mode, bool isMacOS) => isMacOS && !MetalMisses.Contains(mode);
 
-    /// <summary>Modes where hashcat on Metal missed a password; none so far.</summary>
-    internal static readonly IReadOnlySet<int> MetalMisses = new HashSet<int>();
+    /// <summary>
+    /// Modes where hashcat on Metal missed a password. ODF 1.1 (18600): on an M1 Pro hashcat 8.0.0
+    /// found the password from a one-word list but never from a 95-candidate mask or a wordlist
+    /// (0 of 20 runs), and ended without an error; Apple's OpenCL found it in 17 of 17.
+    /// </summary>
+    internal static readonly IReadOnlySet<int> MetalMisses = new HashSet<int> { 18600 };
 
     /// <summary>
     /// Device arguments that keep hashcat off OpenCL: every selected GPU is replaced by its Metal

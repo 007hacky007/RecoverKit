@@ -5,6 +5,11 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Fixed
+- On a Mac, a password search on an OpenOffice 1.x-3.x document (ODF 1.1, Blowfish) could end
+  without finding a password that was in the list or mask: 1.5.0 ran it through Metal, where
+  hashcat skips such candidates. It runs on OpenCL again, as in 1.4.1.
+
 ## [1.5.0] - 2026-11-14
 
 ### Added

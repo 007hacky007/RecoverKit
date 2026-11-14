@@ -390,6 +390,10 @@ modes measured on both devices.
   header filter and its calibration included. Formats measured only on Metal were moved before
   their runs finished; a mode where Metal misses goes into `HashcatRunner.MetalMisses` and is
   decided on its own measurements.
+- One format fails on Metal: ODF 1.1 (18600). Metal found the password from a one-word list but
+  in none of 20 runs with a mask or a wordlist, again without an error; OpenCL found it in 17 of
+  17. ODF 1.1 therefore runs on OpenCL (`HashcatRunner.MetalMisses`). Version 1.5.0 shipped with it
+  on Metal.
 - Cost, Metal rate against OpenCL rate: 0.88 to 1.00 for most formats; RAR 3 pure 0.63 (and
   RAR 3 compressed 0.96), Office 2003 0.67 to 0.83, PDF 1.1-1.3 0.68, PDF R6 optimized 0.79,
   7-Zip pure 0.88, ZIP 0.96. PDF R6 pure is faster on Metal (1.31).

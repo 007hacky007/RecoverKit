@@ -153,6 +153,7 @@ public class MacHashcatTests
     [InlineData(13000, true, true)]
     [InlineData(10700, true, true)]
     [InlineData(17230, true, true)]
+    [InlineData(18600, true, false)]
     [InlineData(12500, false, false)]
     [InlineData(13000, false, false)]
     public void EveryFormatAvoidsOpenClOnlyOnMacOS(int mode, bool isMacOS, bool expected)
