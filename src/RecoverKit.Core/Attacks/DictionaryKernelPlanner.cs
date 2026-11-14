@@ -61,7 +61,11 @@ internal static class DictionaryKernelPlanner
                 { steps.Add(spec); continue; }
                 var (pure, optimized) = Rates(mode, effective);
                 string tail = Path.Combine(settings.SessionsDir, $"{state.Key}.dictionary-{i}.txt");
-                steps.AddRange(await PlanAsync(spec, attack, info.OptimizedPasswordLenMax.Value, pure, optimized, tail, log, ct));
+                double hybrid = 0;
+                if (Native.HybridRunner.Plan(mode, target.HashLines, attack, effective, devices, target.VolumeCredentials, target.ZipPartial) is { Dictionary: not null } plan)
+                    hybrid = pure + (effective.CpuSpeedByMode.TryGetValue(mode, out var cpu) && cpu > 0 ? cpu
+                        : plan.Kernel.SpeedHint * Native.HybridRunner.CpuThreads(effective, devices, hashcatRunning: true));
+                steps.AddRange(await PlanAsync(spec, attack, info.OptimizedPasswordLenMax.Value, pure, optimized, tail, log, ct, hybridRate: hybrid));
             }
             state.Steps = steps;
             state.DictionaryPlanPending = false;
@@ -99,7 +103,7 @@ internal static class DictionaryKernelPlanner
 
     internal static async Task<IReadOnlyList<AttackSpec>> PlanAsync(AttackSpec spec, PreparedAttack attack, int limit,
         double pureRate, double optimizedRate, string tailPath, Action<string>? log = null, CancellationToken ct = default,
-        string? cacheDirectory = null)
+        string? cacheDirectory = null, double hybridRate = 0)
     {
         AttackSpec Pure()
         {
@@ -130,8 +134,11 @@ internal static class DictionaryKernelPlanner
         long longWords = info.LongerThan(threshold.Value);
         double pureSeconds = info.Words * (double)ruleCount / pureRate;
         double splitSeconds = info.Words * (double)ruleCount / optimizedRate + longWords * (double)ruleCount / pureRate;
-        bool split = longWords > 0 && splitSeconds < pureSeconds * 0.95;
-        bool optimizedOnly = longWords == 0;
+        // The CPU engine can join only the pure kernel (the optimized one numbers words differently),
+        // so the optimized passes must also beat hashcat's pure kernel plus the CPU.
+        double hybridSeconds = hybridRate > 0 ? info.Words * (double)ruleCount / hybridRate : double.PositiveInfinity;
+        bool split = longWords > 0 && splitSeconds < pureSeconds * 0.95 && splitSeconds < hybridSeconds;
+        bool optimizedOnly = longWords == 0 && splitSeconds < hybridSeconds;
         DictionaryKernelPass Pass(bool optimized, int number, long words) => new()
         {
             Optimized = optimized, Pass = number, Arguments = [.. attack.Args], Words = words, RuleCount = ruleCount,

@@ -130,6 +130,26 @@ public sealed class DictionaryKernelPlannerTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_dir, "tail.txt")));
     }
 
+    [Theory]
+    [InlineData(0, true)]      // no CPU engine for this attack: the optimized passes run
+    [InlineData(150, true)]    // pure kernel plus CPU is slower than the optimized passes
+    [InlineData(400, false)]   // pure kernel plus CPU is faster: stay pure so the CPU engine can join
+    public async Task OptimizedPassesMustBeatThePureKernelWithTheCpuEngine(double hybridRate, bool optimized)
+    {
+        foreach (bool longWord in new[] { false, true })
+        {
+            string words = Path.Combine(_dir, $"hybrid-{hybridRate}-{longWord}.txt");
+            File.WriteAllText(words, string.Concat(Enumerable.Repeat("short\n", 12000)) + (longWord ? new string('a', 21) + "\n" : ""));
+            var spec = new AttackSpec { Kind = AttackKind.Dictionary };
+            spec.Dictionaries[0] = words;
+            var prepared = new PreparedAttack { Description = "words", Args = { "-a", "0", words } };
+            var passes = await DictionaryKernelPlanner.PlanAsync(spec, prepared, 20, 100, 200,
+                Path.Combine(_dir, $"tail-{hybridRate}-{longWord}.txt"), cacheDirectory: Path.Combine(_dir, "cache"), hybridRate: hybridRate);
+            Assert.Equal(optimized && longWord ? 2 : 1, passes.Count);
+            Assert.Equal(optimized, passes[0].DictionaryKernel!.Optimized);
+        }
+    }
+
     [Fact]
     public async Task TailKeepsRawBytesEvenWhenItsFirstWordIsNotUtf8()
     {
