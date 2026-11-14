@@ -36,8 +36,8 @@ public sealed class PreferencesWindow : Window
     private readonly ComboBox _priority = new() { ItemsSource = Priorities, MinWidth = 240 };
     private readonly NumericUpDown _maxThreads = L.Number(1, Math.Max(1, Environment.ProcessorCount), Environment.ProcessorCount);
     private readonly CheckBox _optimized = Check("Use optimized kernels for brute-force (faster, limits password length to 27)");
-    private readonly CheckBox _native = Check("Use the built-in CPU engine (ZIP, Office 97-2003, PDF, RAR 3.x, TrueCrypt Whirlpool)");
-    private readonly CheckBox _hybrid = Check("Run it next to the GPUs: CPU and GPUs share brute-force and mask attacks on these formats");
+    private readonly CheckBox _native = Check("Use the built-in CPU engine (ZIP, Office 97-2003, PDF, RAR 3.x/5, TrueCrypt Whirlpool)");
+    private readonly CheckBox _hybrid = Check("Run it next to the GPUs: share masks and supported file dictionaries between CPU and GPUs");
     private readonly CheckBox _hashcatCpu = Check("For other formats, also give hashcat the CPU next to the GPUs (OpenCL CPU runtime)");
     private readonly TextBox _extra = new();
     private readonly StackPanel _gpuList = new() { Spacing = 2 };

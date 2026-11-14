@@ -25,6 +25,8 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     public override string Name => "RAR 3.x (SHA-1 x 262144 + AES-128)";
     public override int MaxPasswordLength => 26;           // keeps one round within a 64-byte block
     public override double SpeedHint => 400;
+    public override bool SupportsDictionaryPassword(ReadOnlySpan<byte> password)
+        => base.SupportsDictionaryPassword(password) && password.IndexOfAnyInRange((byte)128, byte.MaxValue) < 0;
 
     private Rar3Kernel(byte[] salt, byte[] enc) { _salt = salt; _enc = enc; }
 
@@ -283,6 +285,19 @@ public sealed unsafe class Rar3Kernel : NativeKernel
                 pw[^1] = last[i % last.Length];
                 if (k.Verify(pw)) return i;
             }
+            return -1;
+        }
+
+        public override int SearchPasswords(ReadOnlySpan<byte> passwords, int length, int count)
+        {
+            if (!NativeFast) return base.SearchPasswords(passwords, length, count);
+            var result = new byte[36 * count];
+            fixed (byte* salt = k._salt, pws = passwords, output = result)
+                if (RkNative.Rar3Hash(salt, pws, length, count, output) != 0)
+                    return base.SearchPasswords(passwords, length, count);
+            for (int i = 0; i < count; i++)
+                if (k.Decrypts(result.AsSpan(36 * i, 20), result.AsSpan(36 * i + 20, 16))
+                    && k.Verify(passwords.Slice(i * length, length))) return i;
             return -1;
         }
     }

@@ -33,6 +33,18 @@ public sealed class HashcatOrder
     public long AmplifierCount { get; }
     public long Candidates => BaseCount * AmplifierCount;
 
+    internal DictionaryAttack? Dictionary { get; }
+
+    internal HashcatOrder(DictionaryAttack dictionary)
+    {
+        Dictionary = dictionary;
+        Positions = [];
+        _unit = [1];
+        BaseCount = dictionary.BaseCount;
+        AmplifierCount = dictionary.AmplifierCount;
+        _ = checked(BaseCount * AmplifierCount);
+    }
+
     private readonly long[] _unit;   // _unit[k]: base words per step of base digit k (digit k = position r + k)
 
     private HashcatOrder(IReadOnlyList<byte[]> positions, int r)
@@ -157,7 +169,7 @@ public sealed class HashcatOrder
     /// (RAR 3: about twice as fast as with one fixed last character), so CPU batches of whole units
     /// keep it free.
     /// </summary>
-    public long LastPositionUnit => _unit.Length >= 2 ? _unit[^2] : BaseCount;
+    public long LastPositionUnit => Dictionary is not null ? 1 : _unit.Length >= 2 ? _unit[^2] : BaseCount;
 
     /// <summary>
     /// A start in [lo, hi) close to <paramref name="target"/> on a boundary of the coarsest base digit
@@ -176,6 +188,8 @@ public sealed class HashcatOrder
     /// different charsets would be needed.
     /// </summary>
     public List<string>? HashcatMaskArgs() => MaskArgs(Positions);
+
+    internal List<string> AttackArgs() => Dictionary is { } dictionary ? [.. dictionary.Args] : HashcatMaskArgs()!;
 
     /// <inheritdoc cref="HashcatMaskArgs"/>
     public static List<string>? MaskArgs(IReadOnlyList<byte[]> positions)

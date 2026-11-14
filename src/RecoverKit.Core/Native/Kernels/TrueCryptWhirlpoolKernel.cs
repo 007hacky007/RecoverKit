@@ -52,16 +52,22 @@ public sealed unsafe class TrueCryptWhirlpoolKernel : NativeKernel
                 prefix.CopyTo(_passwords.AsSpan(i * len));
                 _passwords[i * len + len - 1] = last[i];
             }
+            return SearchPasswords(_passwords.AsSpan(0, n * len), len, n);
+        }
+
+        public override int SearchPasswords(ReadOnlySpan<byte> passwords, int len, int n)
+        {
+            if (_keys.Length < n * 64) _keys = new byte[n * 64];
             if (RkNative.Available)
             {
-                fixed (byte* salt = kernel._salt, pws = _passwords, keys = _keys)
+                fixed (byte* salt = kernel._salt, pws = passwords, keys = _keys)
                     RkNative.WhirlpoolPbkdf2(salt, pws, len, n, keys);
             }
             else
                 for (int i = 0; i < n; i++)
-                    Derive(_passwords.AsSpan(i * len, len), kernel._salt).CopyTo(_keys, i * 64);
+                    Derive(passwords.Slice(i * len, len), kernel._salt).CopyTo(_keys, i * 64);
             for (int i = 0; i < n; i++)
-                if (_check.Verify(_keys.AsSpan(i * 64, 64)) && kernel.Verify(_passwords.AsSpan(i * len, len))) return i;
+                if (_check.Verify(_keys.AsSpan(i * 64, 64)) && kernel.Verify(passwords.Slice(i * len, len))) return i;
             return -1;
         }
     }

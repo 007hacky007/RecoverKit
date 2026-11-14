@@ -17,6 +17,9 @@ public abstract class NativeKernel
 
     public abstract KernelWorker CreateWorker();
 
+    /// <summary>Whether dictionary bytes can be verified without a different encoding or longer kernel layout.</summary>
+    public virtual bool SupportsDictionaryPassword(ReadOnlySpan<byte> password) => password.Length <= MaxPasswordLength;
+
     /// <summary>
     /// How many prefixes the engine should hand to <see cref="KernelWorker.SearchBatch"/> at once, for a
     /// last position of <paramref name="lastCount"/> characters. Kernels that test candidates in fixed-size
@@ -33,6 +36,17 @@ public abstract class NativeKernel
 
 public abstract class KernelWorker
 {
+    /// <summary>Tests unrelated passwords packed at a positive fixed byte length; returns the first hit or -1.</summary>
+    public virtual int SearchPasswords(ReadOnlySpan<byte> passwords, int length, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            var pw = passwords.Slice(i * length, length);
+            if (Search(pw[..^1], pw[^1..]) >= 0) return i;
+        }
+        return -1;
+    }
+
     /// <summary>
     /// Tests every candidate <c>prefix + last[i]</c>. Returns the index <c>i</c> of a candidate that
     /// passed the kernel's complete check, or -1. Consecutive calls usually share all but the last
