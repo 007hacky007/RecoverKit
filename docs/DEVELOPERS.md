@@ -284,10 +284,12 @@ ZipCrypto entries' header checks (`Siblings`, from `ZipPasswordConfirmer`). CPU 
 that file through bounded streams and checks the entire output length, deflate end and CRC-32,
 without the old 64 MiB embedded-data limit. That costs as much as thousands of candidates (about
 170 us for a deflated 1.3 MB entry, 24 ms for a stored one), and 1 candidate in 256 passes the
-header check, so before the file is touched a survivor must pass the sibling headers (16 of them
-leave 2^-128) and, for deflate, `DeflateStartIsPlausible` on the first decrypted bytes plus an
-inflate of the 256 KB prefix in memory (`ZipPartialSpeedTests` keeps the cost under a few
-microseconds). A single large stored entry has no cheap check; it stays a CPU-only, slow case.
+header check. For deflate, survivors first pass `DeflateStartIsPlausible` on the first decrypted
+bytes, then inflate at most 4 KiB of encrypted input in memory. Full embedded targets use the same
+staged check before decrypting the whole body. For partial targets, the session confirmer's own
+sibling header checks run before the inflate stage or archive read. Early rejection cannot change
+the result because the confirmer rejects the same candidates. Stored partial targets without
+siblings have no cheap body check.
 `ConfirmPassword` also runs the existing other-entry checks. Partial GPU runs always use outfile
 confirmation and keep guessing.
 
@@ -517,7 +519,7 @@ iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's P
 is offered when the library has a vector path (AVX2 or NEON).
 
 RAR 3 (`Rar3Kernel`, mode 12500): `native/rar3_lanes.h` shares the stream, schedule and IV code
-between AVX2/NEON (two groups of 8) and AVX-512 (two groups of 16). API version 9 adds
+between AVX2/NEON (two groups of 8) and AVX-512 (two groups of 16). API version 11 adds
 `rk_rar3_lanes`, the batch width used by `PrefixBatch`. AVX-512 is enabled by default only after
 a once-per-process known-answer test checks every batch position at lengths 1, 7, 22 and 26
 and confirms that vector code ran rather than the scalar allocation fallback.
@@ -529,19 +531,26 @@ selected path. AVX-512 was cross-compiled but has not been executed on this deve
 partial batches; its slow test sweeps all supported lengths. `native/tests/rar3_test.c` checks
 known answers on the host's narrow vector path and rejects an intentionally corrupted last lane.
 
-API version 10 exports passive self-test states and observed native execution masks for RAR 3
+API version 11 also exports passive self-test states and observed native execution masks for RAR 3
 and PBKDF2-SHA256. RAR 5 now checks all 16 wide lanes against fixed independent answers before
 allowing AVX-512; `RECOVERKIT_RAR5_AVX512=0` disables it and `1` or unset allows the guarded path.
 The report distinguishes the report process's state from the isolated workers' states. The system
 section lists .NET and native AVX2/AVX-512 F separately, native SHA-NI, OS ZMM support and API version.
 ZIP has no native startup guard; its isolated diagnostic check is the correctness evidence.
 
-ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 8 adds `rk_zip_search` and
-`rk_zip_path`. The managed worker keeps its prefix-key cache and passes the three keys after the
-prefix plus the final-position charset. The C filter returns all header survivors in candidate
+ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 11 adds `rk_zip_search_batch`
+alongside `rk_zip_search` and `rk_zip_path`. The managed worker keeps its prefix-key cache and
+passes the three keys after the prefix plus the final-position charset. The C filter returns all header survivors in candidate
 order, then the existing managed `Verify` checks the entry. It deliberately filters only the last
 header byte, including for two-check-byte archives; `Verify` handles the other byte. No password
 packing, heap allocation or prefix re-hashing is needed in the native loop.
+
+Small final charsets request multiple prefixes with `RkNative.BatchFor`. The worker fills lanes
+across prefixes with three arrays of per-candidate prefix keys and a final-character array. Native
+paths share their rounds with single-prefix search; managed AVX2 and NEON load the same keys.
+Charsets of 48 or more keep the single-prefix path, including the 95-character benchmark.
+`ZipCryptoNativeTests.CpuMaskRatesCompareLaneFillWithOnePrefixAtATime` (category `Slow`) prints
+three paired CPU-only rates for literal, digit, lowercase and all-printable mask endings.
 
 `native/zip_lanes.h` supplies the same rounds for AVX-512 (three groups of 16), AVX2 (three groups
 of 8), NEON (four groups of 4, nibble-table lookups), and scalar (four interleaved candidates).

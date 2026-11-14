@@ -2,10 +2,9 @@ namespace RecoverKit.Core.Formats;
 
 /// <summary>
 /// Archive data needed to confirm a bounded ZipCrypto hash against the whole entry.
-/// <see cref="Siblings"/> are the archive's other ZipCrypto entries (encryption header and accepted
-/// check bytes): a candidate that passes the attacked entry's header check (1 in 256) is tried on
-/// them before the whole entry is decrypted from the file, which costs as much as thousands of
-/// candidates.
+/// <see cref="Siblings"/> contains <see cref="ZipPasswordConfirmer.HeaderChecks"/> from the session's
+/// confirmer. Checking them before reading the archive cannot change the result: the confirmer
+/// rejects every candidate that fails the same checks.
 /// </summary>
 public sealed record ZipPartialTarget(string ArchivePath, long DataOffset, long CompressedLength,
     long UncompressedLength, uint Crc, int Method)

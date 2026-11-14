@@ -8,8 +8,8 @@
 #ifndef Z_LANE
 #define Z_LANE(v,l) (v)[l]
 #endif
-Z_FN static int Z_F(zip_search)(const uint8_t* header, uint8_t c1, uint8_t c2,
-    uint32_t p0, uint32_t p1, uint32_t p2, const uint8_t* last, int n, int* hits, int cap)
+Z_FN static inline __attribute__((always_inline)) int Z_F(zip_filter)(const uint8_t* header, uint8_t c1, uint8_t c2,
+    uint32_t p0, uint32_t p1, uint32_t p2, const uint8_t* last, int n, int* hits, int cap, const uint32_t* keys)
 {
     int nh = 0;
     const Z_V zero = {0};
@@ -24,6 +24,13 @@ Z_FN static int Z_F(zip_search)(const uint8_t* header, uint8_t c1, uint8_t c2,
             {
                 int idx = i + g * Z_L + l;
                 Z_LANE(plain[g], l) = idx < n ? last[idx] : 0;
+                if (keys)
+                {
+                    int at = idx < n ? idx : n - 1;
+                    Z_LANE(k0[g], l) = keys[at];
+                    Z_LANE(k1[g], l) = keys[n + at];
+                    Z_LANE(k2[g], l) = keys[2 * n + at];
+                }
             }
         }
         for (int j = 0; j < 12; j++)
@@ -52,6 +59,18 @@ Z_FN static int Z_F(zip_search)(const uint8_t* header, uint8_t c1, uint8_t c2,
         }
     }
     return nh;
+}
+Z_FN static int Z_F(zip_search)(const uint8_t* header, uint8_t c1, uint8_t c2,
+    uint32_t p0, uint32_t p1, uint32_t p2, const uint8_t* last, int n, int* hits, int cap)
+{
+    return Z_F(zip_filter)(header, c1, c2, p0, p1, p2, last, n, hits, cap, NULL);
+}
+
+/* Three arrays of n prefix keys, one key state per candidate before its last character. */
+Z_FN static int Z_F(zip_search_batch)(const uint8_t* header, uint8_t c1, uint8_t c2,
+    const uint32_t* keys, const uint8_t* last, int n, int* hits, int cap)
+{
+    return Z_F(zip_filter)(header, c1, c2, 0, 0, 0, last, n, hits, cap, keys);
 }
 #undef Z_SUFFIX
 #undef Z_V
