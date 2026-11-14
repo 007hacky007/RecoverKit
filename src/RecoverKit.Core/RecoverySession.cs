@@ -225,6 +225,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         string? stayKeysHex = null;   // Stay fast key search: recovered ZipCrypto cipher keys (hex)
         string? stayCopy = null;
 
+        int stepsRun = 0, stepsNeedingCpu = 0;
+        string? cpuOnlyReason = null;
         for (int si = state.StepIndex; si < state.Steps.Count; si++)
         {
             var spec = state.Steps[si];
@@ -324,23 +326,29 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 int attackMode = HashcatRunner.EffectiveAttackMode(attack, runSettings.ExtraArguments);
                 bool resumeDictionary = resume is not null && si == resume.StepIndex && mi == resume.ModeIndex
                     && File.Exists(Native.ZipDictionaryRunner.RestoreFile(runSettings.SessionsDir, resume.HashcatSession));
+                bool zipKernelsMissing = false;
                 bool partialCpu = target.ZipPartial is { } partial && (partial.Method == 0
                     || resumeDictionary
                     || runSettings.Strategy == DeviceStrategy.CpuOnly || Devices is not null && HashcatRunner.ActiveGpus(runSettings, Devices).Count == 0
-                    || !HashcatKernels.EnsureFor(tool, mode, attackMode));
+                    || (zipKernelsMissing = !HashcatKernels.EnsureFor(tool, mode, attackMode)));
                 var nativePlan = Native.NativeRunner.Plan(mode, target.HashLines, attack, runSettings, Devices,
                     ignoreGpu: partialCpu, credentials: target.VolumeCredentials, partial: target.ZipPartial);
                 bool cpuDictionary = partialCpu && runSettings.UseNativeCpuEngine
                     && string.IsNullOrWhiteSpace(runSettings.ExtraArguments) && Native.ZipDictionaryRunner.CanRun(attack);
                 if (partialCpu)
                 {
+                    // The GPU kernels are the fast path for a large compressed entry; say why they are not used.
+                    string? why = zipKernelsMissing ? HashcatKernels.UnavailableReason(tool) : null;
                     if (nativePlan is null && !cpuDictionary)
-                        return new SessionResult
-                        {
-                            Outcome = SessionOutcome.Error,
-                            Error = "This large ZIP file needs the built-in CPU engine for this attack. Enable it in Preferences " +
-                                    "and use a brute-force, mask, or plain dictionary attack without rules or extra hashcat options.",
-                        };
+                    {
+                        const string needsCpu = "This large ZIP file needs the built-in CPU engine for this attack. Enable it in Preferences " +
+                                                "and use a brute-force, mask, or plain dictionary attack without rules or extra hashcat options.";
+                        cpuOnlyReason ??= why is null ? needsCpu : why + " " + needsCpu;
+                        stepsNeedingCpu++;
+                        Log?.Invoke(LogKind.Warning, $"Step {si + 1}/{state.Steps.Count} skipped: {cpuOnlyReason}");
+                        break;
+                    }
+                    if (why is not null && mi == startMode) Log?.Invoke(LogKind.Warning, why);
                     Log?.Invoke(LogKind.Info, target.ZipPartial!.Method == 0
                         ? "This large file is not compressed; using the built-in CPU engine so the password cannot be missed among header matches."
                         : "RecoverKit's ZIP GPU kernels are unavailable for this attack; using the built-in CPU engine to check the whole file.");
@@ -399,6 +407,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
                     RequiresPartialZipKernel = target.ZipPartial is not null,
                 };
+                stepsRun++;
                 var result = cpuDictionary
                     ? await new Native.ZipDictionaryRunner { Status = s => Status?.Invoke(s) }.RunAsync(target, request, ct)
                     : nativePlan is { } np
@@ -453,6 +462,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
             }
         }
         SessionState.Delete(settings, key);
+        if (stepsRun == 0 && stepsNeedingCpu > 0 && stayKeysHex is null)
+            return new SessionResult { Outcome = SessionOutcome.Error, Error = cpuOnlyReason };
         return stayKeysHex is null
             ? new SessionResult { Outcome = SessionOutcome.NotFound }
             : new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = stayKeysHex, DecryptedCopy = stayCopy };

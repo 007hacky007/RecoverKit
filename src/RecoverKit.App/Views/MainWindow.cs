@@ -608,7 +608,10 @@ public sealed partial class MainWindow : Window
                 && usable.Any(d => d.Backend == "OpenCL" && (d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))))
                 Line("The NVIDIA GPU runs through OpenCL. hashcat's CUDA backend needs NVIDIA's NVRTC compiler: Tools > Download NVIDIA CUDA compiler (NVRTC).", Palette.DimBrush);
             if (_hashcat.IsOutdatedManagedCopy)
+            {
                 Notice($"This is an older hashcat. Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
+                Dispatcher.UIThread.Post(() => _ = OfferHashcatUpgradeAsync());
+            }
         }
         catch (Exception ex) when (ex is TimeoutException or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -679,6 +682,23 @@ public sealed partial class MainWindow : Window
         if (_offeredDownload || _hashcat is not null || _busyDialog) return;
         _offeredDownload = true;
         if (await Msg.Ask(this, $"hashcat (the GPU engine) was not found.\n\n{(Platform.IsMac ? "Install" : "Download")} hashcat {HashcatInstaller.Version} now?"))
+            await DownloadHashcatAsync();
+    }
+
+    private bool _offeredUpgrade;
+
+    /// <summary>
+    /// An earlier RecoverKit installed an older hashcat (engines/hashcat-7.1.2) and the upgrade kept using
+    /// it, which leaves ZIP archives on the CPU: offer the download once per start. Macs copy the bundled
+    /// hashcat by themselves (<see cref="PrepareBundledHashcatAsync"/>).
+    /// </summary>
+    private async Task OfferHashcatUpgradeAsync()
+    {
+        if (_offeredUpgrade || Platform.IsMac || _busyDialog || _hashcat is not { IsOutdatedManagedCopy: true }) return;
+        _offeredUpgrade = true;
+        if (await Msg.Ask(this, $"RecoverKit {AppVersion} works with hashcat {HashcatInstaller.Version}, but this computer still has hashcat {_hashcatVersion.TrimStart('v')} from an earlier RecoverKit.\n\n" +
+                                "Without it, ZIP archives are searched on the processor instead of the graphics card, many times slower.\n\n" +
+                                $"Download hashcat {HashcatInstaller.Version} now (about 20 MB)?"))
             await DownloadHashcatAsync();
     }
 
@@ -1416,39 +1436,56 @@ public sealed partial class MainWindow : Window
         catch (IOException ex) { await Warn("Cannot clear the password cache: " + ex.Message); }
     }
 
-    /// <summary>Help &gt; Check for updates: asks the project's GitHub releases (only when clicked).</summary>
+    /// <summary>
+    /// Help &gt; Check for updates: asks the project's GitHub releases (only when clicked). A newer
+    /// release is downloaded, verified and installed from here (<see cref="AppUpdater"/>); when that
+    /// is not possible for this installation, the download page opens instead.
+    /// </summary>
     internal async Task CheckForUpdatesAsync()
     {
-        const string api = "https://api.github.com/repos/007hacky007/RecoverKit/releases/latest";
         const string title = "Check for updates";
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("RecoverKit/1.0");
-            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-            using var resp = await http.GetAsync(api);
-            DebugLog.Info($"Update check: HTTP {(int)resp.StatusCode}");
-            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                await Msg.Info(this, $"No RecoverKit releases are published yet. You are using version {AppVersion}.", title);
-                return;
-            }
-            resp.EnsureSuccessStatusCode();
-            using var doc = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            string tag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
-            string url = doc.RootElement.TryGetProperty("html_url", out var u) ? u.GetString() ?? "" : "";
-            bool newer = Version.TryParse(tag.TrimStart('v', 'V'), out var latest) && Version.TryParse(AppVersion, out var mine) && latest > mine;
-            if (!newer)
-                await Msg.Info(this, $"You are using the latest version ({AppVersion}).", title);
-            else if (await Msg.Ask(this, $"RecoverKit {tag} is available (you have {AppVersion}).\n\nOpen the download page?", title)
-                     && url.StartsWith("https://github.com/", StringComparison.Ordinal))
-                Platform.Shell(url);
-        }
+        ReleaseInfo? release;
+        try { release = await AppUpdater.FetchLatestAsync(); }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
         {
             DebugLog.Warn("Update check failed: " + ex.Message);
             await Msg.Warn(this, "Could not check for updates: " + ex.Message, title);
+            return;
         }
+        if (release is null)
+        {
+            await Msg.Info(this, $"No RecoverKit releases are published yet. You are using version {AppVersion}.", title);
+            return;
+        }
+        if (!AppUpdater.IsNewer(release, AppVersion))
+        {
+            await Msg.Info(this, $"You are using the latest version ({AppVersion}).", title);
+            return;
+        }
+        var kind = AppUpdater.DetectInstallKind();
+        var asset = AppUpdater.ChooseAsset(release, kind);
+        bool busy = _cts is not null || _busyDialog;
+        if (asset is null || busy)
+        {
+            string hint = asset is not null && busy ? "Stop the running attack to install it from here, or open the download page now." : "Open the download page?";
+            if (await Msg.Ask(this, $"RecoverKit {release.Tag} is available (you have {AppVersion}).\n\n{hint}", title)
+                && release.PageUrl.StartsWith("https://github.com/", StringComparison.Ordinal))
+                Platform.Shell(release.PageUrl);
+            return;
+        }
+        _busyDialog = true;
+        PreparedUpdate? update;
+        try { update = await UpdateWindow.RunAsync(this, release, kind, asset); }
+        finally { _busyDialog = false; }
+        if (update is null) return;
+        try { AppUpdater.Apply(update); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            DebugLog.Error("Update could not be started", ex);
+            await Msg.Error(this, "The update could not be started: " + ex.Message, title);
+            return;
+        }
+        Close();   // the update script waits for this process to end, installs, and starts RecoverKit again
     }
 
     private static void OpenLogFolder()

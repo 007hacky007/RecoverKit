@@ -143,6 +143,21 @@ public static class HashcatKernels
         => Array.IndexOf(Modes, mode) >= 0 && attackMode is 0 or 3 && EnsureInstalled(tool.Directory);
 
     /// <summary>
+    /// Why the replacement kernels cannot run with this hashcat, in plain words, or null when they can.
+    /// The usual case: an earlier RecoverKit installed hashcat 7.1.2 and the upgrade kept using it.
+    /// </summary>
+    public static string? UnavailableReason(HashcatTool tool)
+    {
+        if (Disabled) return "RecoverKit's ZIP GPU kernels are turned off (RECOVERKIT_HASHCAT_ZIP_KERNELS=0).";
+        if (Inspect(tool.Directory) == State.Unsupported)
+            return $"RecoverKit's ZIP GPU kernels need hashcat {HashcatInstaller.Version}, and this computer runs hashcat {tool.FullVersion.TrimStart('v')}. " +
+                   $"Tools > {(OperatingSystem.IsMacOS() ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}.";
+        if (!EnsureInstalled(tool.Directory))
+            return "RecoverKit's ZIP GPU kernels could not be written into hashcat's OpenCL folder (details are in the debug log).";
+        return null;
+    }
+
+    /// <summary>
     /// Installs the replacement kernels when every file to replace is hashcat 8.0.0's original or
     /// already ours. Returns true when they are in place afterwards.
     /// </summary>
