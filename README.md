@@ -184,9 +184,9 @@ limits are respected; some GPU comparisons are skipped when those limits cannot 
    download and sets itself up silently. If something else is needed, RecoverKit shows one
    **Dependencies** page with a green, yellow or red light per item and a single **Install all**
    button. On Windows that can be NVIDIA's CUDA compiler (faster on NVIDIA graphics cards) or, if your
-   computer has no graphics card driver, Intel's free processor driver. Both are optional downloads
-   from their official sources, are checked, need your OK on their license, and are stored in your
-   user folder only. The page stays hidden when everything is fine, and an optional item you skip is
+   computer has no graphics card driver, Intel's free processor driver, which is then required. NVIDIA's
+   compiler is optional. Both come from their official sources, are checked, need your OK on their
+   license, and are stored in your user folder only. The page stays hidden when everything is fine, and an optional item you skip is
    not offered again at start. You can open it any time with **Tools > Dependencies**.
 3. **Open the protected file** (File > Open, or drag it onto the window) and follow the wizard.
 

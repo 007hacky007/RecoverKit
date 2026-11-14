@@ -143,7 +143,8 @@ and uses the managed copy), or run `recoverkit-cli install-hashcat --from <folde
 `DependenciesPage` in the main pane: one row per component (hashcat, NVRTC and the Intel CPU
 runtime on Windows) with a green, yellow or red light. Red means RecoverKit cannot use hashcat until
 it is fixed; yellow means it works but slower or with less, and can be left alone; green is
-installed or not needed. Red rows are always installed, yellow ones can be unchecked, a license
+installed or not needed. Red rows that have an action are always installed (some have none: no bundle on a source build, a hashcat that
+fails to run, the CPU runtime while RecoverKit runs elevated), yellow ones can be unchecked, a license
 checkbox per download must be ticked, and one **Install all** button installs the checked rows in
 turn with a single progress display. The check at start is local only (no network) and the page
 stays hidden when everything is green or the yellow items were skipped earlier: items skipped from
@@ -282,7 +283,8 @@ left by an earlier RecoverKit in `engines/hashcat-7.1.2`, or the user's own) mak
 `Unsupported`, which used to send ZIP attacks to the CPU without a word; `HashcatKernels.UnavailableReason`
 now names the cause in the log. At start the main window compares the version hashcat reports with
 `HashcatInstaller.Version` (`HashcatTool.IsOlderThanPinned`, not the folder name) and offers the pinned
-version through the dependencies page: a hashcat older than the pinned one is a yellow row whose
+version through the dependencies page: a hashcat older than the pinned one is a yellow row, only
+when that copy is not a RecoverKit-managed one and a bundle exists, whose
 action switches to the bundled copy (`Settings.HashcatPath`; the user's own copy is not touched), and
 a skip is remembered per reason. `Locate` prefers the pinned copy over any other `engines/hashcat-*`
 (`IsUnpinnedManagedCopy`).
@@ -859,7 +861,7 @@ notes are taken from it, and the release job fails if the section is missing.
   hashcat 8 accepts `-w` but always uses the former workload 3, so the Workload setting no longer
   changes anything; the GPU load limit (duty cycle) still works. An existing per-user
   `engines/hashcat-7.1.2` copy keeps working until hashcat 8.0.0 is installed next to it, which
-  `HashcatTool.Locate` then prefers; the app shows a notice meanwhile. Every hash mode RecoverKit
+  `HashcatTool.Locate` then prefers. Every hash mode RecoverKit
   produces was checked against hashcat 8.0.0 with the module's example hash and password on the
   M1 Pro (OpenCL); notes below that name hashcat 7.1.2 describe how the format was validated at
   the time.
