@@ -115,6 +115,12 @@ public sealed class Settings
     [JsonIgnore] public static bool IsRelocated { get; private set; }
 
     /// <summary>
+    /// True for the portable version (a file named "portable" next to the executable): data stays in
+    /// .\userdata and the hashcat beside the executable runs where it is.
+    /// </summary>
+    [JsonIgnore] public static bool IsPortable { get; private set; }
+
+    /// <summary>
     /// Settings, potfile and sessions live in %APPDATA%\RecoverKit on Windows, ~/.config/RecoverKit
     /// on Linux and ~/Library/Application Support/RecoverKit on macOS, unless RECOVERKIT_HOME is set
     /// or a file named "portable" exists next to the executable (then .\userdata is used).
@@ -123,6 +129,7 @@ public sealed class Settings
     {
         var env = Environment.GetEnvironmentVariable("RECOVERKIT_HOME");
         var portable = File.Exists(Path.Combine(AppContext.BaseDirectory, "portable"));
+        IsPortable = portable;
         IsRelocated = !string.IsNullOrWhiteSpace(env) || portable;
         var dir = !string.IsNullOrWhiteSpace(env) ? env
             : portable ? Path.Combine(AppContext.BaseDirectory, "userdata")

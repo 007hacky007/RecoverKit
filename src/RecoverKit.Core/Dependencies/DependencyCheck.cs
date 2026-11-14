@@ -10,6 +10,8 @@ public sealed record MachineFacts
     public string? BundleCopyError { get; init; }
     public string? HashcatExe { get; init; }
     public bool HashcatIsManaged { get; init; }
+    /// <summary>The portable version's bundled hashcat, run where it is (always the pinned build).</summary>
+    public bool HashcatRunsInPlace { get; init; }
     /// <summary>Raw output of <c>hashcat --version</c>.</summary>
     public string? HashcatVersion { get; init; }
     public string? HashcatError { get; init; }
@@ -87,6 +89,7 @@ public static class DependencyCheck
     private static bool IsPinnedManagedCopy(MachineFacts f)
     {
         if (!f.HashcatIsManaged || f.HashcatExe is null) return false;
+        if (f.HashcatRunsInPlace) return true;
         var parts = f.HashcatExe.Split('/', '\\');
         return parts.Length >= 2 && parts[^2] == "hashcat-" + HashcatInstaller.Version;
     }

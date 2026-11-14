@@ -179,9 +179,11 @@ the pinned official `hashcat-8.0.0.7z` at build time (cached in `installer/cache
 `-HashcatArchive <path>` for an offline build), checks its SHA-256, extracts it with 7-Zip (the
 build machine needs `7z.exe`), drops the non-Windows binaries, writes the `RECOVERKIT_BUNDLE` stamp
 and stages it as `hashcat/` beside `RecoverKit.exe`. The MSI and the portable zip both carry it.
-At start `HashcatInstaller.TryInstallBundled()` copies it silently into the per-user `engines`
-folder (hashcat writes next to its executable and `Program Files` is not writable), as on macOS
-([macOS hashcat](#macos-hashcat)). Nothing is downloaded at run time. A Linux or source build
+At start the MSI version's `HashcatInstaller.TryInstallBundled()` copies it silently into the
+per-user `engines` folder (hashcat writes next to its executable and `Program Files` is not
+writable), as on macOS ([macOS hashcat](#macos-hashcat)). The portable zip carries a `portable`
+marker file: its settings and data stay in `userdata\` beside `RecoverKit.exe`, and it runs the
+bundled `hashcat\` where it is, without a copy (`HashcatInstaller.InPlaceBundle`). Nothing is downloaded at run time. A Linux or source build
 without a bundle shows instructions on the dependencies page instead: install hashcat 8 with the
 package manager, set a path in Options > Preferences > Files and Paths (the "Default" button there clears it
 and uses the managed copy), or run `recoverkit-cli install-hashcat --from <folder>`

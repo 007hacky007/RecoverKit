@@ -35,7 +35,7 @@ public sealed record DependencyScan(
             }
             catch (Exception ex) when (ex is TimeoutException or Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
             {
-                error = "hashcat could not run: " + ex.Message;
+                error = ex is TimeoutException ? ex.Message : "hashcat could not run: " + ex.Message;
                 devices = null;
             }
         }
@@ -50,6 +50,7 @@ public sealed record DependencyScan(
             BundleCopyError = bundleCopyError,
             HashcatExe = tool?.Exe,
             HashcatIsManaged = tool?.IsManaged ?? false,
+            HashcatRunsInPlace = tool?.IsInPlaceBundle ?? false,
             HashcatVersion = tool is null ? null : version,
             HashcatError = error,
             Devices = devices,

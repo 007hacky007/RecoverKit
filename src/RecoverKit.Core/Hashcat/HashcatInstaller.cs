@@ -78,6 +78,12 @@ public sealed class HashcatInstaller
     /// </summary>
     public static string? BundledDirectory => FindBundle(AppContext.BaseDirectory);
 
+    /// <summary>
+    /// The bundled hashcat when it runs where it is instead of being copied: the portable version,
+    /// whose folder the user unpacked and can write to. Null for the installed versions.
+    /// </summary>
+    public static string? InPlaceBundle => Settings.IsPortable ? BundledDirectory : null;
+
     /// <summary>The bundled build's stamp, or null when there is no bundle (or no stamp in it).</summary>
     public static string? BundledStamp => BundledDirectory is { } d ? ReadStamp(d) : null;
 
@@ -103,6 +109,7 @@ public sealed class HashcatInstaller
     /// </summary>
     public bool BundleNeedsInstall(string? bundleDir = null)
     {
+        if (bundleDir is null && InPlaceBundle is not null) return false;
         bundleDir ??= BundledDirectory;
         if (bundleDir is null) return false;
         return !File.Exists(Path.Combine(ExpectedDirectory, ExeName)) || ReadStamp(ExpectedDirectory) != ReadStamp(bundleDir);
@@ -122,7 +129,7 @@ public sealed class HashcatInstaller
     /// afterwards and the error text otherwise (no bundle, or why the copy failed).
     /// </summary>
     public static string? TryInstallBundledError(IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
-        => new HashcatInstaller().TryInstallBundledErrorHere(BundledDirectory, progress, ct);
+        => InPlaceBundle is not null ? null : new HashcatInstaller().TryInstallBundledErrorHere(BundledDirectory, progress, ct);
 
     internal bool TryInstallBundledHere(string? bundleDir, IProgress<InstallProgress>? progress, CancellationToken ct)
         => TryInstallBundledErrorHere(bundleDir, progress, ct) is null;

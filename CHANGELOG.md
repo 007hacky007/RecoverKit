@@ -5,7 +5,16 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Changed
+- The Windows portable version is now fully portable: it runs the hashcat in its own folder
+  instead of copying it to `%APPDATA%`, and keeps settings, recovered passwords, sessions and logs
+  in a `userdata` folder next to `RecoverKit.exe`.
+
 ### Fixed
+- When hashcat did not answer at start, the dependencies page only said "hashcat did not finish in
+  time". It now says whether hashcat did not start at all (usually antivirus software holding or
+  blocking it, with the folder to allow) or started but hung while listing the graphics cards (a
+  driver), and what to do.
 - On a Mac, a password search on an OpenOffice 1.x-3.x document (ODF 1.1, Blowfish) could end
   without finding a password that was in the list or mask: 1.5.0 ran it through Metal, where
   hashcat skips such candidates. It runs on OpenCL again, as in 1.4.1.

@@ -57,6 +57,8 @@ jobs:
         shell: pwsh
         run: |
           $v = '${{ steps.ver.outputs.version }}'
+          # The marker keeps settings and data in .\userdata and runs the bundled hashcat in place.
+          Set-Content installer/stage/portable 'RecoverKit portable version: settings and data are kept in the userdata folder next to RecoverKit.exe.'
           Compress-Archive -Path installer/stage/* -DestinationPath "installer/out/RecoverKit-$v-x64-portable.zip"
 
       - uses: actions/upload-artifact@v5

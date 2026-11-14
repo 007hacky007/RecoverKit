@@ -234,6 +234,18 @@ public class DependencyCheckTests
     }
 
     [Fact]
+    public void BrokenPortableBundleOffersNothing()
+    {
+        var h = Row(DependencyCheck.Evaluate(Win(null, f => f with
+        {
+            HashcatExe = @"D:\RecoverKit\hashcat\hashcat.exe", HashcatRunsInPlace = true, HashcatError = "hashcat did not start within 20 s.",
+        })), DependencyId.Hashcat);
+        Assert.Equal(Light.Red, h.Light);
+        Assert.Equal(DependencyAction.None, h.Action);
+        Assert.Equal("hashcat did not start within 20 s.", h.Reason);
+    }
+
+    [Fact]
     public void OlderOwnHashcatWithoutBundleSaysWhatToDo()
     {
         var h = DependencyCheck.Evaluate(new MachineFacts { HashcatExe = "/usr/bin/hashcat", HashcatVersion = "v6.2.6", Devices = [] })[0];

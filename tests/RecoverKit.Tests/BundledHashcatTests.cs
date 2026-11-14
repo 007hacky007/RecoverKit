@@ -44,6 +44,34 @@ public class BundledHashcatTests
     }
 
     [Fact]
+    public void PortableVersionRunsTheBundleInPlace()
+    {
+        using var t = new TempDir();
+        var (app, bundle, engines) = MakeApp(t.Path, "8.0.0-1");
+        var tool = HashcatTool.Locate(null, app, engines, portable: true);
+        Assert.Equal(System.IO.Path.Combine(bundle, HashcatInstaller.ExeName), tool!.Exe);
+        Assert.False(Directory.Exists(engines));
+
+        // A path an earlier RecoverKit saved for its own older copy gives way to the bundle.
+        var old = Directory.CreateDirectory(System.IO.Path.Combine(engines, "hashcat-7.1.2")).FullName;
+        var oldExe = System.IO.Path.Combine(old, HashcatInstaller.ExeName);
+        File.WriteAllText(oldExe, "old");
+        Assert.Equal(System.IO.Path.Combine(bundle, HashcatInstaller.ExeName), HashcatTool.Locate(oldExe, app, engines, portable: true)!.Exe);
+        // A hashcat of the user's own, chosen in Preferences, still wins.
+        var own = System.IO.Path.Combine(t.Path, HashcatInstaller.ExeName);
+        File.WriteAllText(own, "own");
+        Assert.Equal(own, HashcatTool.Locate(own, app, engines, portable: true)!.Exe);
+    }
+
+    [Fact]
+    public void TimeoutsSayWhatToCheck()
+    {
+        Assert.Contains("antivirus", HashcatTool.StartTimeoutMessage(@"C:\RecoverKit\hashcat", TimeSpan.FromSeconds(20)), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"C:\RecoverKit\hashcat", HashcatTool.StartTimeoutMessage(@"C:\RecoverKit\hashcat", TimeSpan.FromSeconds(20)));
+        Assert.Contains("hashcat -I", HashcatTool.DevicesTimeoutMessage(TimeSpan.FromSeconds(90)));
+    }
+
+    [Fact]
     public void UnstampedEnginesCopyIsReplacedByTheBundle()
     {
         using var t = new TempDir();

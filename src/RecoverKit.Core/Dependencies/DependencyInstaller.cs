@@ -61,6 +61,11 @@ public sealed class DependencyInstaller(
         {
             switch (item.Action)
             {
+                // The portable version runs its bundled hashcat in place: switching to it only clears the path.
+                case DependencyAction.CopyBundledHashcat or DependencyAction.UseBundledHashcat when HashcatInstaller.InPlaceBundle is not null:
+                    await updateSettings(s => s.HashcatPath = null);
+                    progress?.Report(new InstallProgress { Stage = "done", Message = "Done." });
+                    break;
                 case DependencyAction.CopyBundledHashcat:
                 {
                     var installer = new HashcatInstaller();

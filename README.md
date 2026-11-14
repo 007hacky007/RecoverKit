@@ -177,7 +177,8 @@ limits are respected; some GPU comparisons are skipped when those limits cannot 
 1. **Download** from the [Releases page](https://github.com/007hacky007/RecoverKit/releases/latest):
    - Windows: `RecoverKit-x.y.z-x64.msi` is the **installer** (recommended). Double-click it and follow the steps.
    - Windows: `RecoverKit-x.y.z-x64-portable.zip` is the **portable version**. Unzip it anywhere (even a USB
-     stick) and run `RecoverKit.exe`. Nothing is installed.
+     stick) and run `RecoverKit.exe`. Nothing is installed: settings, recovered passwords and logs stay in
+     its `userdata` folder.
    - Mac (Apple silicon, macOS 15 or later): `RecoverKit-x.y.z-macos-arm64.dmg`. Open it and drag
      RecoverKit to Applications. The disk image shows how to open it the first time (see below).
 2. **First start:** the free recovery engine ([hashcat](https://hashcat.net)) is included in every

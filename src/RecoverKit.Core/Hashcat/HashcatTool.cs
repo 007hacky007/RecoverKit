@@ -85,23 +85,25 @@ public sealed partial class HashcatTool
     /// <summary>
     /// Finds hashcat: the configured path, the engines copy of the pinned hashcat (when the app has a
     /// bundle, on macOS, or when that copy exists), ./hashcat/ next to the application, the per-user engines
-    /// folder, then PATH. The bundled hashcat itself (Contents/Resources/hashcat on macOS, hashcat/ beside
-    /// the executable on Windows) is never used directly (see <see cref="HashcatInstaller.TryInstallBundled"/>).
+    /// folder, then PATH. The installed versions never run the bundled hashcat itself
+    /// (Contents/Resources/hashcat on macOS, hashcat/ beside the executable on Windows; see
+    /// <see cref="HashcatInstaller.TryInstallBundled"/>); the portable version runs it in place.
     /// </summary>
     public static HashcatTool? Locate(string? configured)
-        => Locate(configured, AppContext.BaseDirectory, Path.Combine(Settings.AppDataDir, "engines"));
+        => Locate(configured, AppContext.BaseDirectory, Path.Combine(Settings.AppDataDir, "engines"), Settings.IsPortable);
 
-    internal static HashcatTool? Locate(string? configured, string baseDir, string enginesDir)
+    internal static HashcatTool? Locate(string? configured, string baseDir, string enginesDir, bool portable = false)
     {
         string exeName = HashcatInstaller.ExeName;
         var candidates = new List<string>();
+        string? bundle = HashcatInstaller.FindBundle(baseDir);
+        bool inPlace = portable && bundle is not null;
         // A configured path to a copy that RecoverKit installed for another release (engines/hashcat-7.1.2)
-        // gives way to the pinned version once that is installed too.
-        string pinned = Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName);
+        // gives way to the pinned version once that is installed too. The portable version's pinned
+        // hashcat is the bundled one, run where it is.
+        string pinned = inPlace ? Path.Combine(bundle!, exeName) : Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName);
         if (!string.IsNullOrWhiteSpace(configured) && !(IsUnpinnedManagedCopy(configured, enginesDir) && File.Exists(pinned)))
             candidates.Add(configured);
-        // hashcat writes into its own folder, so the copy shipped with the app is never run from there.
-        string? bundle = HashcatInstaller.FindBundle(baseDir);
         if (bundle is not null || OperatingSystem.IsMacOS() || File.Exists(pinned))
             candidates.Add(pinned);
         // Next to the application, and in the per-user engines folder a download installs into.
@@ -118,8 +120,9 @@ public sealed partial class HashcatTool
         foreach (var p in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             candidates.Add(Path.Combine(p, exeName));
 
-        var hit = candidates.FirstOrDefault(c => File.Exists(c) &&
-            (bundle is null || !Path.GetFullPath(c).StartsWith(bundle + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
+        // hashcat writes into its own folder, so the installed versions never run the copy shipped with the app.
+        var hit = candidates.FirstOrDefault(c => File.Exists(c) && (bundle is null || inPlace ||
+            !Path.GetFullPath(c).StartsWith(bundle + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
         if (hit is null) return null;
         // Homebrew and similar installs use a symlink; resolve it so the data directory is found.
         try
@@ -156,7 +159,17 @@ public sealed partial class HashcatTool
         => ManagedFolder(exe, enginesDir) is { } name && name != "hashcat-" + HashcatInstaller.Version;
 
     /// <summary>True when this hashcat was installed by RecoverKit (the engines folder), not by the user.</summary>
-    public bool IsManaged => IsManagedCopy(Exe, Path.Combine(Settings.AppDataDir, "engines"));
+    public bool IsManaged => IsManagedCopy(Exe, Path.Combine(Settings.AppDataDir, "engines")) || IsInPlaceBundle;
+
+    /// <summary>True when this is the portable version's bundled hashcat, run where it is.</summary>
+    public bool IsInPlaceBundle => IsInside(Exe, HashcatInstaller.InPlaceBundle);
+
+    internal static bool IsInside(string exe, string? folder)
+    {
+        if (folder is null) return false;
+        try { return Path.GetFullPath(exe).StartsWith(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase); }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return false; }
+    }
 
     /// <summary>
     /// The version in hashcat's <c>--version</c> output ("v7.1.2", "v6.2.6-851-g6716447df" -> 6.2.6), or
@@ -287,7 +300,7 @@ public sealed partial class HashcatTool
             try { await Task.WhenAll(outTask, errTask); } catch (OperationCanceledException) { }
             ct.ThrowIfCancellationRequested();
             DebugLog.Warn($"#{logId} timed out after {timeout.TotalSeconds:F0} s and was killed");
-            throw new TimeoutException("hashcat did not finish in time.");
+            throw new TimeoutException($"hashcat did not finish within {timeout.TotalSeconds:F0} s.");
         }
         var (o, e) = (await outTask, await errTask);
         DebugLog.ProcessText(logId, "stdout", o, redact);
@@ -298,17 +311,41 @@ public sealed partial class HashcatTool
 
     public async Task<string> VersionAsync(CancellationToken ct = default)
     {
-        var (_, o, _) = await RunAsync(["--version"], TimeSpan.FromSeconds(20), ct: ct);
-        return _fullVersion = o.Trim();
+        try
+        {
+            var (_, o, _) = await RunAsync(["--version"], VersionTimeout, ct: ct);
+            return _fullVersion = o.Trim();
+        }
+        catch (TimeoutException) { throw new TimeoutException(StartTimeoutMessage(Directory, VersionTimeout)); }
     }
 
     // ---------------------------------------------------------------- devices
 
     public async Task<List<BackendDevice>> DevicesAsync(CancellationToken ct = default)
     {
-        var (_, o, e) = await RunAsync(["-I", "--quiet"], TimeSpan.FromSeconds(90), ct: ct);
-        return ParseDevices(o + "\n" + e);
+        try
+        {
+            var (_, o, e) = await RunAsync(["-I", "--quiet"], DevicesTimeout, ct: ct);
+            return ParseDevices(o + "\n" + e);
+        }
+        catch (TimeoutException) { throw new TimeoutException(DevicesTimeoutMessage(DevicesTimeout)); }
     }
+
+    internal static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan DevicesTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// hashcat --version prints one line without touching any device, so a timeout means the program
+    /// did not start: usually antivirus software holding or blocking it (hashcat is often classed as a
+    /// "hacking tool").
+    /// </summary>
+    internal static string StartTimeoutMessage(string folder, TimeSpan timeout)
+        => $"hashcat did not start within {timeout.TotalSeconds:F0} s. Antivirus software may be scanning or blocking it: " +
+           $"allow the folder {folder} in your antivirus (and restore hashcat from its quarantine if it is there), then click Check again.";
+
+    internal static string DevicesTimeoutMessage(TimeSpan timeout)
+        => $"hashcat started but did not list the graphics cards and processors within {timeout.TotalSeconds:F0} s (hashcat -I). " +
+           "A graphics card driver or an OpenCL runtime is probably hanging: update or reinstall the graphics driver, restart the computer, then click Check again.";
 
     public static List<BackendDevice> ParseDevices(string text)
     {
