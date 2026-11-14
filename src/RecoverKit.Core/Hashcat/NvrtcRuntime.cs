@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace RecoverKit.Core.Hashcat;
@@ -125,19 +126,58 @@ public static class NvrtcRuntime
             .Select(x => (x.Directory, x.Version!.Value)).ToList();
     }
 
-    /// <summary>The CUDA version of the NVIDIA driver from nvidia-smi's banner ("CUDA Version: 12.8"), or null.</summary>
+    /// <summary>
+    /// The CUDA version of the NVIDIA driver, or null. The driver itself is asked first (cuDriverGetVersion in
+    /// nvcuda.dll, what hashcat reports as CUDA.Version); nvidia-smi's banner ("CUDA Version: 12.8") is the
+    /// fallback. On a tester's PC nvidia-smi gave no version, so a CUDA Toolkit newer than the driver was not
+    /// hidden from hashcat and every CUDA kernel build failed.
+    /// </summary>
     public static (int Major, int Minor)? DriverCudaVersion(Func<(int Code, string Output)>? runSmi = null)
     {
+        if (runSmi is null && DriverApiVersion() is { } fromDriver)
+        {
+            DebugLog.Info($"NVIDIA driver supports CUDA {fromDriver.Major}.{fromDriver.Minor} (cuDriverGetVersion)");
+            return fromDriver;
+        }
         try
         {
             string output;
             if (runSmi is not null) output = runSmi().Output;
             else if (NvidiaSmi.Locate() is { } exe) output = new NvidiaSmi(exe).Run([]).Output;
             else return null;
-            return ParseCudaVersion(output);
+            var version = ParseCudaVersion(output);
+            if (runSmi is null)
+                DebugLog.Info(version is { } found ? $"NVIDIA driver supports CUDA {found.Item1}.{found.Item2} (nvidia-smi)"
+                    : "NVIDIA driver CUDA version unknown: nvidia-smi printed no \"CUDA Version\"");
+            return version;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { return null; }
     }
+
+    /// <summary>cuDriverGetVersion from the driver's own nvcuda.dll in System32 (never a copy elsewhere), or null.</summary>
+    private static unsafe (int Major, int Minor)? DriverApiVersion()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        string dll = Path.Combine(Environment.SystemDirectory, "nvcuda.dll");
+        if (!File.Exists(dll) || !NativeLibrary.TryLoad(dll, out var handle)) return null;
+        try
+        {
+            if (!NativeLibrary.TryGetExport(handle, "cuDriverGetVersion", out var fn)) return null;
+            int encoded = 0;
+            int rc = ((delegate* unmanaged<int*, int>)fn)(&encoded);
+            return rc == 0 ? DecodeDriverVersion(encoded) : null;
+        }
+        catch (Exception ex) when (ex is BadImageFormatException or DllNotFoundException or EntryPointNotFoundException)
+        {
+            DebugLog.Warn("cuDriverGetVersion failed: " + ex.Message);
+            return null;
+        }
+        finally { NativeLibrary.Free(handle); }
+    }
+
+    /// <summary>cuDriverGetVersion's 1000 * major + 10 * minor (13030 is CUDA 13.3).</summary>
+    internal static (int Major, int Minor)? DecodeDriverVersion(int encoded)
+        => encoded >= 1000 ? (encoded / 1000, encoded % 1000 / 10) : null;
 
     internal static (int, int)? ParseCudaVersion(string smiOutput)
     {

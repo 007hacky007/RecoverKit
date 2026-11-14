@@ -18,8 +18,16 @@ All notable changes to RecoverKit. Downloads are on the
   runtime is missing. They were harmless: such GPUs run through OpenCL. The notes stay in the debug
   log.
 
+- NVIDIA: RecoverKit now asks the driver itself for its CUDA version and uses nvidia-smi only as a
+  fallback. Where nvidia-smi gave no version, a CUDA Toolkit newer than the driver was not hidden
+  from hashcat, every CUDA kernel build failed and the GPU ran through OpenCL; the dependencies page
+  then called the driver "too old or unknown" and offered no CUDA compiler.
+
 ### Changed
 - The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
+- Benchmark results name the GPU backend that ran, CUDA, OpenCL or Metal: "Engine: hashcat, GPU
+  (CUDA)". An NVIDIA GPU running through OpenCL after a failed CUDA kernel build is listed as
+  OpenCL with the reason.
 
 ## [1.6.1] - 2026-11-14
 

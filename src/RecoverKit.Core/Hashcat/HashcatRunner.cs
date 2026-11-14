@@ -307,6 +307,18 @@ public sealed class HashcatRunner(HashcatTool tool)
     }
 
     /// <summary>
+    /// The backend a GPU really runs on: an NVIDIA GPU whose CUDA kernel build failed on this PC runs as its
+    /// OpenCL device (see <see cref="CudaFallback"/>), although hashcat still lists it under CUDA.
+    /// </summary>
+    public static string RunningBackend(BackendDevice d, IReadOnlyList<BackendDevice>? known)
+        => d.Backend == "CUDA" && known is not null && CudaFallback.IsActive(known) && CudaFallback.OpenClTwin(d, known) is not null
+            ? "OpenCL" : d.Backend;
+
+    /// <summary>The backends of the GPUs hashcat would use, "CUDA" or "OpenCL + CUDA", or "" without one.</summary>
+    public static string GpuBackends(Settings s, IReadOnlyList<BackendDevice>? known)
+        => string.Join(" + ", ActiveGpus(s, known).Select(d => RunningBackend(d, known)).Distinct().Order());
+
+    /// <summary>
     /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
     /// (Apple Silicon: Apple's OpenCL and Metal expose only the GPU), so -D 1 finds nothing.
     /// </summary>

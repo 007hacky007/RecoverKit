@@ -43,7 +43,8 @@ public sealed record DependencyScan(
         }
 
         bool isWindows = OperatingSystem.IsWindows();
-        bool nvidia = Probe(() => NvidiaSmi.Locate(), null) is not null;
+        bool nvidia = Probe(() => NvidiaSmi.Locate(), null) is not null
+            || isWindows && Probe(() => File.Exists(Path.Combine(Environment.SystemDirectory, "nvcuda.dll")), false);
 
         var facts = new MachineFacts
         {

@@ -20,6 +20,17 @@ public class NvrtcRuntimeTests
         Assert.Null(NvrtcRuntime.ParseCudaVersion("NVIDIA-SMI has failed"));
     }
 
+    [Theory]
+    [InlineData(13030, 13, 3)]
+    [InlineData(12080, 12, 8)]
+    [InlineData(12040, 12, 4)]
+    [InlineData(13000, 13, 0)]
+    public void TheDriverApiVersionIsDecoded(int encoded, int major, int minor)
+        => Assert.Equal((major, minor), NvrtcRuntime.DecodeDriverVersion(encoded));
+
+    [Fact]
+    public void AnUnusableDriverApiVersionIsUnknown() => Assert.Null(NvrtcRuntime.DecodeDriverVersion(0));
+
     [Fact]
     public void TheNewestNvrtcTheDriverAcceptsIsChosen()
     {

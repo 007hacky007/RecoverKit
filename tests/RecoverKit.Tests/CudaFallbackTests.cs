@@ -134,6 +134,19 @@ public class CudaFallbackTests : IDisposable
     }
 
     [Fact]
+    public void BenchmarksNameTheBackendTheGpuRunsOn()
+    {
+        var cuda = _devices.Single(d => d.Backend == "CUDA");
+        var settings = new Settings { GpuPerformanceChoice = new() { DeviceKeys = [cuda.Key] } };
+        Assert.Equal("CUDA", HashcatRunner.RunningBackend(cuda, _devices));
+        Assert.Equal("CUDA", HashcatRunner.GpuBackends(settings, _devices));
+
+        CudaFallback.Activate(_devices, "test");
+        Assert.Equal("OpenCL", HashcatRunner.RunningBackend(cuda, _devices));
+        Assert.Equal("OpenCL", HashcatRunner.GpuBackends(settings, _devices));
+    }
+
+    [Fact]
     public void OtherBuildFailuresDoNotSwitch()
     {
         var (runner, request) = Runner();

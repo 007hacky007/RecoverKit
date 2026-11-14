@@ -124,7 +124,9 @@ public sealed class BenchmarkWindow : Window
     }
 
     private IEnumerable<string> GpuNames() => _devices.Where(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))
-        .Select(d => $"#{d.Id} {d.Name} ({d.Backend})");
+        .Select(d => HashcatRunner.RunningBackend(d, _devices) is var running && running != d.Backend
+            ? $"#{d.Id} {d.Name} ({running}; CUDA could not build hashcat's kernels on this PC)"
+            : $"#{d.Id} {d.Name} ({d.Backend})");
 
     private void Add(string s, bool bold = false)
     {
@@ -171,9 +173,11 @@ public sealed class BenchmarkWindow : Window
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
                 string cpuEngine = cpuPath is null ? "built-in CPU engine" : $"built-in CPU engine, {cpuPath}";
+                string backends = HashcatRunner.GpuBackends(_settings, _devices);
+                string gpu = backends.Length > 0 ? $"GPU ({backends})" : "GPU";
                 _engines[e.Mode] = native ? cpuEngine
-                    : cpuPath is not null || SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? $"hashcat on the GPU + {cpuEngine}"
-                    : GpuNames().Any() ? "hashcat, GPU" : "hashcat, CPU (OpenCL)";
+                    : cpuPath is not null || SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? $"hashcat on the {gpu} + {cpuEngine}"
+                    : GpuNames().Any() ? $"hashcat, {gpu}" : "hashcat, CPU (OpenCL)";
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;
 
