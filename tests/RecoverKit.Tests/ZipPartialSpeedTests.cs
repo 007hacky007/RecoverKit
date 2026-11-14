@@ -46,9 +46,16 @@ public sealed class ZipPartialSpeedTests(ITestOutputHelper output) : IDisposable
     private static double MicrosecondsPerVerify(ZipCryptoKernel kernel, byte[][] passwords)
     {
         foreach (var p in passwords.Take(10)) Assert.False(kernel.Verify(p));
-        var sw = Stopwatch.StartNew();
-        foreach (var p in passwords) Assert.False(kernel.Verify(p));
-        return sw.Elapsed.TotalMilliseconds * 1000 / passwords.Length;
+        // Fastest of five passes: one pass lasts about a millisecond, so a stall on a busy CI runner
+        // can dominate it, while a slow path (a full read of the entry) is slow in every pass.
+        double best = double.MaxValue;
+        for (int pass = 0; pass < 5; pass++)
+        {
+            var sw = Stopwatch.StartNew();
+            foreach (var p in passwords) Assert.False(kernel.Verify(p));
+            best = Math.Min(best, sw.Elapsed.TotalMilliseconds * 1000 / passwords.Length);
+        }
+        return best;
     }
 
     [Fact]
