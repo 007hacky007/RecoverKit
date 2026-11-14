@@ -121,7 +121,8 @@ More things it does:
   succeed (fast with a graphics card). Some later PDFs with 40-bit encryption only support a
   password search.
 - **Extra tools:** create your own word lists from any search, and prepare Wi-Fi lookup tables.
-- **Check for updates** from the Help menu (only when you click it).
+- **Check for updates** from the Help menu (only when you click it). A newer version is downloaded,
+  verified and installed from there.
 
 ## How fast is it?
 
@@ -199,7 +200,7 @@ quickest guesses.
   Click **Done**, then open **System Settings > Privacy & Security**, scroll down and click **Open
   Anyway**. This is needed only once. The first start can take a minute while macOS checks the app.
 - Your files never leave your computer. RecoverKit only connects to the internet to download the
-  engine (Windows) and when you click Check for updates.
+  engine (Windows) and when you click Check for updates (and then to download the update you accept).
 - If something goes wrong, Help > Open debug log folder has a log you can attach to a bug report.
   Recovered passwords are never written to it.
 - **TrueCrypt and VeraCrypt:** File > Open As lets you add keyfiles. For VeraCrypt, enter the

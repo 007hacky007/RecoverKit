@@ -2,7 +2,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using System.IO.Compression;
 using RecoverKit.App.Ui;
+using RecoverKit.Core;
 using RecoverKit.Core.Hashcat;
 
 namespace RecoverKit.App.Views;
@@ -119,6 +121,63 @@ public sealed class HashcatDownloadWindow : ProgressDialog
         catch (InstallException ex)
         {
             Status.Text = "Install failed.";
+            Detail.Text = ex.Message;
+            await Msg.Error(this, ex.Message, Title);
+            Action.IsEnabled = true;
+        }
+        finally
+        {
+            Running = false;
+        }
+    }
+}
+
+/// <summary>Downloads and verifies a newer RecoverKit release; the caller applies it and exits.</summary>
+public sealed class UpdateWindow : ProgressDialog
+{
+    private readonly ReleaseInfo _release;
+    private readonly InstallKind _kind;
+    public PreparedUpdate? Prepared { get; private set; }
+
+    public static async Task<PreparedUpdate?> RunAsync(Window owner, ReleaseInfo release, InstallKind kind, ReleaseAsset asset)
+    {
+        var w = new UpdateWindow(release, kind, asset);
+        return await w.ShowDialog<bool>(owner) ? w.Prepared : null;
+    }
+
+    private UpdateWindow(ReleaseInfo release, InstallKind kind, ReleaseAsset asset) : base("Update " + MainWindow.AppName, "Update")
+    {
+        _release = release;
+        _kind = kind;
+        Status.Text = $"{MainWindow.AppName} {release.Tag} is available (you have {MainWindow.AppVersion}).\n\n" +
+                      $"This downloads {asset.Name}{(asset.Size > 0 ? $" ({asset.Size / 1_000_000.0:N0} MB)" : "")}, checks it and installs it. " +
+                      $"{MainWindow.AppName} closes while the update runs and starts again afterwards." +
+                      (kind == InstallKind.WindowsMsi ? " Windows may ask for permission to install." : "");
+        Build();
+    }
+
+    protected override async Task RunAsync()
+    {
+        Running = true;
+        Action.IsEnabled = false;
+        Cts = new CancellationTokenSource();
+        try
+        {
+            Prepared = await AppUpdater.PrepareAsync(_release, _kind, Reporter(), Cts.Token);
+            Bar.Value = Bar.Maximum;
+            Status.Text = $"{MainWindow.AppName} {_release.Tag} is ready. {MainWindow.AppName} now closes to install it.";
+            Succeed();
+        }
+        catch (OperationCanceledException)
+        {
+            Status.Text = "Cancelled.";
+            Detail.Text = "";
+            Action.IsEnabled = true;
+        }
+        catch (Exception ex) when (ex is InstallException or HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            DebugLog.Error("Update failed", ex);
+            Status.Text = "Update failed.";
             Detail.Text = ex.Message;
             await Msg.Error(this, ex.Message, Title);
             Action.IsEnabled = true;
