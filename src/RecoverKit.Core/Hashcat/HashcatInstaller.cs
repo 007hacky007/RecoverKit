@@ -115,21 +115,31 @@ public sealed class HashcatInstaller
     /// no bundle (or not on macOS) or the copy failed (logged). Never throws for I/O problems.
     /// </summary>
     public static bool TryInstallBundled(IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
-        => new HashcatInstaller().TryInstallBundledHere(BundledDirectory, progress, ct);
+        => TryInstallBundledError(progress, ct) is null;
+
+    /// <summary>
+    /// Same as <see cref="TryInstallBundled"/>, but returns null when an up-to-date copy is in place
+    /// afterwards and the error text otherwise (no bundle, or why the copy failed).
+    /// </summary>
+    public static string? TryInstallBundledError(IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
+        => new HashcatInstaller().TryInstallBundledErrorHere(BundledDirectory, progress, ct);
 
     internal bool TryInstallBundledHere(string? bundleDir, IProgress<InstallProgress>? progress, CancellationToken ct)
+        => TryInstallBundledErrorHere(bundleDir, progress, ct) is null;
+
+    internal string? TryInstallBundledErrorHere(string? bundleDir, IProgress<InstallProgress>? progress, CancellationToken ct)
     {
-        if (bundleDir is null) return false;
-        if (!BundleNeedsInstall(bundleDir)) return true;
+        if (bundleDir is null) return NoBundleMessage;
+        if (!BundleNeedsInstall(bundleDir)) return null;
         try
         {
             CopyBundle(bundleDir, progress, ct);
-            return true;
+            return null;
         }
         catch (Exception ex) when (ex is InstallException or IOException or UnauthorizedAccessException)
         {
             DebugLog.Error("Copying the bundled hashcat", ex);
-            return false;
+            return "The bundled hashcat could not be copied: " + ex.Message;
         }
     }
 

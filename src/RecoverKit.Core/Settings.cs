@@ -89,11 +89,6 @@ public sealed class Settings
     public Dictionary<int, double> CpuSpeedByMode { get; set; } = new();
     /// <summary>Seconds hashcat needs to start a hybrid run of this mode (until its first speed report).</summary>
     public Dictionary<int, double> GpuStartupByMode { get; set; } = new();
-    /// <summary>
-    /// "path|version" of a hashcat the user installed (not RecoverKit) whose upgrade offer was declined,
-    /// so the offer is not repeated at every start for that copy.
-    /// </summary>
-    public string? DeclinedHashcatUpgrade { get; set; }
     /// <summary>Skip keys of dependency offers the user chose to skip (see DependencyItem.SkipKey).</summary>
     public List<string> SkippedDependencies { get; set; } = new();
     /// <summary>Ask GitHub for a newer release when RecoverKit starts (at most once an hour).</summary>

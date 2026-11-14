@@ -178,7 +178,7 @@ public sealed class HashcatFailureTests : IDisposable
         runner.OutputLine += line => { lock (output) output.Add(line); };
         var result = await runner.RunAsync(Request(), CancellationToken.None);
         Assert.Equal(RunOutcome.Exhausted, result.Outcome);
-        Assert.Single(output, line => line.Contains("Tools > Download NVIDIA CUDA compiler"));
+        Assert.Single(output, line => line.Contains("Tools > Dependencies to enable CUDA"));
         Assert.DoesNotContain(output, line => line.Contains("WSL", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(output, line => line.Contains("CUDA SDK Toolkit"));
         Assert.DoesNotContain(output, line => line.Contains("cuda-downloads"));

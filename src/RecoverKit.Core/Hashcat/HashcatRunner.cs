@@ -257,7 +257,7 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// <summary>Start of the error text when "CPU only" is chosen but hashcat sees no processor device (Windows, Linux).</summary>
     public const string NoCpuDeviceMessage =
         "\"CPU only\" is selected, but hashcat has no processor (CPU) device: it needs a CPU OpenCL runtime for that. " +
-        "Install it with Tools > Download CPU runtime, or choose a GPU strategy in Preferences. " +
+        "Install it with Tools > Dependencies, or choose a GPU strategy in Preferences. " +
         "The built-in CPU engine still runs ZIP, Office 97-2003, PDF and RAR 3.x without it.";
 
     public static bool NoCpuDevice(Settings s, IReadOnlyList<BackendDevice>? known)
@@ -321,7 +321,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         {
             if (!HashcatOutput.IsCudaCompilerAdvice(line)) OutputLine?.Invoke(line);
             if (HashcatOutput.NeedsCudaCompilerHint(line) && Interlocked.Exchange(ref cudaHintShown, 1) == 0)
-                OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Download NVIDIA CUDA compiler to enable CUDA.");
+                OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Dependencies to enable CUDA.");
         }
         while (true)
         {
