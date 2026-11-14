@@ -5,7 +5,10 @@ public static class SevenZipExtractor
 {
     private static ReadOnlySpan<byte> Signature => [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
     private const int HeaderLimit = 16 * 1024 * 1024;
-    internal const ulong DataLimit = 8 * 1024 * 1024;
+    private const ulong HashcatDataLimit = 8 * 1024 * 1024;
+    /// <summary>A smaller limit for tests on this thread, so small fixtures exercise the large-stream path.</summary>
+    [ThreadStatic] internal static ulong TestDataLimit;
+    internal static ulong DataLimit => TestDataLimit > 0 ? TestDataLimit : HashcatDataLimit;
     internal const ulong CrcLimit = 9_999_999;
     private const string AesId = "06f10701";
     private static readonly uint[] CrcTable = Enumerable.Range(0, 256).Select(i =>
@@ -130,7 +133,25 @@ public static class SevenZipExtractor
             ulong packed = info.Sizes[f.PackIndex], unpacked = f.UnpackSizes[aes.Output];
             if (packed == 0 || packed % 16 != 0 || unpacked == 0 || unpacked > packed || packed - unpacked > 15)
                 throw new FormatException("Invalid AES stream sizes.");
-            if (packed > DataLimit) { reasons.Add("encrypted streams larger than hashcat's 8 MiB limit"); continue; }
+            if (packed > DataLimit)
+            {
+                // A solid block too large for hashcat: its first file's CRC is known, and hashcat decrypts
+                // and decompresses only as much of the stream as that file needs, so the beginning of the
+                // stream is enough. Deflate is left out: hashcat inflates the whole data it is given.
+                if (type is 0 or 1 or 2 && f.SubSizes.Count > 1 && f.SubCrcs[0] is uint firstCrc
+                    && f.SubSizes[0] is > 0 and <= CrcLimit && PrefixInput(type, f.SubSizes[0], packed) is var need && need < DataLimit)
+                {
+                    var prefix = new Candidate(f, props, type, attributes, need, type == 0 ? f.SubSizes[0] : Math.Min(unpacked, need),
+                        firstCrc, f.SubSizes[0]) { FirstFileOnly = true };
+                    if (best is null || (prefix.CrcLength >= 8 && best.CrcLength < 8) ||
+                        ((prefix.CrcLength >= 8) == (best.CrcLength >= 8) && prefix.Packed < best.Packed)) best = prefix;
+                    continue;
+                }
+                reasons.Add(f.SubSizes.Count > 1
+                    ? "encrypted streams larger than hashcat's 8 MiB limit whose first file is too large as well"
+                    : "encrypted streams larger than hashcat's 8 MiB limit (a single large file per stream)");
+                continue;
+            }
             ulong crcLength = f.FinalSize;
             uint? crc = f.Crc;
             if (f.SubSizes.Count > 0 && f.SubCrcs[0].HasValue)
@@ -179,7 +200,9 @@ public static class SevenZipExtractor
         var iv = new byte[16]; b.Aes.Iv.CopyTo(iv, 0);
         string hash = FormattableString.Invariant($"$7z${b.Type}${b.Aes.Power}${b.Aes.Salt.Length}${Bin.Hex(b.Aes.Salt)}${b.Aes.Iv.Length}${Bin.Hex(iv)}${b.Crc}${b.Packed}${(b.Type == 0 ? b.CrcLength : b.Unpacked)}${Bin.Hex(data)}");
         if (b.Type != 0) hash += FormattableString.Invariant($"${b.CrcLength}${Bin.Hex(b.Attributes)}");
-        d.Add("Selected encrypted stream", $"{b.Packed:N0} bytes");
+        d.Add("Selected encrypted stream", b.FirstFileOnly
+            ? $"first {b.Packed:N0} bytes of a solid block, checked against its first file ({b.CrcLength:N0} bytes)"
+            : $"{b.Packed:N0} bytes");
         d.Target = new HashTarget
         {
             FormatId = "7ZIP", FormatName = "7-Zip archive", Modes = [11600], HashLines = hash,
@@ -190,6 +213,18 @@ public static class SevenZipExtractor
                 (b.CrcLength < 8 ? "The selected data is short; verify any recovered password with 7-Zip because false positives are possible. " : "") +
                 "Hashcat supports Copy, LZMA1, LZMA2 and Deflate without filters, with no AES salt.",
         };
+    }
+
+    /// <summary>
+    /// Encrypted bytes hashcat 11600 decrypts to check a stream's first <paramref name="crcLength"/> bytes:
+    /// the CRC length itself for Copy, and hashcat's own upper estimate of the compressed size for LZMA
+    /// (32.5 + 5%) and LZMA2 (4.5 + 1%), in whole AES blocks, never more than the stream.
+    /// </summary>
+    internal static ulong PrefixInput(int type, ulong crcLength, ulong packed)
+    {
+        double estimate = type switch { 1 => 32.5 + crcLength * 1.05, 2 => 4.5 + crcLength * 1.01, _ => crcLength };
+        ulong bytes = (ulong)Math.Ceiling(estimate) + 1;
+        return Math.Min(packed, (bytes + 15) / 16 * 16);
     }
 
     private static byte[] DecodeHeader(Stream s, StreamsInfo info, ulong dataBase)
@@ -479,5 +514,9 @@ public static class SevenZipExtractor
     }
     private sealed record Coder(string Id, byte[] Properties, int Input, int Output, int Inputs, int Outputs);
     private sealed record AesInfo(int Power, byte[] Salt, byte[] Iv);
-    private sealed record Candidate(Folder Folder, AesInfo Aes, int Type, byte[] Attributes, ulong Packed, ulong Unpacked, uint Crc, ulong CrcLength);
+    private sealed record Candidate(Folder Folder, AesInfo Aes, int Type, byte[] Attributes, ulong Packed, ulong Unpacked, uint Crc, ulong CrcLength)
+    {
+        /// <summary>Only the beginning of a large solid block, checked against its first file.</summary>
+        public bool FirstFileOnly { get; init; }
+    }
 }

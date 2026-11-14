@@ -5,6 +5,13 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Fixed
+- 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
+  without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
+  limit". The password is now checked against the first file of the block, so only the beginning of
+  the block is needed. An archive whose only encrypted stream is one file larger than about 8 MB is
+  still refused, because 7-Zip stores a checksum only for the whole file.
+
 ## [1.6.1] - 2026-11-14
 
 ### Added

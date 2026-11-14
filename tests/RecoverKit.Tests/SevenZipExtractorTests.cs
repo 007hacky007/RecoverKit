@@ -77,6 +77,28 @@ public class SevenZipExtractorTests
     }
 
     [Fact]
+    public void LargeSolidBlocksAreCheckedAgainstTheirFirstFile()
+    {
+        var whole = FormatDetector.Detect(Fixture("many-off"));
+        Assert.NotNull(whole.Target);
+        try
+        {
+            // Pretend hashcat's limit is below the block: only its beginning goes into the hash.
+            SevenZipExtractor.TestDataLimit = 64;
+            var d = FormatDetector.Detect(Fixture("many-off"));
+            Assert.NotNull(d.Target);
+            Assert.Contains(d.Info, pair => pair.Key == "Selected encrypted stream" && pair.Value.Contains("first file"));
+            var fields = d.Target!.HashLines.Split('$');
+            ulong dataLen = ulong.Parse(fields[9]);
+            Assert.True(dataLen < 64 && dataLen % 16 == 0);
+            Assert.Equal((int)dataLen * 2, fields[11].Length);
+            // The same leading bytes as the whole stream.
+            Assert.StartsWith(fields[11], whole.Target!.HashLines.Split('$')[11]);
+        }
+        finally { SevenZipExtractor.TestDataLimit = 0; }
+    }
+
+    [Fact]
     public void SplitArchivesAreReadAcrossTheirParts()
     {
         byte[] archive = File.ReadAllBytes(Fixture("many-on"));
