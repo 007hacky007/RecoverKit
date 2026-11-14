@@ -973,7 +973,7 @@ public sealed partial class MainWindow : Window
                 : $"  extracted hash: <{hl.Length} chars>  (enable \"Include extracted hashes\" in Preferences > Other to log it)");
         if (!ShowDetectionInfo(det)) return;
 
-        if (!await RequireHashcatAsync()) return;
+        if (det.Target!.Rar3File is null && !await RequireHashcatAsync()) return;
         var saved = SessionState.Load(_settings, det.Target!);
         if (saved is not null)
         {
@@ -1004,7 +1004,8 @@ public sealed partial class MainWindow : Window
         {
             Row("Protection:", t.Protection);
             Row("Recovery speed:", Fmt.SpeedClass(t.Speed));
-            Row("hashcat mode:", string.Join(", ", t.Modes));
+            if (t.Rar3File is not null) Row("Engine:", "Processor (built-in CPU engine)");
+            else Row("hashcat mode:", string.Join(", ", t.Modes));
             if (t.MaxPasswordLength is int ml) Row("Maximum supported password length:", ml.ToString());
         }
         foreach (var kv in det.Info) Row(kv.Key + ":", kv.Value);
@@ -1108,11 +1109,11 @@ public sealed partial class MainWindow : Window
     private async void StartWizard()
     {
         if (_cts is not null || _busyDialog || _current?.Target is null) return;
-        if (!await RequireHashcatAsync()) return;
+        if (_current.Target.Rar3File is null && !await RequireHashcatAsync()) return;
         var scenarios = LoadScenarios();
         var w = new WizardWindow(_current.Target, _current.FilePath, scenarios, _settings, new PlannerContext
         {
-            DataPath = _settings.DataPath, HashcatDir = _hashcat!.Directory, DefaultDictionary = _settings.DefaultDictionary,
+            DataPath = _settings.DataPath, HashcatDir = _hashcat?.Directory, DefaultDictionary = _settings.DefaultDictionary,
         }, _hashcat, devices: _devices);
         _busyDialog = true;
         bool ok;
@@ -1150,7 +1151,7 @@ public sealed partial class MainWindow : Window
         Line(resume is null ? "Attack started." : "Continuing interrupted attack.", bold: true);
         if (_settings.PreventScreensaver) Platform.KeepAwake(true);
 
-        var session = new RecoverySession(_hashcat!, _settings) { Devices = _devices };
+        var session = new RecoverySession(_hashcat, _settings) { Devices = _devices };
         session.ConfirmElevation = r => Dispatcher.UIThread.InvokeAsync(() => PowerLimitWindow.AskAsync(this, r));
         session.Log += (k, m) => Log(k, m);
         session.StepStarted += (i, n, desc, ks) => Dispatcher.UIThread.Post(() =>
@@ -1189,6 +1190,14 @@ public sealed partial class MainWindow : Window
         }
         if (_closeConfirmed) return;   // the window is closing; nothing more to show
         FinishLive(result);
+        foreach (var possible in result.PossiblePasswords)
+        {
+            Write("possible password, not verified: ", Palette.WarningBrush);
+            Write(possible.DisplayPassword, Palette.WarningBrush, bold: true, log: false);
+            Line(" (" + possible.Reason + ")", Palette.WarningBrush);
+        }
+        if (result.PossiblePasswords.Count > 0)
+            Line("These possible passwords must be tried by hand in an archive utility.", Palette.WarningBrush);
 
         switch (result.Outcome)
         {

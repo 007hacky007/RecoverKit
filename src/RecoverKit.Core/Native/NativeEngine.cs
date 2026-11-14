@@ -167,6 +167,8 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         }
                         from = hit + 1;
                     }
+                    // A streaming kernel can stop inside a batch; leave its chunk in flight for replay.
+                    if (ct.IsCancellationRequested) return;
                     long before = p;
                     p += count;
                     if ((before >> 6) != (p >> 6) && stop.IsCancellationRequested) break;

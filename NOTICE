@@ -107,3 +107,16 @@ Spreadsheet protection test fixtures (not bundled)
   A copy of the license is in Fixtures/Spreadsheets/Apache-2.0.txt beside the fixtures.
   openpyxl-protected.xls was created locally with openpyxl 3.1.5 (password secret, cell A1 = 123),
   then exported to Excel 97 format with LibreOffice headless.
+
+RAR 3 streaming decoder (built in)
+  native/rar3_decode.c and native/rar3/rar3_programs.c, rar3_status.h adapt hashcat 8.0.0's
+  own RAR 3 decoder (src/modules/rar3_decode.c), MIT License, https://hashcat.net.
+  The port adds bounded streaming input, a wrapping dictionary, block/VM transitions and 64-bit output positions.
+  The full upstream license is in native/rar3/LICENSE.txt.
+  src/RecoverKit.Core/Native/Kernels/Rar3Kernel.cs adapts the legacy SHA-1 input mutation
+  behavior from hashcat's OpenCL/m23800-pure.cl (MIT) for long passwords.
+  native/rar3/ppmd7 contains the public domain PPMd var.H codec from 7-Zip 26.02, with its
+  original headers, ORIGIN.txt and UPSTREAM identifying the sources and checksums.
+  Original decoder fixtures were created from synthetic data with RAR 6.24; added PPM protocol
+  streams are generated using the public domain model above. No RAR implementation
+  code is included from that utility. See tests/RecoverKit.Tests/Fixtures/Rar3/README.md and Fixtures/Rar3Kdf/README.md.

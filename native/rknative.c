@@ -40,7 +40,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 11
+#define RK_API_VERSION 13
 
 enum
 {
@@ -3644,3 +3644,5 @@ RK_EXPORT int rk_zip_search_batch(const uint8_t* header, uint8_t c1, uint8_t c2,
         default: return -1;
     }
 }
+
+#include "rar3_decode.c"

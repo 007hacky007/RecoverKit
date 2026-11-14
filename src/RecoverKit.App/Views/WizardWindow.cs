@@ -502,6 +502,15 @@ public sealed class WizardWindow : Window
             if (color is not null) t.Foreground = color;
             return t;
         }
+        if (_target.Rar3File is not null)
+        {
+            _speedNote.Child = NoteBox(Small("This archive is checked on the processor without the graphics card. " +
+                (_target.Rar3File.Method == 0x30
+                    ? "Stored entries require reading the whole file for every password. As an example from one machine, roughly 1,700 passwords per second for a 640 KiB file on a 10-thread M1 Pro, and fewer for larger files. "
+                    : "As an example from one machine, a 10-thread M1 Pro checked roughly 3,000 short passwords per second. ") +
+                "The attack shows its measured speed once it starts."));
+            return;
+        }
         int modes = TargetModes.Count();
         if (_measureCts is not null)
         {
@@ -686,7 +695,7 @@ public sealed class WizardWindow : Window
     {
         var count = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
         var time = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-        var speed = new TextBox { Text = RecoverKit.Core.Diagnostics.ProfileSettings.EstimatedSpeed(_settings, _devices, _target.Modes[0]).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
+        var speed = new TextBox { Text = (_target.Rar3File is { } rar3 ? rar3.Method == 0x30 ? 1700 : 3000 : RecoverKit.Core.Diagnostics.ProfileSettings.EstimatedSpeed(_settings, _devices, _target.Modes[0])).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
         t.Put(Lb("Passwords to process:"), row, 0);
         t.Put(count, row, 1, 3);
         t.Put(Lb("Estimated time:"), row + 1, 0);

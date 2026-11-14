@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.Intrinsics;
 using System.Security.Cryptography;
 using RecoverKit.Core.Native.Simd;
@@ -56,21 +57,53 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     /// <summary>SHA-1 digest and IV of the RAR 3 key derivation, straight from the definition.</summary>
     internal (byte[] Digest, byte[] Iv) ReferenceHash(ReadOnlySpan<byte> password)
     {
-        var data = new byte[password.Length * 2 + 8];
+        var data = new byte[password.Length * 2];
         for (int i = 0; i < password.Length; i++) data[2 * i] = password[i];
-        _salt.CopyTo(data, password.Length * 2);
+        return DeriveUtf16(data, _salt);
+    }
+
+    internal static (byte[] Digest, byte[] Iv) DeriveUtf16(ReadOnlySpan<byte> password, byte[] salt,
+        CancellationToken ct = default)
+    {
+        var data = new byte[password.Length + 8];
+        password.CopyTo(data);
+        salt.CopyTo(data, password.Length);
         using var h = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
         var iv = new byte[16];
         Span<byte> ctr = stackalloc byte[3];
         Span<byte> tmp = stackalloc byte[20];
+        Span<uint> expanded = stackalloc uint[80];
         for (int i = 0; i < Rounds; i++)
         {
+            if ((i & 4095) == 0) ct.ThrowIfCancellationRequested();
             h.AppendData(data);
+            // RAR 2.9 mutates direct SHA-1 input blocks; later rounds hash the expanded words.
+            // This mutation loop adapts hashcat 8.0.0 OpenCL/m23800-pure.cl, sha1_update_rar29.
+            // Copyright hashcat project contributors, MIT; see NOTICE and native/rar3/LICENSE.txt.
+            int buffered = (int)((long)i * (data.Length + 3) & 63);
+            for (int offset = 64 - buffered; offset + 64 <= data.Length; offset += 64)
+            {
+                for (int word = 0; word < 16; word++)
+                    expanded[word] = BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(offset + word * 4));
+                for (int word = 16; word < 80; word++)
+                    expanded[word] = BitOperations.RotateLeft(expanded[word - 3] ^ expanded[word - 8] ^ expanded[word - 14] ^ expanded[word - 16], 1);
+                for (int word = 0; word < 16; word++)
+                    BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset + word * 4), expanded[64 + word]);
+            }
             ctr[0] = (byte)i; ctr[1] = (byte)(i >> 8); ctr[2] = (byte)(i >> 16);
             h.AppendData(ctr);
             if (i % 0x4000 == 0) { h.GetCurrentHash(tmp); iv[i / 0x4000] = tmp[19]; }
         }
         return (h.GetHashAndReset(), iv);
+    }
+
+    internal static byte[] HashPasswords(byte[] salt, ReadOnlySpan<byte> passwords, int length, int count)
+    {
+        var result = new byte[36 * count];
+        fixed (byte* s = salt, p = passwords, output = result)
+            if (RkNative.Rar3Hash(s, p, length, count, output) != 0)
+                throw new InvalidOperationException("rknative rejected the RAR3 request");
+        return result;
     }
 
     internal bool Decrypts(ReadOnlySpan<byte> digest, ReadOnlySpan<byte> iv)
@@ -107,11 +140,7 @@ public sealed unsafe class Rar3Kernel : NativeKernel
                 prefixes.Slice(k * plen, plen).CopyTo(pws.AsSpan(o));
                 pws[o + plen] = last[i];
             }
-        var res = new byte[36 * n];
-        fixed (byte* salt = _salt, pw = pws, o = res)
-            if (RkNative.Rar3Hash(salt, pw, len, n, o) != 0)
-                throw new InvalidOperationException("rknative rejected the RAR3 request");
-        return res;
+        return HashPasswords(_salt, pws, len, n);
     }
 
     /// <summary>

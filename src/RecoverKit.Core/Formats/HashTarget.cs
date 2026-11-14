@@ -4,8 +4,8 @@ namespace RecoverKit.Core.Formats;
 public enum SpeedClass { Instant, VeryFast, Fast, Medium, Slow, VerySlow }
 
 /// <summary>
-/// Everything needed to attack one protected file with hashcat: the extracted
-/// hash line(s) and the hashcat mode(s) that can verify candidate passwords.
+/// Everything needed to attack one protected file: hashcat hash lines and modes,
+/// or an archive entry checked by the built-in CPU engine.
 /// </summary>
 public sealed class HashTarget
 {
@@ -35,6 +35,9 @@ public sealed class HashTarget
 
     /// <summary>The archive entry used for full confirmation when the GPU receives only a prefix.</summary>
     public ZipPartialTarget? ZipPartial { get; init; }
+
+    /// <summary>RAR 3 file data too large for hashcat, checked by the built-in CPU engine.</summary>
+    public Rar3FileTarget? Rar3File { get; init; }
 
     /// <summary>
     /// A second check for candidates that passed the hash: a password is reported (or taken from the
