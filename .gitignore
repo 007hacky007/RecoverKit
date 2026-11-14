@@ -9,3 +9,4 @@ macos/out/
 macos/build/
 worktrees/
 .superpowers/
+installer/cache/

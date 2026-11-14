@@ -88,4 +88,17 @@ public class BundledHashcatTests
             try { Directory.Delete(Path, true); } catch (IOException) { }
         }
     }
+
+    [Fact]
+    public void WindowsBuildPinsTheSameHashcatAsTheApp()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(System.IO.Path.Combine(dir.FullName, "RecoverKit.sln")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+
+        var script = File.ReadAllText(System.IO.Path.Combine(dir!.FullName, "installer", "build.ps1"));
+        Assert.Contains("$HashcatVersion = '" + HashcatInstaller.Version + "'", script);
+        Assert.Contains("9fa86e1bfd5dd898d3c83aa38a67b08db1ba5d2f5252dffa2af44a8c62585f49", script);
+    }
 }
