@@ -166,11 +166,13 @@ public sealed class BenchmarkWindow : Window
                 // Same engine choice as a real attack: the built-in CPU kernels when no GPU is used.
                 bool native = SpeedProbe.UseNative(_settings, _devices, e.Mode);
                 double speed;
-                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token); }
+                string? cpuPath = null;
+                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token, path => cpuPath = path); }
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
-                _engines[e.Mode] = native ? "built-in CPU engine"
-                    : SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? "hashcat on the GPU + built-in CPU engine"
+                string cpuEngine = cpuPath is null ? "built-in CPU engine" : $"built-in CPU engine, {cpuPath}";
+                _engines[e.Mode] = native ? cpuEngine
+                    : cpuPath is not null || SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? $"hashcat on the GPU + {cpuEngine}"
                     : GpuNames().Any() ? "hashcat, GPU" : "hashcat, CPU (OpenCL)";
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;

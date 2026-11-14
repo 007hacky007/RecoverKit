@@ -37,10 +37,51 @@ public static class NativeKernels
         string native = RkNative.Available ? RkNative.Features.ToString() : "unavailable";
         string simd = arch is System.Runtime.InteropServices.Architecture.Arm64
             ? $"AdvSimd={System.Runtime.Intrinsics.Arm.AdvSimd.IsSupported}, ArmAes={System.Runtime.Intrinsics.Arm.Aes.IsSupported}, ArmSha256={System.Runtime.Intrinsics.Arm.Sha256.IsSupported}"
-            : $"AVX2={System.Runtime.Intrinsics.X86.Avx2.IsSupported}, AES-NI={System.Runtime.Intrinsics.X86.Aes.IsSupported}";
+            : $"AVX2 (.NET)={System.Runtime.Intrinsics.X86.Avx2.IsSupported}, AVX-512 F (.NET)={System.Runtime.Intrinsics.X86.Avx512F.IsSupported}, AVX2 (native)={RkNative.Features.HasFlag(RkNative.Feature.Avx2)}, AVX-512 F + OS ZMM (native)={RkNative.Features.HasFlag(RkNative.Feature.Avx512)}, SHA-NI (native)={RkNative.Features.HasFlag(RkNative.Feature.ShaNi)}, AES-NI={System.Runtime.Intrinsics.X86.Aes.IsSupported}";
         return $"{arch}, {simd}, Vector128={System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated}, " +
-               $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative: {native}";
+               $"Vector256={System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}, rknative API={NativeApiVersion}: {native}";
     }
+
+    /// <summary>Observed native execution, or the selected dispatch before the first call.</summary>
+    public static string CpuPath(int mode, bool actualOnly = false)
+    {
+        if (Math.Abs(mode) is 17200 or 17210) return ZipCryptoPath;
+        if (!RkNative.Available) return System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated ? "managed AVX2" : "managed scalar";
+        int observed = Math.Abs(mode) switch
+        {
+            12500 => RkNative.Rar3ExecutedPaths(),
+            13000 => RkNative.Pbkdf2Sha256ExecutedPaths(),
+            _ => 0,
+        };
+        if (observed != 0)
+        {
+            var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256") }
+                .Where(p => (observed & p.Item1) != 0).Select(p => p.Item2);
+            return string.Join(" + ", names);
+        }
+        if (actualOnly && Math.Abs(mode) is 12500 or 13000) return "not run";
+        var f = RkNative.Features;
+        if (Math.Abs(mode) == 12500)
+            return RkNative.Rar3Lanes() == 32 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
+        if (Math.Abs(mode) == 13000)
+            return RkNative.Pbkdf2Sha256Lanes() == 16 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.ArmSha2) ? "native ARM SHA-256" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
+        if (Math.Abs(mode) is 9700 or 9800 or 10400 or 10500 or 10510)
+            return RkNative.HasVectorPath ? f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "native AVX2" : "managed scalar";
+        return Math.Abs(mode) == 10700 ? "native AES / SHA" : "native CPU";
+    }
+
+    public static void ResetCpuPath(int mode)
+    {
+        if (RkNative.Available) RkNative.ResetExecutedPaths(Math.Abs(mode));
+    }
+
+    public static string WideSelfTestState(int mode) => Math.Abs(mode) is 17200 or 17210 ? "no native guard; diagnostic check only"
+        : !RkNative.Available ? "not run" : (Math.Abs(mode) switch
+        {
+            12500 => RkNative.Rar3SelfTestState(),
+            13000 => RkNative.Pbkdf2Sha256SelfTestState(),
+            _ => -1,
+        }) switch { 0 => "not run", 1 => "passed", 2 => "failed", 3 => "switched off", _ => "not applicable" };
 
     /// <summary>Loaded native library API version, or zero when it is unavailable.</summary>
     public static int NativeApiVersion => RkNative.ApiVersion;

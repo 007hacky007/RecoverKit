@@ -29,7 +29,7 @@ static void step(uint32_t* a, uint32_t* b, uint32_t* c, uint8_t p)
 }
 int main(void)
 {
-    assert(rk_version() == 8);
+    assert(rk_version() == 10);
     int paths = 0;
     for (int path = 1; path <= 5; path++)
     {

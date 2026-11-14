@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 8;
+    private const int RequiredVersion = 10;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -21,6 +21,22 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_rar3_hash")]
     public static partial int Rar3Hash(byte* salt, byte* passwords, int len, int n, byte* out36);
+
+    /// <summary>Candidates per RAR 3 batch: 32 AVX-512, 16 AVX2/NEON, 1 scalar. Runs the wide-path self-test once.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_lanes")]
+    public static partial int Rar3Lanes();
+
+    /// <summary>AVX-512 guard: 0 not run, 1 passed, 2 failed, 3 switched off. Does not start the test.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_selftest_state")]
+    public static partial int Rar3SelfTestState();
+
+    /// <summary>Paths executed by hashing calls: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-256 16.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_executed_paths")]
+    public static partial int Rar3ExecutedPaths();
+
+    /// <summary>Clears executed paths for mode 12500 or 13000 before a CPU probe; other modes do nothing.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_reset_executed_paths")]
+    public static partial void ResetExecutedPaths(int mode);
 
     [LibraryImport(Lib, EntryPoint = "rk_office97_search")]
     public static partial int Office97Search(byte* salt16, byte* enc32, byte* pws, int len, int n, int* hits, int maxHits);
@@ -53,6 +69,14 @@ internal static unsafe partial class RkNative
     /// <summary>Candidates per group of the PBKDF2-SHA256 path in use (16 AVX-512, 8 AVX2, NEON or ARMv8 SHA-256, 1 scalar).</summary>
     [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_lanes")]
     public static partial int Pbkdf2Sha256Lanes();
+
+    /// <summary>AVX-512 guard: 0 not run, 1 passed, 2 failed, 3 switched off. Does not start the test.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_selftest_state")]
+    public static partial int Pbkdf2Sha256SelfTestState();
+
+    /// <summary>Paths executed by hashing calls: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-256 16.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_executed_paths")]
+    public static partial int Pbkdf2Sha256ExecutedPaths();
 
     [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
     public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);

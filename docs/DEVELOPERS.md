@@ -46,10 +46,13 @@ The performance profile lives beside settings under `RECOVERKIT_HOME` when set. 
 require correctness and repeated measurements with at least a 5% margin; explicit user settings
 win. CPU and GPU fingerprints allow driver changes to invalidate GPU choices without discarding
 CPU path measurements. The default has 115 seconds of work plus 5 seconds reserved for cleanup:
-system/setup 8, CPU 28, GPU 45, ZIP kernels 24, finite hybrid checks 10. The full step list is planned
+system/setup 8, CPU 28, GPU 45, ZIP kernels 24, finite hybrid checks 10. On AVX-512 systems the
+CPU budget is 180 seconds, making the total 267 seconds plus cleanup. Wide comparisons run first.
+The full step list is planned
 before running. Each step and section has an enforced timeout; omitted or timed-out work is listed
 as "not measured, run the thorough test". All CPU paths get correctness gates first, then selectable
-paths get one one-second timing at the logical-thread count. Representative backend probes cover
+paths get one one-second timing at the logical-thread count. AVX2 and AVX-512 variants also get
+one-thread and physical-core timings. Representative backend probes cover
 PDF R3 and RAR 5; an alternative must win both by 10% to apply across other modes. Main-format GPU
 rates use that backend only. Stored/deflated kernel probes and predicted-worker finite hybrid checks
 follow. Short CPU samples exclude a half-second warmup within their two-second slots. Unconfirmed
@@ -59,6 +62,16 @@ One isolated engine directory and kernel cache serve the whole test. Progress us
 and actual durations. `--thorough` / **Thorough (slower)** retains the full repeated sweep, including
 all eleven modes on each backend, pure kernels, repeats, worker sweeps and integrated-GPU comparisons.
 Preferences exposes automatic calibration and profile reset.
+
+For a CPU-only report without the GUI, run
+`recoverkit-cli bench-full --sections cpu --thorough --out cpu-report.html`.
+In the desktop app choose **Tools > Benchmark > Detailed performance test**, leave only the CPU
+section selected, and enable **Thorough (slower)** for the repeated comparisons. Save the HTML
+report; it also contains the machine-readable JSON. The **Wide vector paths** table compares the
+same target and length at one thread and the configured all-thread count. It shows repeat medians
+and ranges; Thorough takes three samples for AVX2/AVX-512. A requested wide path that fell back
+fails correctness and has no usable rate. Unsupported variants are omitted. Without native
+AVX-512 support, the table contains one explanatory note.
 
 Comparison targets come from `BenchmarkTestFiles`: deterministic real ZipCrypto archives (stored
 17/453/4096 bytes with one/two-byte checks, deflated 1024/16384 bytes with/without descriptors),
@@ -480,6 +493,26 @@ is PBKDF2 with 2^lg2 iterations; the password check value continues to 2^lg2 + 3
 folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13000 kernel. The
 iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's PBKDF2. The kernel
 is offered when the library has a vector path (AVX2 or NEON).
+
+RAR 3 (`Rar3Kernel`, mode 12500): `native/rar3_lanes.h` shares the stream, schedule and IV code
+between AVX2/NEON (two groups of 8) and AVX-512 (two groups of 16). API version 9 adds
+`rk_rar3_lanes`, the batch width used by `PrefixBatch`. AVX-512 is enabled by default only after
+a once-per-process known-answer test checks every batch position at lengths 1, 7, 22 and 26
+and confirms that vector code ran rather than the scalar allocation fallback.
+A mismatch keeps the AVX2 fallback for that process. `RECOVERKIT_RAR3_AVX512=0` disables the
+wide path; `1` or unset enables it subject to CPU/OS support and the self-test. Compare in fresh
+processes with `bench-native --mode 12500 --threads 16 --seconds 10 --length 7`, which prints the
+selected path. AVX-512 was cross-compiled but has not been executed on this development host.
+`Rar3NativeTests` compares digest and IV bytes with the reference and narrow paths, including
+partial batches; its slow test sweeps all supported lengths. `native/tests/rar3_test.c` checks
+known answers on the host's narrow vector path and rejects an intentionally corrupted last lane.
+
+API version 10 exports passive self-test states and observed native execution masks for RAR 3
+and PBKDF2-SHA256. RAR 5 now checks all 16 wide lanes against fixed independent answers before
+allowing AVX-512; `RECOVERKIT_RAR5_AVX512=0` disables it and `1` or unset allows the guarded path.
+The report distinguishes the report process's state from the isolated workers' states. The system
+section lists .NET and native AVX2/AVX-512 F separately, native SHA-NI, OS ZMM support and API version.
+ZIP has no native startup guard; its isolated diagnostic check is the correctness evidence.
 
 ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 8 adds `rk_zip_search` and
 `rk_zip_path`. The managed worker keeps its prefix-key cache and passes the three keys after the

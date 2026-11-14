@@ -81,8 +81,10 @@ try
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
             {
+                RecoverKit.Core.Native.NativeKernels.ResetCpuPath(mode);
                 void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
-                    (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" : ""));
+                    (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" :
+                        Math.Abs(mode) is 12500 or 13000 ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}]" : ""));
                 Measure();
                 // Include the experimental native row on CPUs whose default stays managed.
                 if (Math.Abs(mode) is 17200 or 17210 && RecoverKit.Core.Native.RkNative.Available &&

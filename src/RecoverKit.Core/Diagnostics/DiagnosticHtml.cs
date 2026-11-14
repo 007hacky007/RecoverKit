@@ -39,6 +39,32 @@ public static partial class DiagnosticHtml
             .Append("<small>Only synthetic targets are used. Rates from different targets or lengths are separate measurements. Backend aliases are never added together. Zero rates and failed checks are ineligible for selection.</small><table><tr><th>System</th><th>Value</th></tr>");
         foreach (var (key, value) in report.System) html.Append("<tr><td>").Append(H(key)).Append("</td><td>").Append(H(value)).Append("</td></tr>");
         html.Append("</table>");
+        var wide = report.WideVectorPaths;
+        html.Append("<h2>Wide vector paths</h2>");
+        if (wide.Note is { } note) html.Append("<p>").Append(H(note)).Append("</p>");
+        if (wide.Rows.Count > 0)
+        {
+            int? threads = wide.Rows[0].AllThreads.Threads;
+            string threadLabel = threads is null ? "All threads (count unknown)"
+                : report.System.GetValueOrDefault("Logical threads") == threads.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    ? $"All {threads} logical threads" : $"{threads} threads (budget cap)";
+            html.Append("<table><tr><th>Kernel</th><th>1 thread AVX2</th><th>1 thread AVX-512</th><th>Ratio</th><th>")
+                .Append(H(threadLabel)).Append(" AVX2</th><th>").Append(H(threadLabel))
+                .Append(" AVX-512</th><th>Ratio</th><th>Correctness</th><th>Self-test state</th></tr>");
+            foreach (var row in wide.Rows)
+            {
+                html.Append("<tr><td>").Append(H($"{row.Kernel} ({row.Mode})"))
+                    .Append("</td><td>").Append(H(WideRate(row.SingleThread.Avx2)))
+                    .Append("</td><td>").Append(H(WideRate(row.SingleThread.Avx512)))
+                    .Append("</td><td>").Append(WideRatio(row.SingleThread.Ratio))
+                    .Append("</td><td>").Append(H(WideRate(row.AllThreads.Avx2)))
+                    .Append("</td><td>").Append(H(WideRate(row.AllThreads.Avx512)))
+                    .Append("</td><td>").Append(WideRatio(row.AllThreads.Ratio))
+                    .Append("</td><td>").Append(H(row.Correctness))
+                    .Append("</td><td>").Append(H(row.SelfTestState)).Append("</td></tr>");
+            }
+            html.Append("</table><p><small>Rates are median candidates/s for matching targets and lengths. Ratios are AVX-512 / AVX2. Repeated samples include their range and count.</small></p>");
+        }
         if (report.Decisions.Count > 0)
         {
             html.Append("<h2>Decisions for this PC</h2><table><tr><th>Mode / workload</th><th>Engine / variant / workers</th><th>Devices</th><th>Measured margin</th><th>Reason</th></tr>");
@@ -75,6 +101,16 @@ public static partial class DiagnosticHtml
         html.Append("<script id=\"recoverkit-results\" type=\"application/json\">").Append(json)
             .Append("</script><script>async function copySummary(){const t=document.getElementById('summary').textContent;try{await navigator.clipboard.writeText(t);document.getElementById('copy-status').textContent='Summary copied.'}catch(e){const r=document.createRange();r.selectNodeContents(document.getElementById('summary'));const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.getElementById('copy-status').textContent='Summary selected. Press Ctrl+C or Command+C to copy.'}}</script></html>");
         return html.ToString();
+    }
+
+    private static string WideRatio(double? ratio) => ratio is { } value
+        ? value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + "x" : "not measured";
+
+    private static string WideRate(WideVectorPathResult path)
+    {
+        if (path.Median is not { } median) return path.Status + (path.Reason is null ? "" : ": " + path.Reason);
+        string rate = median.ToString("N1", System.Globalization.CultureInfo.InvariantCulture);
+        return path.SampleCount < 2 ? rate : rate + $" (min {path.Minimum?.ToString("N1", System.Globalization.CultureInfo.InvariantCulture)}, max {path.Maximum?.ToString("N1", System.Globalization.CultureInfo.InvariantCulture)}; n={path.SampleCount})";
     }
 
     private static void ScrubNode(System.Text.Json.Nodes.JsonNode node)

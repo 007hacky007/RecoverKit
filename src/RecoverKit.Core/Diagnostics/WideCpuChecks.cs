@@ -1,0 +1,79 @@
+using System.Security.Cryptography;
+using RecoverKit.Core.Native;
+
+namespace RecoverKit.Core.Diagnostics;
+
+/// <summary>Independent digest checks for every real lane, including a partial second batch.</summary>
+internal static unsafe class WideCpuChecks
+{
+    internal static CpuDiagnostics.CorrectnessResult Check(int mode)
+    {
+        int cases = 0;
+        int width = mode == 12500 ? RkNative.Rar3Lanes() : RkNative.Pbkdf2Sha256Lanes();
+        int n = width + 3;
+        byte[] salt = Convert.FromHexString(mode == 12500 ? "45109af8ab5f297a" : "38466361001011015181344360681307");
+        foreach (int length in mode == 12500 ? new[] { 1, 7, 26 } : new[] { 1, 7, 65 })
+        {
+            var passwords = new byte[n * length];
+            for (int i = 0; i < n; i++)
+                for (int q = 0; q < length; q++) passwords[i * length + q] = (byte)(33 + i * 17 + q * 7);
+            int stride = mode == 12500 ? 36 : 32;
+            var actual = new byte[n * stride];
+            fixed (byte* p = passwords, s = salt, o = actual)
+            {
+                int code = mode == 12500 ? RkNative.Rar3Hash(s, p, length, n, o)
+                    : RkNative.Pbkdf2Sha256(p, length, null, n, s, salt.Length, 32768 + 32, o, 32);
+                if (code != 0) return new(false, cases, "Native lane check rejected the request.");
+            }
+            for (int i = 0; i < n; i++)
+            {
+                byte[] expected = mode == 12500 ? Rar3Reference(passwords.AsSpan(i * length, length), salt)
+                    : Rfc2898DeriveBytes.Pbkdf2(passwords.AsSpan(i * length, length), salt, 32768 + 32, HashAlgorithmName.SHA256, 32);
+                cases++;
+                if (!expected.AsSpan().SequenceEqual(actual.AsSpan(i * stride, stride)))
+                    return new(false, cases, $"Native digest/IV differs from the reference at length {length}, batch position {i}.");
+            }
+        }
+        if (mode == 13000)
+        {
+            // All positions are real matches; a filter that loses a lane cannot hide behind confirmation.
+            byte[] pws = Enumerable.Range(0, n).SelectMany(_ => "hashcat"u8.ToArray()).ToArray();
+            byte[] check = Convert.FromHexString("cc7a30583e62676a");
+            int[] hits = new int[n];
+            fixed (byte* p = pws, s = salt, c = check)
+            fixed (int* h = hits)
+                if (RkNative.Rar5Search(s, 15, c, p, 7, n, h, n) != n || !hits.SequenceEqual(Enumerable.Range(0, n)))
+                    return new(false, cases, "RAR 5 filter lost or reordered matching batch positions.");
+            cases += n;
+        }
+        return new(true, cases);
+    }
+
+    // Append whole 16,384-round chunks to SHA-1, independent of the native schedule and layout.
+    internal static byte[] Rar3Reference(ReadOnlySpan<byte> password, byte[] salt)
+    {
+        int size = password.Length * 2 + 11;
+        var template = new byte[size];
+        for (int q = 0; q < password.Length; q++) template[2 * q] = password[q];
+        salt.CopyTo(template, password.Length * 2);
+        var chunk = new byte[size * 16384];
+        var iv = new byte[16];
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        Span<byte> snapshot = stackalloc byte[20];
+        for (int block = 0; block < 16; block++)
+        {
+            for (int r = 0; r < 16384; r++)
+            {
+                var record = chunk.AsSpan(r * size, size);
+                template.CopyTo(record);
+                int counter = block * 16384 + r;
+                record[^3] = (byte)counter; record[^2] = (byte)(counter >> 8); record[^1] = (byte)(counter >> 16);
+            }
+            hash.AppendData(chunk.AsSpan(0, size));
+            hash.GetCurrentHash(snapshot);
+            iv[block] = snapshot[19];
+            hash.AppendData(chunk.AsSpan(size));
+        }
+        return [.. hash.GetHashAndReset(), .. iv];
+    }
+}

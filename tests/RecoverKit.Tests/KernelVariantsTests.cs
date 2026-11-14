@@ -26,7 +26,7 @@ public sealed class KernelVariantsTests
     [Fact]
     public void KernelsWithoutSelectablePathsOnlyRegisterDefault()
     {
-        Assert.Equal("default", Assert.Single(KernelVariants.ForMode(13000)).Name);
+        Assert.Equal(["default", "avx2", "avx512"], KernelVariants.ForMode(13000).Select(v => v.Name));
         Assert.False(KernelVariants.Supported(13000, "managed"));
         Assert.Null(KernelVariants.Select(13000, "default"));
     }
@@ -62,7 +62,7 @@ public sealed class KernelVariantsTests
     public void UnsupportedSelectionDoesNotChangeNativeAvailability()
     {
         bool before = RkNative.Disabled;
-        Assert.Null(KernelVariants.Select(13000, "avx512"));
+        Assert.Null(KernelVariants.Select(13000, "unsupported-variant"));
         Assert.Equal(before, RkNative.Disabled);
     }
 }

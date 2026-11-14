@@ -117,7 +117,7 @@ public sealed class DetailedBenchmarkWindow : Window
         }
         _estimate.Text = _thorough.IsChecked == true
             ? "Thorough runs the full repeated sweep and can take an hour or longer."
-            : "The default test stops within 2 minutes, including startup. Steps that do not fit are listed as not measured. Thorough keeps the full sweep.";
+            : $"The default test has a {DetailedBenchmarkRunner.Sections.Sum(s => DetailedBenchmarkRunner.DefaultSectionSeconds(s.Id)) + 5:N0}-second budget, including startup. Steps that do not fit are listed as not measured. Thorough keeps the full repeated sweep.";
         if (_start is not null) _start.IsEnabled = _sections.Any(s => s.Box.IsChecked == true);
     }
 

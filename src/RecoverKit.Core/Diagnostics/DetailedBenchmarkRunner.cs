@@ -13,7 +13,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
     public static IReadOnlyList<DiagnosticSection> Sections { get; } =
     [
         new("system", "System and devices", 0.5),
-        new("cpu", "Built-in CPU engine and correctness", 3),
+        new("cpu", "Built-in CPU engine and correctness", CpuDiagnostics.HasWidePaths ? 8 : 3),
         new("gpu", "GPU backends and main formats", 20),
         new("zip", "ZIP GPU kernels and entry sizes", 16),
         new("hybrid", "Finite CPU, GPU and hybrid jobs", 20),
@@ -115,7 +115,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         report.System["OS"] = RuntimeInformation.OSDescription;
         report.System["Architecture"] = RuntimeInformation.ProcessArchitecture.ToString();
         report.System["CPU"] = SystemFacts.CpuName();
-        report.System["CPU features"] = NativeKernels.CpuFeatures();
+        CpuDiagnostics.AddSystemFacts(report, settings);
         report.System["Physical cores"] = SystemFacts.PhysicalCores().ToString();
         report.System["Logical threads"] = Environment.ProcessorCount.ToString();
         report.System["RAM bytes"] = SystemFacts.RamBytes().ToString();
