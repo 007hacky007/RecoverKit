@@ -106,7 +106,7 @@ try
             var settings = Settings.Load();
             if (HashcatInstaller.BundledDirectory is not null) HashcatInstaller.TryInstallBundled();
             var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath)
-                ?? throw new InvalidOperationException("hashcat not found. Run 'recoverkit-cli install-hashcat' first, or pass --hashcat <path>.");
+                ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>, or run 'recoverkit-cli install-hashcat --from <folder>'.");
             Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
             if (HashcatKernels.Inspect(tool.Directory) == HashcatKernels.State.Unsupported)
             {
@@ -222,7 +222,7 @@ try
                 }
                 else
                 {
-                    Console.WriteLine("The release contains no binary for this OS (it ships hashcat.exe and hashcat.bin).");
+                    Console.WriteLine("The installed folder contains no hashcat executable for this OS.");
                 }
                 return 0;
             }
@@ -254,7 +254,7 @@ try
             if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
                 Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
             var tool = HashcatTool.Locate(settings.HashcatPath)
-                ?? throw new InvalidOperationException("hashcat not found. Run 'recoverkit-cli install-hashcat' to download it, or pass --hashcat <path>.");
+                ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>, or run 'recoverkit-cli install-hashcat --from <folder>'.");
             Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
 
             var d = Open(argv[1], argv);

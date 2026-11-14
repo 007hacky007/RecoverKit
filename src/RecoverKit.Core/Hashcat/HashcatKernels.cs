@@ -150,8 +150,13 @@ public static class HashcatKernels
     {
         if (Disabled) return "RecoverKit's ZIP GPU kernels are turned off (RECOVERKIT_HASHCAT_ZIP_KERNELS=0).";
         if (Inspect(tool.Directory) == State.Unsupported)
-            return $"RecoverKit's ZIP GPU kernels need hashcat {HashcatInstaller.Version}, and this computer runs hashcat {tool.FullVersion.TrimStart('v')}. " +
-                   $"Tools > {(OperatingSystem.IsMacOS() ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}.";
+        {
+            // Only the user's own older hashcat has a switch on the dependencies page (a newer one, or a copy
+            // RecoverKit installed, has none).
+            bool canSwitch = HashcatInstaller.BundledDirectory is not null && !tool.IsManaged && HashcatTool.IsOlderThanPinned(tool.FullVersion);
+            return $"RecoverKit's faster ZIP kernels need hashcat {HashcatInstaller.Version} exactly, and this computer runs hashcat {tool.FullVersion.TrimStart('v')}." +
+                   (canSwitch ? $" Tools > Dependencies switches to hashcat {HashcatInstaller.Version}." : "");
+        }
         if (!EnsureInstalled(tool.Directory))
             return "RecoverKit's ZIP GPU kernels could not be written into hashcat's OpenCL folder (details are in the debug log).";
         return null;

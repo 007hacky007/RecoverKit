@@ -6,6 +6,13 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- One dependencies page (Tools > Dependencies) shows hashcat, NVIDIA's CUDA compiler and Intel's CPU
+  runtime as green, yellow or red lights and installs what is missing with one "Install all" button
+  after you accept the licenses. It appears at start only when something needs attention and stays
+  hidden otherwise; optional items you skip are remembered. It replaces the separate download prompts.
+- hashcat 8.0.0 is now included in the Windows installer and portable zip, as it already was on the
+  Mac, and is set up silently at first start. The Windows build downloads and verifies the official
+  archive (7-Zip is needed on the build machine; `-HashcatArchive` allows an offline build).
 - Help > Check for updates now installs a newer version from here: the release file is downloaded,
   checked against its published SHA-256 and installed (the installer on Windows, the app bundle on
   Macs, the folder of a portable copy), and RecoverKit starts again. The download page remains the
@@ -13,6 +20,12 @@ All notable changes to RecoverKit. Downloads are on the
 - RecoverKit checks for a newer version when it starts, at most once an hour. When one is out, an
   Update button appears in the toolbar: one click downloads, verifies and installs it. The check can
   be turned off in Preferences > Other.
+
+### Removed
+- The run-time hashcat download and the 7-Zip extractor (7zr.exe) download. The "Download hashcat",
+  "Download CPU runtime" and "Download NVIDIA CUDA compiler" items in the Tools menu are replaced by
+  Tools > Dependencies, and "Install hashcat" in `recoverkit-cli` only copies the bundled build or
+  `--from <folder>`. In Preferences the hashcat "Download/Install" button is now "Default".
 
 ### Fixed
 - Classic ZIP archives whose encrypted files are all larger than 320 KB (for example photos) were
@@ -22,10 +35,11 @@ All notable changes to RecoverKit. Downloads are on the
   the beginning of the compressed data first, which takes a fraction of a microsecond.
 - After upgrading from an earlier RecoverKit, the hashcat 7.1.2 it had installed stayed in use.
   RecoverKit's fast ZIP GPU kernels need hashcat 8.0.0, so ZIP attacks silently ran on the CPU.
-  RecoverKit now offers hashcat 8.0.0 at start whenever the hashcat it uses reports an older version,
-  wherever that copy came from (an earlier RecoverKit, a path set in Preferences, Homebrew, PATH), and
-  the attack log says why the GPU kernels are not used. Your own hashcat is left in place, and a "No"
-  for it is remembered until it changes.
+  The copy an earlier RecoverKit installed now gives way to the bundled hashcat 8.0.0. When the hashcat
+  in use is your own and older (a path set in Preferences, Homebrew, PATH), the dependencies page
+  shows it as a yellow light with a switch to the bundled copy, and the attack log says why the GPU
+  kernels are not used. Your own hashcat is left in place, and skipping the switch on the start page
+  is remembered until that hashcat changes.
 - An attack step that a large ZIP file cannot run on the CPU (rules, extra hashcat options) ended
   the whole recovery with an error. The step is skipped with the reason and the other steps run.
 

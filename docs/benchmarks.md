@@ -293,7 +293,7 @@ the amplifier cache, 10 seconds each, and prints a table per device. `--device 1
 limits it to one device, `--seconds 20` makes the runs longer, `--quick` leaves out the
 amplifier-cache column. The GUI's Tools > Benchmark row "ZIP/Classic" (`hashcat -b -m 17210`) uses
 RecoverKit's kernel too. On Windows, an NVIDIA GPU appears as a CUDA device only after
-Tools > Download NVIDIA CUDA compiler (NVRTC) (or with the CUDA Toolkit installed); run
+Tools > Dependencies (or with the CUDA Toolkit installed); run
 `bench-zip` before and after to compare OpenCL and CUDA.
 
 ## When the built-in engine runs

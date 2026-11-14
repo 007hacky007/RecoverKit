@@ -44,6 +44,11 @@ jobs:
       - name: Run tests
         run: dotnet test tests/RecoverKit.Tests -c Release
 
+      - uses: actions/cache@v4
+        with:
+          path: installer/cache
+          key: hashcat-win-${{ hashFiles('installer/build.ps1') }}
+
       - name: Build installer
         shell: pwsh
         run: ./installer/build.ps1 -Version ${{ steps.ver.outputs.version }}

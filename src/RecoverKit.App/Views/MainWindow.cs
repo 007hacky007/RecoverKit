@@ -14,6 +14,7 @@ using Avalonia.Threading;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
+using RecoverKit.Core.Dependencies;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Hashcat;
 
@@ -52,6 +53,12 @@ public sealed partial class MainWindow : Window
     // Empty state: the drop zone. Loaded: the file card above the log.
     private DropFrame _dropZone = null!;
     private Border _dropLayer = null!;
+    // The dependencies page, a layer above the drop zone and the file pane.
+    private Border _depsLayer = null!;
+    private DependenciesPage? _depsPage;
+    private Task<DependenciesOutcome>? _depsRun;
+    private bool _depsQueued;   // the start check posted the page, which is not shown yet
+    private IReadOnlyList<DependencyItem> _depsItems = [];   // rows of the latest scan
     private readonly TextBlock _dropTitle = new() { FontSize = 15, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap };
     private Control _dropHint = null!, _dropChips = null!;
     private readonly StackPanel _dropNotices = new() { Spacing = 4, MaxWidth = 460, HorizontalAlignment = HorizontalAlignment.Center };
@@ -150,7 +157,7 @@ public sealed partial class MainWindow : Window
                 Environment.Exit(0);
             }
 #endif
-            if (_pendingOpen is { } f) { _pendingOpen = null; await OpenFileAsync(f); }
+            if (!DepsShown && _pendingOpen is { } f) { _pendingOpen = null; await OpenFileAsync(f); }
         };
         Closing += OnClosing;
         SetRunning(false);
@@ -221,10 +228,8 @@ public sealed partial class MainWindow : Window
             new NativeMenuItemSeparator(),
             Item(mac ? "Benchmark" : "_Benchmark", () => _ = ShowBenchmarkAsync()),
             new NativeMenuItemSeparator(),
-            Item(mac ? "Install hashcat..." : "_Download hashcat ...", () => _ = DownloadHashcatAsync()),
+            Item(mac ? "Dependencies..." : "_Dependencies...", () => _ = ShowDependenciesAsync(DepsTrigger.User), idleOnly: true),
         };
-        if (CpuRuntime.IsSupportedPlatform) tools.Add(Item("Download _CPU runtime (OpenCL) ...", () => _ = DownloadCpuRuntimeAsync()));
-        if (NvrtcRuntime.IsSupportedPlatform) tools.Add(Item("Download _NVIDIA CUDA compiler (NVRTC) ...", () => _ = DownloadNvrtcAsync()));
 
         var help = new List<NativeMenuItemBase>
         {
@@ -384,7 +389,8 @@ public sealed partial class MainWindow : Window
         BuildLive();
 
         _dropLayer = new Border { Background = Palette.PaneBrush, Child = _dropZone };
-        return new Grid { Children = { _filePane, _dropLayer } };
+        _depsLayer = new Border { Background = Palette.PaneBrush, IsVisible = false };
+        return new Grid { Children = { _filePane, _dropLayer, _depsLayer } };
     }
 
     /// <summary>Shows the drop zone (empty state) or the file pane; while files are dragged over the window the zone lights up on top.</summary>
@@ -564,10 +570,17 @@ public sealed partial class MainWindow : Window
 
     // ------------------------------------------------------------------ hashcat
 
-    private async Task InitHashcatAsync()
+    private const string AttentionNotice = "Some components need attention: Tools > Dependencies.";
+
+    private async Task InitHashcatAsync(bool showPage = true)
     {
-        await PrepareBundledHashcatAsync();
-        _hashcat = HashcatTool.Locate(_settings.HashcatPath);
+        string? bundleError = await PrepareBundledHashcatAsync();
+        SetPill(PillState.Busy, "Detecting GPUs...");
+        var scan = await Task.Run(() => DependencyScan.RunAsync(_settings, bundleError));
+        _depsItems = scan.Items;
+        _hashcat = scan.Tool;
+        _hashcatVersion = scan.HashcatVersion;
+        _devices = scan.Devices;
         SetRunning(_cts is not null);
         if (_hashcat is null)
         {
@@ -575,72 +588,72 @@ public sealed partial class MainWindow : Window
             SetPill(PillState.Problem, "hashcat not found");
             Line();
             Line("hashcat was not found.", Palette.ErrorBrush, true);
-            Notice((Platform.IsMac ? "hashcat was not found. Use Tools > Install hashcat" : "hashcat was not found. Use Tools > Download hashcat") + " to set it up automatically, or set its location in " +
-                   (Platform.IsMac ? "RecoverKit > Settings > Files and Paths." : "Options > Preferences > Files and Paths."), Palette.ErrorBrush);
-            Dispatcher.UIThread.Post(() => _ = OfferHashcatDownloadAsync());
-            return;
         }
-        _hashcat.MaxCpuThreads = _settings.MaxCpuThreads;
-        DebugLog.Info($"hashcat: {_hashcat.Exe}");
-        DebugLog.LogSettings(_settings);
-        try
+        else
         {
-            _hashcatVersion = await _hashcat.VersionAsync();
-            _statusLeft.Text = $"hashcat {_hashcatVersion}  ·  © {DateTime.Now.Year} {AppName} contributors";
-            SetPill(PillState.Busy, "Detecting GPUs...");
-            _devices = await _hashcat.DevicesAsync();
-            var usable = _devices.Where(d => !d.IsSkippedAlias).ToList();
-            var gpus = usable.Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
-            bool cpu = usable.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
-            int threads = _settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount;
-            _deviceStatus = gpus.Count switch
+            _hashcat.MaxCpuThreads = _settings.MaxCpuThreads;
+            DebugLog.Info($"hashcat: {_hashcat.Exe}");
+            DebugLog.LogSettings(_settings);
+            if (scan.Facts.HashcatError is { Length: > 0 } error)
             {
-                1 => gpus[0].Name + (gpus[0].Backend.Length > 0 ? $" ({gpus[0].Backend})" : ""),
-                > 1 => $"{gpus.Count} GPU devices",
-                _ => cpu ? $"No GPU, using the CPU ({threads} threads)" : "No GPU detected",
-            };
-            SetPill(gpus.Count > 0 ? PillState.Ready : cpu ? PillState.Cpu : PillState.Problem,
-                    gpus.Count > 0 ? "GPU ready: " + _deviceStatus : _deviceStatus);
-            var deviceLines = usable.Select(d =>
-                $"Device #{d.Id}: {d.Name} ({d.Backend}{(d.Processors > 0 ? $", {d.Processors} compute units" : "")}{(d.MemoryMb > 0 ? $", {d.MemoryMb} MB" : "")})"
-                + (d.IsIntegratedGpu ? ", integrated" : "") + (HashcatRunner.IsDisabled(_settings, d) ? ", disabled" : "")).ToList();
-            ToolTip.SetTip(_pill, deviceLines.Count > 0 ? string.Join("\n", deviceLines) : null);
-            Line();
-            if (gpus.Count == 0 && cpu)
-                Line($"No compatible GPU devices detected. Passwords are recovered on the processor ({threads} threads).", Palette.DimBrush);
-            else if (gpus.Count == 0) NoDevicesNotice();
-            foreach (var d in deviceLines) Line(d, Palette.DimBrush);
-            // NVIDIA GPUs run through OpenCL until hashcat finds NVRTC for its CUDA backend.
-            if (NvrtcRuntime.IsSupportedPlatform && !_devices.Any(d => d.Backend == "CUDA")
-                && usable.Any(d => d.Backend == "OpenCL" && (d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))))
-                Line("The NVIDIA GPU runs through OpenCL. hashcat's CUDA backend needs NVIDIA's NVRTC compiler: Tools > Download NVIDIA CUDA compiler (NVRTC).", Palette.DimBrush);
-            if (HashcatTool.IsOlderThanPinned(_hashcatVersion))
-            {
-                Notice($"This is an older hashcat ({_hashcatVersion.TrimStart('v')}). Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
-                Dispatcher.UIThread.Post(() => _ = OfferHashcatUpgradeAsync());
+                SetPill(PillState.Problem, "hashcat error");
+                Notice(error, Palette.ErrorBrush);
             }
+            else ShowDevices();
         }
-        catch (Exception ex) when (ex is TimeoutException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        // Rows the user skipped or cannot fix from the page do not bring up the notice.
+        bool attention = DependencyCheck.ShouldShowAtStart(scan.Items, _settings.SkippedDependencies);
+        if (attention)
+            Notice(AttentionNotice, scan.Items.Any(i => i.Light == Light.Red) ? Palette.ErrorBrush : Palette.WarningBrush);
+        if (showPage && attention)
         {
-            SetPill(PillState.Problem, "hashcat error");
-            Notice("Cannot run hashcat: " + ex.Message, Palette.ErrorBrush);
+            _depsQueued = true;
+            Dispatcher.UIThread.Post(() => _ = ShowDependenciesAsync(DepsTrigger.Startup, scan.Items));
         }
     }
 
-    /// <summary>
-    /// macOS: hashcat ships inside the app bundle and is copied to the user's engines folder
-    /// (it writes kernel caches next to itself, and the signed bundle must stay unmodified).
-    /// </summary>
-    private async Task PrepareBundledHashcatAsync()
+    /// <summary>The pill, status bar and log lines for the devices hashcat reported.</summary>
+    private void ShowDevices()
     {
-        if (HashcatInstaller.BundledDirectory is null || !new HashcatInstaller().BundleNeedsInstall()) return;
+        _statusLeft.Text = $"hashcat {_hashcatVersion}  ·  © {DateTime.Now.Year} {AppName} contributors";
+        var usable = _devices.Where(d => !d.IsSkippedAlias).ToList();
+        var gpus = usable.Where(d => d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase)).ToList();
+        bool cpu = usable.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+        int threads = _settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount;
+        _deviceStatus = gpus.Count switch
+        {
+            1 => gpus[0].Name + (gpus[0].Backend.Length > 0 ? $" ({gpus[0].Backend})" : ""),
+            > 1 => $"{gpus.Count} GPU devices",
+            _ => cpu ? $"No GPU, using the CPU ({threads} threads)" : "No GPU detected",
+        };
+        SetPill(gpus.Count > 0 ? PillState.Ready : cpu ? PillState.Cpu : PillState.Problem,
+                gpus.Count > 0 ? "GPU ready: " + _deviceStatus : _deviceStatus);
+        var deviceLines = usable.Select(d =>
+            $"Device #{d.Id}: {d.Name} ({d.Backend}{(d.Processors > 0 ? $", {d.Processors} compute units" : "")}{(d.MemoryMb > 0 ? $", {d.MemoryMb} MB" : "")})"
+            + (d.IsIntegratedGpu ? ", integrated" : "") + (HashcatRunner.IsDisabled(_settings, d) ? ", disabled" : "")).ToList();
+        ToolTip.SetTip(_pill, deviceLines.Count > 0 ? string.Join("\n", deviceLines) : null);
+        Line();
+        if (gpus.Count == 0 && cpu)
+            Line($"No compatible GPU devices detected. Passwords are recovered on the processor ({threads} threads).", Palette.DimBrush);
+        else if (gpus.Count == 0) NoDevicesNotice();
+        foreach (var d in deviceLines) Line(d, Palette.DimBrush);
+    }
+
+    /// <summary>
+    /// hashcat ships with the app and is copied to the user's engines folder (it writes kernel caches
+    /// next to itself, and the signed bundle must stay unmodified). Returns why the copy failed, or null.
+    /// </summary>
+    private async Task<string?> PrepareBundledHashcatAsync()
+    {
+        if (HashcatInstaller.BundledDirectory is null || !new HashcatInstaller().BundleNeedsInstall()) return null;
         _statusLeft.Text = $"Preparing hashcat {HashcatInstaller.Version}...";
         var progress = new Progress<InstallProgress>(p =>
         {
             if (p.BytesTotal > 0) _statusLeft.Text = $"Preparing hashcat {HashcatInstaller.Version}... {p.Fraction:P0}";
         });
-        bool ok = await Task.Run(() => HashcatInstaller.TryInstallBundled(progress));
-        DebugLog.Info(ok ? "Bundled hashcat copied to the engines folder" : "Bundled hashcat could not be copied");
+        string? error = await Task.Run(() => HashcatInstaller.TryInstallBundledError(progress));
+        DebugLog.Info(error is null ? "Bundled hashcat copied to the engines folder" : "Bundled hashcat could not be copied: " + error);
+        return error;
     }
 
     private void AutoDecrypt(Detection det, string password)
@@ -674,73 +687,7 @@ public sealed partial class MainWindow : Window
     }
 
     private async Task<bool> RequireHashcatAsync()
-    {
-        if (_hashcat is not null) return true;
-        if (await Msg.Ask(this, Platform.IsMac ? "hashcat was not found. Install it now?" : "hashcat was not found. Download it now?"))
-            await DownloadHashcatAsync();
-        return _hashcat is not null;
-    }
-
-    private bool _offeredDownload;
-
-    /// <summary>On first start without hashcat, offer a one-click download.</summary>
-    private async Task OfferHashcatDownloadAsync()
-    {
-        if (_offeredDownload || _hashcat is not null || _busyDialog) return;
-        _offeredDownload = true;
-        if (await Msg.Ask(this, $"hashcat (the GPU engine) was not found.\n\n{(Platform.IsMac ? "Install" : "Download")} hashcat {HashcatInstaller.Version} now?"))
-            await DownloadHashcatAsync();
-    }
-
-    private bool _offeredUpgrade;
-
-    /// <summary>
-    /// The hashcat in use reports an older version than <see cref="HashcatInstaller.Version"/>, which leaves
-    /// ZIP archives on the CPU: offer to install the pinned version next to it, wherever the old one came
-    /// from (an earlier RecoverKit, a path set in Preferences, Homebrew, PATH). For a copy RecoverKit
-    /// installed the offer comes once per start; for the user's own copy a "No" is remembered for that
-    /// copy and version (<see cref="Settings.DeclinedHashcatUpgrade"/>). The user's copy is not touched.
-    /// </summary>
-    private async Task OfferHashcatUpgradeAsync()
-    {
-        if (_offeredUpgrade || _busyDialog || _hashcat is not { } tool || !HashcatTool.IsOlderThanPinned(_hashcatVersion)) return;
-        if (Platform.IsMac && HashcatInstaller.BundledDirectory is null) return;   // nothing to install from (a development build)
-        bool managed = tool.IsManaged;
-        string declineKey = tool.Exe + "|" + _hashcatVersion;
-        if (!managed && _settings.DeclinedHashcatUpgrade == declineKey) return;
-        _offeredUpgrade = true;
-        string source = managed ? " from an earlier RecoverKit" : $" ({tool.Exe})";
-        string action = Platform.IsMac
-            ? $"Install hashcat {HashcatInstaller.Version} now? It comes with RecoverKit and is copied into your user folder."
-            : $"Download hashcat {HashcatInstaller.Version} now (about 20 MB)?";
-        string keep = managed ? "" : " Your own hashcat stays where it is; RecoverKit uses the new copy.";
-        if (await Msg.Ask(this, $"RecoverKit {AppVersion} works with hashcat {HashcatInstaller.Version}, but it found hashcat {_hashcatVersion.TrimStart('v')}{source}.\n\n" +
-                                "Without it, ZIP archives are searched on the processor instead of the graphics card, many times slower." + keep + "\n\n" + action))
-        {
-            await DownloadHashcatAsync();
-            return;
-        }
-        if (!managed)
-        {
-            _settings.DeclinedHashcatUpgrade = declineKey;
-            try { _settings.Save(); } catch (IOException ex) { DebugLog.Warn("Settings not saved: " + ex.Message); }
-        }
-    }
-
-    private async Task DownloadHashcatAsync()
-    {
-        if (_busyDialog) return;
-        _busyDialog = true;
-        string? exe;
-        try { exe = await HashcatDownloadWindow.RunAsync(this); }
-        finally { _busyDialog = false; }
-        if (exe is null) return;
-        _settings.HashcatPath = exe;
-        _settings.Save();
-        // Redraw the start page so the stale "hashcat was not found" notice disappears.
-        if (_current is null) ShowStartPage();
-        await InitHashcatAsync();
-    }
+        => _hashcat is not null || await ShowDependenciesAsync(DepsTrigger.NeedHashcat);
 
     /// <summary>hashcat found no OpenCL/CUDA/HIP/Metal device at all (typically: no GPU driver installed).</summary>
     private void NoDevicesNotice()
@@ -758,50 +705,102 @@ public sealed partial class MainWindow : Window
             return;
         }
         Notice("No compatible GPU devices detected. Install the NVIDIA, AMD or Intel graphics driver, or use the processor: " +
-               "Tools > Download CPU runtime (OpenCL).", Palette.WarningBrush);
-        Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: false));
+               "Tools > Dependencies.", Palette.WarningBrush);
     }
 
-    private bool _offeredCpuRuntime;
+    // ------------------------------------------------------------------ dependencies
 
-    private async Task OfferCpuRuntimeAsync(bool force, bool cpuOnly = false)
-    {
-        if (!CpuRuntime.IsSupportedPlatform || CpuRuntime.Locate() is not null || (_offeredCpuRuntime && !force) || _busyDialog) return;
-        _offeredCpuRuntime = true;
-        string reason = cpuOnly
-            ? "\"CPU only\" is selected in Preferences, but hashcat cannot use the processor without a CPU runtime."
-            : "No GPU driver was found, so hashcat has no device to run on.";
-        if (await Msg.Ask(this, reason + "\n\nDownload Intel's CPU runtime to recover passwords on the processor?"))
-            await DownloadCpuRuntimeAsync();
-    }
+    /// <summary>Why the dependencies page is shown.</summary>
+    private enum DepsTrigger { Startup, User, NeedHashcat, NeedCpu }
 
-    private async Task DownloadCpuRuntimeAsync()
+    private bool DepsShown => _depsPage is not null || _depsQueued || _depsRun is { IsCompleted: false };
+
+    /// <summary>
+    /// Shows the dependencies page over the pane and waits until it closes. True when the hashcat row
+    /// (<see cref="DepsTrigger.NeedHashcat"/>) or the CPU runtime row (<see cref="DepsTrigger.NeedCpu"/>)
+    /// is green afterwards, otherwise when everything was installed. A call while the page is open waits for it.
+    /// </summary>
+    private async Task<bool> ShowDependenciesAsync(DepsTrigger trigger, IReadOnlyList<DependencyItem>? items = null)
     {
-        if (_cts is not null || _busyDialog) return;
-        if (!CpuRuntime.IsSupportedPlatform)
+        if (trigger == DepsTrigger.Startup) _depsQueued = false;
+        if (_depsRun is not { IsCompleted: false })
         {
-            await Warn("The CPU runtime download is for Windows. On Linux install PoCL; macOS needs no extra runtime.");
-            return;
+            if (trigger == DepsTrigger.User && _cts is not null) return false;
+            _depsRun = RunDependenciesPageAsync(trigger, items);
         }
-        _busyDialog = true;
-        bool ok;
-        try { ok = await CpuRuntimeDownloadWindow.RunAsync(this); }
-        finally { _busyDialog = false; }
-        if (!ok) return;
-        if (_current is null) ShowStartPage();
-        await InitHashcatAsync();
+        var outcome = await _depsRun;
+        return trigger switch
+        {
+            DepsTrigger.NeedHashcat => _hashcat is not null && RowGreen(DependencyId.Hashcat),
+            DepsTrigger.NeedCpu => RowGreen(DependencyId.CpuRuntime),
+            _ => outcome == DependenciesOutcome.Installed,
+        };
     }
 
-    private async Task DownloadNvrtcAsync()
+    private bool RowGreen(DependencyId id) => _depsItems.Any(i => i.Id == id && i.Light == Light.Green);
+
+    private Task<DependencyScan> ScanAsync() => Task.Run(() => DependencyScan.RunAsync(_settings));
+
+    private async Task<DependenciesOutcome> RunDependenciesPageAsync(DepsTrigger trigger, IReadOnlyList<DependencyItem>? items)
     {
-        if (_cts is not null || _busyDialog) return;
-        _busyDialog = true;
-        bool ok;
-        try { ok = await NvrtcDownloadWindow.RunAsync(this); }
-        finally { _busyDialog = false; }
-        if (!ok) return;
-        if (_current is null) ShowStartPage();
-        await InitHashcatAsync();
+        var pillState = _pillState;
+        var pillText = _pillBase;
+        bool rescanned = false;
+        if (items is null)
+        {
+            // A fresh scan may see a change _hashcat does not know about yet.
+            _depsItems = items = (await ScanAsync()).Items;
+            rescanned = true;
+            var needed = trigger switch { DepsTrigger.NeedHashcat => DependencyId.Hashcat, DepsTrigger.NeedCpu => DependencyId.CpuRuntime, _ => (DependencyId?)null };
+            if (needed is { } id && RowGreen(id))
+            {
+                // Nothing is missing for what the action needs: no page.
+                DebugLog.Info($"Dependencies page not shown: {id} is ready");
+                await InitHashcatAsync(showPage: false);
+                return DependenciesOutcome.Installed;
+            }
+        }
+        // Remembered skips only apply to the page shown at start; an action or the menu shows every row checked.
+        IReadOnlyCollection<string> skipped = trigger == DepsTrigger.Startup ? _settings.SkippedDependencies : [];
+        var page = new DependenciesPage(items, skipped, async () =>
+        {
+            rescanned = true;
+            return _depsItems = (await ScanAsync()).Items;
+        }, new DependencyInstaller(_settings, updateSettings: change => Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            change(_settings);
+            _settings.Save();
+        }).GetTask()));
+        _depsPage = page;
+        _depsLayer.Child = page;
+        _depsLayer.IsVisible = true;
+        SetPill(PillState.Problem, "Setup needed");
+
+        var (outcome, newlySkipped) = await page.Completion;
+        DebugLog.Info($"Dependencies page closed: {outcome}");
+        _depsLayer.IsVisible = false;
+        _depsLayer.Child = null;
+        _depsPage = null;
+
+        if (trigger == DepsTrigger.Startup && newlySkipped.Count > 0)
+        {
+            _settings.SkippedDependencies = [.. _settings.SkippedDependencies.Concat(newlySkipped).Distinct()];
+            try { _settings.Save(); } catch (IOException ex) { DebugLog.Warn("Settings not saved: " + ex.Message); }
+        }
+        // Installed (also partly, before a cancel), or a scan may have found a change made outside RecoverKit: pick up the new state.
+        if (outcome == DependenciesOutcome.Installed || rescanned || page.AnythingInstalled)
+        {
+            // Redraw the start page so stale notices disappear.
+            if (_current is null) ShowStartPage();
+            await InitHashcatAsync(showPage: false);
+        }
+        else SetPill(pillState, pillText);
+        if (_pendingOpen is { } f)
+        {
+            _pendingOpen = null;
+            Dispatcher.UIThread.Post(() => _ = OpenFileAsync(f));
+        }
+        return outcome;
     }
 
     // ------------------------------------------------------------------ tools
@@ -916,11 +915,21 @@ public sealed partial class MainWindow : Window
         Detection? det;
         try { det = await OpenAsWindow.RunAsync(this, _settings); }
         finally { _busyDialog = false; }
-        if (det is not null) await ShowDetectionAsync(det);
+        if (det is null) return;
+        // Like OpenFileAsync: an idle page is skipped, an install is never cancelled and the file waits for it.
+        if (_depsPage is { Installing: false } page) page.Skip();
+        if (_depsRun is { IsCompleted: false } run) await run;
+        await ShowDetectionAsync(det);
     }
 
     private async Task OpenFileAsync(string path)
     {
+        if (_depsPage is { } page)
+        {
+            // An install is never cancelled by opening a file: the file waits until the page closes.
+            if (page.Installing) { _pendingOpen = path; return; }
+            page.Skip();
+        }
         if (_cts is not null) { await Warn("Stop the current attack first."); return; }
         if (_busyDialog) return;
         _settings.LastOpenedDirectory = Path.GetDirectoryName(path);
@@ -1245,10 +1254,11 @@ public sealed partial class MainWindow : Window
                 Line();
                 Log(LogKind.Error, "Attack was interrupted because of an error: " + result.Error);
                 Execute(_settings.ExecuteOnFail);
-                if (result.Error?.StartsWith(HashcatRunner.NoCpuDeviceMessage, StringComparison.Ordinal) == true)
-                    Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: true, cpuOnly: true));
-                else if (result.Error?.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.OrdinalIgnoreCase) == true)
-                    Dispatcher.UIThread.Post(() => _ = OfferCpuRuntimeAsync(force: true));
+                // The CPU runtime row exists only where RecoverKit can install it (Windows).
+                if (CpuRuntime.IsSupportedPlatform
+                    && (result.Error?.StartsWith(HashcatRunner.NoCpuDeviceMessage, StringComparison.Ordinal) == true
+                        || result.Error?.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.OrdinalIgnoreCase) == true))
+                    Dispatcher.UIThread.Post(() => _ = ShowDependenciesAsync(DepsTrigger.NeedCpu));
                 break;
         }
     }
@@ -1410,6 +1420,7 @@ public sealed partial class MainWindow : Window
     {
         if (_cts is not null || _busyDialog) return;
         _busyDialog = true;
+        bool cpuOnlyBefore = _settings.Strategy == DeviceStrategy.CpuOnly, cpuWithGpuBefore = _settings.HashcatCpuWithGpu;
         var f = new PreferencesWindow(_settings, _hashcat, _devices, tab);
         bool ok;
         try { ok = await f.ShowDialog<bool>(this); }
@@ -1419,7 +1430,17 @@ public sealed partial class MainWindow : Window
         DebugLog.Info("Preferences changed");
         DebugLog.LogSettings(_settings);
         if (_hashcat is not null) _hashcat.MaxCpuThreads = _settings.MaxCpuThreads;
-        if (f.HashcatChanged) await InitHashcatAsync();
+        if (f.HashcatChanged)
+        {
+            // Not the start page: a page shown from here does not remember skips.
+            await InitHashcatAsync(showPage: false);
+            // The user just chose this hashcat: only a hashcat that cannot be used brings up the page.
+            if (_depsItems.Any(i => i.Id == DependencyId.Hashcat && i.Light == Light.Red))
+                await ShowDependenciesAsync(DepsTrigger.User, _depsItems);
+        }
+        bool cpuTurnedOn = (!cpuOnlyBefore && _settings.Strategy == DeviceStrategy.CpuOnly) || (!cpuWithGpuBefore && _settings.HashcatCpuWithGpu);
+        if (OperatingSystem.IsWindows() && cpuTurnedOn && CpuRuntime.Locate() is null)
+            await ShowDependenciesAsync(DepsTrigger.NeedCpu);
     }
 
     private async Task ShowHelpAsync()

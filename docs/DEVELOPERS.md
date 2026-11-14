@@ -124,15 +124,34 @@ monochrome `LineIcon`s and the wizard's `AttackCard`s. Colours come in light/dar
 Windows "Animation effects" off, or `RECOVERKIT_REDUCE_MOTION=1`). The live attack view updates at
 most 8 times a second from the newest hashcat status, whatever rate hashcat reports at.
 
-hashcat is the GPU engine and is fetched on demand: the first time you start RecoverKit
-without it, choose **Tools > Download hashcat** (also on the Preferences "Files and Paths"
-tab, or run `recoverkit-cli install-hashcat`). It downloads the pinned release from
-hashcat.net, checks its SHA-256, and unpacks it into a per-user `engines` folder that
-RecoverKit then finds automatically. On Windows the small official `7zr.exe` extractor is
-downloaded too when no 7-Zip is already installed.
+hashcat is the GPU engine and ships in every release. On Windows `installer/build.ps1` downloads
+the pinned official `hashcat-8.0.0.7z` at build time (cached in `installer/cache/`; pass
+`-HashcatArchive <path>` for an offline build), checks its SHA-256, extracts it with 7-Zip (the
+build machine needs `7z.exe`), drops the non-Windows binaries, writes the `RECOVERKIT_BUNDLE` stamp
+and stages it as `hashcat/` beside `RecoverKit.exe`. The MSI and the portable zip both carry it.
+At start `HashcatInstaller.TryInstallBundled()` copies it silently into the per-user `engines`
+folder (hashcat writes next to its executable and `Program Files` is not writable), as on macOS
+([macOS hashcat](#macos-hashcat)). Nothing is downloaded at run time. A Linux or source build
+without a bundle shows instructions on the dependencies page instead: install hashcat 8 with the
+package manager, set a path in Options > Preferences > Files and Paths (the "Default" button there clears it
+and uses the managed copy), or run `recoverkit-cli install-hashcat --from <folder>`
+(without `--from` the CLI only copies the bundle).
 
-You can still place hashcat in a `hashcat` folder next to `RecoverKit.exe`, or point at an
-existing install in Options > Preferences > Files and Paths.
+### Dependencies page
+
+`Tools > Dependencies...` (and automatically at start when something needs attention) shows
+`DependenciesPage` in the main pane: one row per component (hashcat, NVRTC and the Intel CPU
+runtime on Windows) with a green, yellow or red light. Red means RecoverKit cannot use hashcat until
+it is fixed; yellow means it works but slower or with less, and can be left alone; green is
+installed or not needed. Red rows that have an action are always installed (some have none: no bundle on a source build, a hashcat that
+fails to run, the CPU runtime while RecoverKit runs elevated), yellow ones can be unchecked, a license
+checkbox per download must be ticked, and one **Install all** button installs the checked rows in
+turn with a single progress display. The check at start is local only (no network) and the page
+stays hidden when everything is green or the yellow items were skipped earlier: items skipped from
+the start page are remembered (`Settings.SkippedDependencies`) until their reason changes. Actions
+that need hashcat, a failed attack without a CPU device and Preferences changes that need the CPU
+runtime show the page as well, regardless of remembered skips. RecoverKit's own update is not on
+this page; it stays on the toolbar Update button.
 
 ## macOS hashcat
 
@@ -264,9 +283,11 @@ left by an earlier RecoverKit in `engines/hashcat-7.1.2`, or the user's own) mak
 `Unsupported`, which used to send ZIP attacks to the CPU without a word; `HashcatKernels.UnavailableReason`
 now names the cause in the log. At start the main window compares the version hashcat reports with
 `HashcatInstaller.Version` (`HashcatTool.IsOlderThanPinned`, not the folder name) and offers the pinned
-version (`OfferHashcatUpgradeAsync`): once per start for a copy RecoverKit installed, and for the user's
-own copy until they decline it (`Settings.DeclinedHashcatUpgrade`, keyed by path and version). `Locate`
-prefers the pinned copy over any other `engines/hashcat-*` (`IsUnpinnedManagedCopy`).
+version through the dependencies page: a hashcat older than the pinned one is a yellow row, only
+when that copy is not a RecoverKit-managed one and a bundle exists, whose
+action switches to the bundled copy (`Settings.HashcatPath`; the user's own copy is not touched), and
+a skip is remembered per reason. `Locate` prefers the pinned copy over any other `engines/hashcat-*`
+(`IsUnpinnedManagedCopy`).
 
 Stored partials have only the header check (1 in 128 or 256 candidates), which overwhelms
 hashcat's one-hit-per-launch result buffer and can hide the real password. Recovery therefore
@@ -326,15 +347,16 @@ in `%CUDA_PATH%\bin`, `%CUDA_PATH%\bin\x64` or any `PATH` folder, and the matchi
 next to it; it needs CUDA 12.0 or later for both the driver and NVRTC.
 
 NVIDIA publishes NVRTC on its own as the `nvidia-cuda-nvrtc-cu12` package on PyPI (CUDA EULA,
-which lists these DLLs as redistributable). **Tools > Download NVIDIA CUDA compiler (NVRTC)**
-(Windows) downloads the wheel after the user accepts NVIDIA's license, checks its SHA-256,
+which lists these DLLs as redistributable). The NVRTC row of **Tools > Dependencies** (Windows)
+downloads the wheel after the user accepts NVIDIA's license, checks its SHA-256,
 unpacks the two DLLs and the license text into `engines/nvrtc-<version>` and puts that folder on
 the `PATH` of every hashcat process (`NvrtcRuntime.ApplyTo`; not when RecoverKit runs elevated,
 as with the CPU runtime). hashcat hands the driver PTX from NVRTC, and a driver only accepts PTX
 from an NVRTC no newer than itself, so the package is chosen by the CUDA version in
 `nvidia-smi`'s banner: 12.8.93 for drivers with CUDA 12.8 or later (also the first that knows the
-RTX 50 series), 12.4.127 for CUDA 12.4 to 12.7; older drivers are asked to update. The start page
-says when an NVIDIA GPU runs through OpenCL. Installing the CUDA Toolkit works as well. Whether
+RTX 50 series), 12.4.127 for CUDA 12.4 to 12.7; older drivers are asked to update. The row is
+yellow when an NVIDIA GPU runs through OpenCL and no CUDA device is listed. NVRTC is downloaded,
+not bundled. Installing the CUDA Toolkit works as well. Whether
 CUDA is faster than OpenCL for a given mode shows in `recoverkit-cli bench-zip`, which measures
 both. The download and the CUDA path were not tested on real NVIDIA hardware.
 
@@ -374,7 +396,7 @@ Programs entry. The default build is self-contained (no runtime prerequisite); p
 ## Command line
 
 ```
-recoverkit-cli install-hashcat                        # download + unpack the GPU engine
+recoverkit-cli install-hashcat                        # copy the bundled GPU engine (or --from <folder>)
 recoverkit-cli extract <file>                         # identify + print the extracted hash
 recoverkit-cli extract database.kdbx --keyfile database.key # KeePass password + optional keyfile
 recoverkit-cli crack <file> --brute sd --min 1 --max 6 # brute force (s=smalls c=caps d=digits e=specials)
@@ -824,20 +846,22 @@ notes are taken from it, and the release job fails if the section is missing.
   accepts at most 327,520 encrypted bytes and 655,360 unpacked bytes per selected file.
   Data-only recovery uses hashcat on both CPU and GPU; the built-in RAR 3 kernel handles `-hp` only.
   Only the selected file's password is recovered; other entries can have different passwords.
-- The per-user CPU runtime is not used when RecoverKit runs as administrator: the OpenCL loader
+- The Intel CPU runtime (OpenCL) is a download on the dependencies page, not bundled: it is red when
+  hashcat has no usable device and yellow when Preferences ask for the processor next to the GPU
+  (`HashcatCpuWithGpu`). It is not used when RecoverKit runs as administrator: the OpenCL loader
   ignores per-process driver lists in elevated processes on purpose, and RecoverKit does not register
   a user-writable DLL system-wide.
 - The debug log (`%APPDATA%\RecoverKit\logs`, `~/Library/Logs/RecoverKit` on macOS) records environment, settings, every hashcat command
   with output and exit code, detection results, wizard choices and crashes. Recovered passwords are
   never written to it, and the profile path and account name are replaced by `%USERPROFILE%` / `%USERNAME%`.
-- The built-in downloader and the macOS build pin hashcat 8.0.0. Resuming: hashcat 8 no longer runs
+- The bundled hashcat (Windows build script and macOS build) is pinned to 8.0.0. Resuming: hashcat 8 no longer runs
   the command line stored in a `.restore` file (CVE-2026-68766, `--restore` only prints it), so
   `HashcatRunner` gives the same command line again with `--restore-position`, which takes only the
   position from the file; with an older hashcat (`--version` below 8) it still uses `--restore`.
   hashcat 8 accepts `-w` but always uses the former workload 3, so the Workload setting no longer
   changes anything; the GPU load limit (duty cycle) still works. An existing per-user
   `engines/hashcat-7.1.2` copy keeps working until hashcat 8.0.0 is installed next to it, which
-  `HashcatTool.Locate` then prefers; the app shows a notice meanwhile. Every hash mode RecoverKit
+  `HashcatTool.Locate` then prefers. Every hash mode RecoverKit
   produces was checked against hashcat 8.0.0 with the module's example hash and password on the
   M1 Pro (OpenCL); notes below that name hashcat 7.1.2 describe how the format was validated at
   the time.

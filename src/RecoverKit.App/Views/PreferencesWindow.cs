@@ -228,7 +228,7 @@ public sealed class PreferencesWindow : Window
         var note = L.Text(Platform.IsMac
             ? "On this computer hashcat sees no processor device: \"CPU only\" runs the built-in CPU engine, which covers ZIP, Office 97-2003, PDF and RAR 3.x."
             : "hashcat sees no processor device yet: \"CPU only\" runs the built-in CPU engine for ZIP, Office 97-2003, PDF and RAR 3.x. " +
-              "Other formats need a CPU runtime: Tools > Download CPU runtime.", dim: true, wrap: true);
+              "Other formats need a CPU runtime: Tools > Dependencies.", dim: true, wrap: true);
         note.FontSize = 12;
         void Sync() => note.IsVisible = _strategy.SelectedIndex == (int)DeviceStrategy.CpuOnly
             && HashcatRunner.NoCpuDevice(new Settings { Strategy = DeviceStrategy.CpuOnly }, _devices);
@@ -369,13 +369,10 @@ public sealed class PreferencesWindow : Window
         {
             if (await PickFile(OperatingSystem.IsWindows() ? "hashcat|hashcat.exe|All files|*.*" : "All files|*.*") is { } p) _hashcatPath.Text = p;
         }, 40), 0, 1);
-        g.Put(L.Button(Platform.IsMac ? "Install" : "Download", async () =>
+        g.Put(L.Button("Default", () =>
         {
-            if (await HashcatDownloadWindow.RunAsync(this) is { } exe)
-            {
-                _hashcatPath.Text = exe;
-                HashcatChanged = true;
-            }
+            _hashcatPath.Text = "";
+            HashcatChanged = true;
         }, 94), 0, 2);
         return g;
     }
