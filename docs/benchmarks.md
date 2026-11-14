@@ -47,6 +47,21 @@ programs, at a fixed length:
 The commercial benchmark's RAR 3 figure matches a 4-character password and its PDF R6 figure a
 7-character one, and so does hashcat's `-b` figure for PDF R6 (3,303).
 
+ZIP classic was checked the same way on 2026-11-15 (live brute force in the commercial product, 96
+characters, fixed length, 8 threads, stored single-file archives). Its speed does not depend on the
+password length; it depends on the file:
+
+| Archive | Length 5 | Length 6 | Length 7 |
+|---|---:|---:|---:|
+| one stored file of 28 bytes | 195.8 M | 193.5 M | 196.0 M |
+| one stored file of 4,053 bytes | 34.9 M | 34.7 M | 34.6 M |
+
+Its benchmark figure (190.1 M) matches the tiny file. RecoverKit's ZIP benchmark also uses one
+stored file of 29 bytes, so the two ZIP figures compare like with like. On larger files most of the
+time goes into checking the candidates that pass the one-byte header test against the file, which
+is why a real archive is slower in both programs. The other formats in the comparison cost the same
+at any test length: their key derivation hashes the password once.
+
 ## hashcat 7.1.2 baseline (same VM, CPU, Intel OpenCL runtime)
 
 These are the formats where plain hashcat was far behind the commercial product, which is why the
