@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text.Json;
 
 namespace RecoverKit.Core.Hashcat;
@@ -62,13 +63,21 @@ public sealed class HashcatStatus
     };
 
     /// <summary>A copy with other devices, status or start time (used by the GPU temperature guard).</summary>
-    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null, long? restorePoint = null) => new()
+    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null, long? restorePoint = null, long? progressTotal = null) => new()
     {
         Status = status ?? Status, GuessBase = GuessBase, GuessMod = GuessMod, GuessBasePercent = GuessBasePercent,
-        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = ProgressTotal, RestorePoint = restorePoint ?? RestorePoint,
+        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = progressTotal ?? ProgressTotal, RestorePoint = restorePoint ?? RestorePoint,
         ResumedFrom = ResumedFrom, Rejected = Rejected, RecoveredHashes = RecoveredHashes, TotalHashes = TotalHashes,
         TimeStart = timeStart ?? TimeStart, EstimatedStop = EstimatedStop, Devices = devices ?? Devices,
     };
+
+    /// <summary>
+    /// hashcat cannot know how many candidates arrive through stdin and reports the total equal to what it has
+    /// done (a full bar, no time left). RecoverKit knows the count it feeds, so a running attack uses that.
+    /// </summary>
+    public HashcatStatus WithStdinTotal(BigInteger candidates)
+        => candidates <= 0 || Status != 3 ? this
+            : With(progressTotal: (long)BigInteger.Max(BigInteger.Min(candidates, long.MaxValue), ProgressDone));
 
     public static HashcatStatus? TryParse(string line)
     {

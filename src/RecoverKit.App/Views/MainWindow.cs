@@ -872,7 +872,7 @@ public sealed partial class MainWindow : Window
             double secs = Math.Max(0.5, (DateTime.Now - started).TotalSeconds);
             _curPassword.Text = pmk ? "PMKs" : "words";
             _tested.Text = $"{Fmt.Count(n)} of {Fmt.Count(total)}";
-            _curSpeed.Text = Fmt.Speed(n / secs);
+            _curSpeed.Text = Fmt.FullSpeed(n / secs);
             _estTime.Text = n > 0 ? Fmt.Duration((double)(total - n) / (n / secs)) : "-";
             _progress.Value = total > 0 ? Math.Clamp((double)n / (double)total, 0, 1) : 0;
         });
@@ -1327,8 +1327,8 @@ public sealed partial class MainWindow : Window
     {
         double speed = s.TotalSpeed;
         double elapsed = s.TimeStart > 0 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() - s.TimeStart : (DateTime.Now - _stepStarted).TotalSeconds;
-        _curSpeed.Text = Fmt.Speed(speed);
-        ToolTip.SetTip(_curSpeed, "Average: " + (elapsed > 1 ? Fmt.Speed((s.ProgressDone - s.ResumedFrom) / elapsed) : Fmt.Speed(speed)));
+        _curSpeed.Text = Fmt.FullSpeed(speed);
+        ToolTip.SetTip(_curSpeed, "Average: " + (elapsed > 1 ? Fmt.FullSpeed((s.ProgressDone - s.ResumedFrom) / elapsed) : Fmt.FullSpeed(speed)));
         long remaining = Math.Max(0, s.ProgressTotal - s.ProgressDone);
         _estTime.Text = s.Status == 3 && speed > 0 ? Fmt.Duration(remaining / speed) : s.StatusText;
         _curPassword.Text = TryingText(s);

@@ -29,6 +29,9 @@ internal static class Fmt
         _ => $"{hps / 1e9:N2} G p/s",
     };
 
+    /// <summary>Every digit, grouped: "1 382 456 789 p/s" (the status band has room for it).</summary>
+    public static string FullSpeed(double hps) => hps <= 0 ? "n/a" : $"{Count((long)Math.Round(hps))} p/s";
+
     public static string Duration(double seconds)
     {
         if (double.IsNaN(seconds) || seconds < 0) return "n/a";

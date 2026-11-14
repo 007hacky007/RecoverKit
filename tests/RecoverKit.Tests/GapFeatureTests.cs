@@ -78,6 +78,23 @@ public class GapFeatureTests
     }
 
     [Fact]
+    public void StdinAttacksShowTheCountRecoverKitFeeds()
+    {
+        // hashcat reports progress [done, done] for candidates read from stdin.
+        const string line = "{ \"guess\": { \"guess_base\": \"stdin\", \"guess_mod\": \"rules.rule\" }, \"status\": 3, \"progress\": [1000, 1000], \"devices\": [ { \"device_id\": 1, \"speed\": 100 } ] }";
+        var s = RecoverKit.Core.Hashcat.HashcatStatus.TryParse(line)!;
+        Assert.Equal(1, s.Fraction);
+        var fed = s.WithStdinTotal(4000);
+        Assert.Equal(4000, fed.ProgressTotal);
+        Assert.Equal(0.25, fed.Fraction);
+        Assert.Equal(1000, s.WithStdinTotal(10).ProgressTotal);                        // never below what is done
+        Assert.Equal(long.MaxValue, s.WithStdinTotal(System.Numerics.BigInteger.Pow(10, 30)).ProgressTotal);
+        Assert.Same(s, s.WithStdinTotal(0));                                           // count unknown
+        var exhausted = RecoverKit.Core.Hashcat.HashcatStatus.TryParse(line.Replace("\"status\": 3", "\"status\": 5"))!;
+        Assert.Equal(1000, exhausted.WithStdinTotal(4000).ProgressTotal);              // the run is over: the bar fills
+    }
+
+    [Fact]
     public void ExportEncodingsMatchTheOriginalChoices()
     {
         Assert.Equal(["UTF8", "UTF8-BOM", "UTF16", "ANSI/CSL"], CandidateExport.Encodings);

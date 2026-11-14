@@ -587,6 +587,7 @@ public sealed class HashcatRunner(HashcatTool tool)
                             Temperature = d.Temperature, Utilization = d.Utilization,
                         } : d).ToList());
                 if (r.ZipFilterReplayPending?.Invoke() == true) st = st.With(restorePoint: 0);
+                if (useStdin) st = st.WithStdinTotal(r.Attack.Keyspace);
                 last = st;
                 GpuTemperature.Record(st);
                 StatusReceived?.Invoke(guard?.Adjust(st) ?? st);

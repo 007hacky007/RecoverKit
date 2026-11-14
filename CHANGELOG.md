@@ -11,6 +11,12 @@ All notable changes to RecoverKit. Downloads are on the
   limit". The password is now checked against the first file of the block, so only the beginning of
   the block is needed. An archive whose only encrypted stream is one file larger than about 8 MB is
   still refused, because 7-Zip stores a checksum only for the whole file.
+- Attacks that RecoverKit feeds to hashcat itself (dictionaries converted on the fly, word
+  combinations, national characters) showed "0s" left and a full progress bar. They now show the
+  progress and time left from the number of candidates RecoverKit sends.
+
+### Changed
+- The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
 
 ## [1.6.1] - 2026-11-14
 
