@@ -78,7 +78,7 @@ public sealed class SessionState
 }
 
 /// <summary>Runs a list of attacks against a target with hashcat until the password is found.</summary>
-public sealed class RecoverySession(HashcatTool tool, Settings settings)
+public sealed partial class RecoverySession(HashcatTool tool, Settings settings)
 {
     public event Action<LogKind, string>? Log;
     public event Action<HashcatStatus>? Status;
@@ -105,6 +105,7 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
+        if (target.SevenZipCpu is not null) return await RunSevenZipCpuAsync(target, filePath, steps, resume, ct);
         if (resume is not null && target.LegacyZipTarget is { } old && resume.Key == SessionState.KeyFor(old)) target = old;
         target.VolumeCredentials?.ValidateUnchanged();
         string key = SessionState.KeyFor(target);

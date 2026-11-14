@@ -109,7 +109,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
 
         void Worker(int t)
         {
-            var worker = kernel.CreateWorker();
+            var worker = kernel.CreateWorker(stop.Token);
             var digits = new int[prefixLen];
             var prefix = new byte[prefixLen];
             var packed = new byte[prefixLen * batch];
@@ -167,6 +167,8 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         }
                         from = hit + 1;
                     }
+                    // A cancellable kernel can return before finishing the last-character loop.
+                    if (stop.IsCancellationRequested) return;
                     long before = p;
                     p += count;
                     if ((before >> 6) != (p >> 6) && stop.IsCancellationRequested) break;

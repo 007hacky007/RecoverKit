@@ -503,6 +503,11 @@ public sealed class WizardWindow : Window
             return t;
         }
         int modes = TargetModes.Count();
+        if (_target.SevenZipCpu is not null)
+        {
+            _speedNote.Child = NoteBox(Small("This archive is checked on the processor without the graphics card. Time estimates use an approximate CPU speed; the running attack shows the measured speed."));
+            return;
+        }
         if (_measureCts is not null)
         {
             var bar = _measureBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 4, MinHeight = 4, Width = 120, VerticalAlignment = VerticalAlignment.Center };
@@ -686,7 +691,9 @@ public sealed class WizardWindow : Window
     {
         var count = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
         var time = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
-        var speed = new TextBox { Text = RecoverKit.Core.Diagnostics.ProfileSettings.EstimatedSpeed(_settings, _devices, _target.Modes[0]).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
+        var speed = new TextBox { Text = (_target.SevenZipCpu is { } cpu
+            ? new RecoverKit.Core.Native.Kernels.SevenZipKernel(cpu).SpeedHint * (_settings.MaxCpuThreads > 0 ? Math.Min(_settings.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount)
+            : RecoverKit.Core.Diagnostics.ProfileSettings.EstimatedSpeed(_settings, _devices, _target.Modes[0])).ToString("F0"), TextAlignment = TextAlignment.Right, MinWidth = 80 };
         t.Put(Lb("Passwords to process:"), row, 0);
         t.Put(count, row, 1, 3);
         t.Put(Lb("Estimated time:"), row + 1, 0);

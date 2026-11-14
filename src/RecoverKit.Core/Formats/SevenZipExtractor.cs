@@ -1,6 +1,6 @@
 namespace RecoverKit.Core.Formats;
 
-/// <summary>7z streams and AES properties, serialized for hashcat 7.1.2 mode 11600.</summary>
+/// <summary>7z streams and AES properties, serialized for hashcat 8.0.0 mode 11600.</summary>
 public static class SevenZipExtractor
 {
     private static ReadOnlySpan<byte> Signature => [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
@@ -104,6 +104,7 @@ public static class SevenZipExtractor
     private static void SetTarget(Stream s, StreamsInfo info, ulong dataBase, Detection d, bool encryptedHeader)
     {
         Candidate? best = null;
+        Candidate? cpuBest = null;
         bool encrypted = false;
         var reasons = new HashSet<string>();
         foreach (var f in info.Folders)
@@ -115,7 +116,7 @@ public static class SevenZipExtractor
             { reasons.Add("filter chains or multiple packed streams"); continue; }
             var aes = chain[0];
             var props = AesProperties(aes.Properties);
-            if (props.Salt.Length != 0) { reasons.Add("salted AES (hashcat requires an empty salt)"); continue; }
+            if (props.Salt.Length != 0) { reasons.Add("salted AES (neither hashcat nor the built-in processor check supports it)"); continue; }
             if (props.Power > 24) { reasons.Add("NumCyclesPower above 24 (including direct-key mode)"); continue; }
             int type = 0;
             byte[] attributes = [];
@@ -133,6 +134,28 @@ public static class SevenZipExtractor
             ulong packed = info.Sizes[f.PackIndex], unpacked = f.UnpackSizes[aes.Output];
             if (packed == 0 || packed % 16 != 0 || unpacked == 0 || unpacked > packed || packed - unpacked > 15)
                 throw new FormatException("Invalid AES stream sizes.");
+            ulong cpuLength = f.FinalSize;
+            uint? cpuCrc = f.Crc;
+            if (f.SubSizes.Count > 0 && f.SubSizes[0] > 0 && f.SubCrcs[0] is uint firstFileCrc)
+            { cpuLength = f.SubSizes[0]; cpuCrc = firstFileCrc; }
+            if (cpuLength < 8 && f.SubSizes.Count > 1)
+            {
+                // A tiny first file is too weak a password check; use the complete solid block.
+                cpuLength = f.FinalSize; cpuCrc = f.Crc;
+                if (!cpuCrc.HasValue && f.SubCrcs.All(c => c.HasValue))
+                {
+                    uint combined = 0;
+                    for (int i = 0; i < f.SubSizes.Count; i++) combined = CombineCrc(combined, f.SubCrcs[i]!.Value, f.SubSizes[i]);
+                    cpuCrc = combined;
+                }
+            }
+            if (cpuCrc.HasValue && cpuLength >= 8)
+            {
+                var cpu = new Candidate(f, props, type, attributes, packed, unpacked, cpuCrc.Value, cpuLength);
+                if (cpuBest is null || cpu.CrcLength < cpuBest.CrcLength) cpuBest = cpu;
+            }
+            else if (cpuLength < 8) reasons.Add("the checksum covers fewer than 8 bytes, too little data for a reliable CPU password check");
+            else if (!cpuCrc.HasValue) reasons.Add("no usable first-file or whole-stream CRC for the CPU check");
             if (packed > DataLimit)
             {
                 // A solid block too large for hashcat: its first file's CRC is known, and hashcat decrypts
@@ -190,8 +213,13 @@ public static class SevenZipExtractor
         }
         if (best is null)
         {
+            if (cpuBest is not null)
+            {
+                SetCpuTarget(s, info, dataBase, d, cpuBest, reasons);
+                return;
+            }
             d.Message = encrypted
-                ? "No encrypted 7z stream is usable by hashcat 11600: " + string.Join("; ", reasons) + ". Try an archive with encrypted headers (-mhe=on)."
+                ? "No encrypted 7z stream is usable by hashcat 11600 or the built-in processor check: " + string.Join("; ", reasons) + ". Try an archive with encrypted headers (-mhe=on)."
                 : "Archive is not password protected (no encrypted data streams).";
             return;
         }
@@ -212,6 +240,44 @@ public static class SevenZipExtractor
                 (encryptedHeader ? "Verifies the encrypted archive header. " : "Recovers the password of the selected encrypted stream; other streams can use different passwords. ") +
                 (b.CrcLength < 8 ? "The selected data is short; verify any recovered password with 7-Zip because false positives are possible. " : "") +
                 "Hashcat supports Copy, LZMA1, LZMA2 and Deflate without filters, with no AES salt.",
+        };
+    }
+
+    private static void SetCpuTarget(Stream s, StreamsInfo info, ulong dataBase, Detection d, Candidate b, IReadOnlyCollection<string> reasons)
+    {
+        var iv = new byte[16]; b.Aes.Iv.CopyTo(iv, 0);
+        long offset = checked((long)(dataBase + info.Positions[b.Folder.PackIndex]));
+        var cpu = new SevenZipCpuTarget(s is MultiVolumeStream volumes ? volumes.Paths : [d.FilePath], offset,
+            checked((long)b.Packed), checked((long)b.Unpacked), checked((long)b.Folder.FinalSize),
+            checked((long)b.CrcLength), b.Crc, b.Type, b.Attributes, b.Aes.Power, b.Aes.Salt, iv);
+        // Stable cache/session identity without an archive path or a full-file read.
+        string metadata = System.Text.Json.JsonSerializer.Serialize(new { cpu.DataOffset, cpu.PackedSize,
+            cpu.AesOutputSize, cpu.OutputSize, cpu.CrcLength, cpu.Crc, cpu.Method, cpu.Properties, cpu.Power, cpu.Salt, cpu.Iv });
+        using var identity = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        identity.AppendData(System.Text.Encoding.UTF8.GetBytes(metadata));
+        identity.AppendData(Read(s, (ulong)offset, Math.Min(64, b.Packed)));
+        identity.AppendData(Read(s, (ulong)offset + b.Packed - 16, 16));
+        ulong history = b.Type is 1 or 2
+            ? Math.Min(SevenZipLzma.DictionarySize(b.Attributes, b.Type == 2), b.CrcLength) : 0;
+        history = (history + 65535) / 65536 * 65536;
+        string notes = "Hashcat can check encrypted files only up to 8 MiB, with at most 9,999,999 bytes for the decompressed checksum. " +
+            "None of this archive's encrypted streams fits hashcat: " + string.Join("; ", reasons) + ". " +
+            "RecoverKit therefore checks passwords on the processor without the graphics card. " +
+            "The default SHA-256 key derivation is slow: roughly hundreds of passwords per second on a modern processor, depending on password length and thread count. " +
+            "Copy, LZMA, LZMA2 and Deflate are supported; PPMd, BZip2, BCJ filters and salted AES are not. " +
+            (history > 0 ? $"A full check may use up to {history / 1024:N0} KiB of dictionary history, plus decoder models and stream buffers. " +
+                "Only one full check runs at a time and reuses that history; initial password checks run in parallel. " : "") +
+            "Recovers the password of the selected stream; other streams can use different passwords.";
+        d.Add("Password checking", notes);
+        d.Add("Selected encrypted stream", $"{b.Packed:N0} encrypted bytes, checking {b.CrcLength:N0} decoded bytes on the processor");
+        var kernel = new Native.Kernels.SevenZipKernel(cpu);
+        d.Target = new HashTarget
+        {
+            FormatId = "7ZIP", FormatName = "7-Zip archive", Modes = [],
+            HashLines = "$recoverkit-7z$" + Convert.ToHexString(identity.GetHashAndReset()).ToLowerInvariant(),
+            SevenZipCpu = cpu, ConfirmPassword = bytes => kernel.Verify(bytes),
+            Protection = $"AES-256, SHA-256 x {1UL << b.Aes.Power:N0} (CPU)",
+            Speed = SpeedClass.VerySlow, MaxPasswordLength = 256, Utf16Password = true, Notes = notes,
         };
     }
 
@@ -268,10 +334,10 @@ public static class SevenZipExtractor
         var info = new StreamsInfo();
         if (r.Peek() == 6)
         {
-            r.Byte(); info.PackPos = r.Number();
+            r.Byte(); info.PackPos = r.Size();
             int n = r.Count();
             r.Expect(9);
-            for (int i = 0; i < n; i++) info.Sizes.Add(r.Number());
+            for (int i = 0; i < n; i++) info.Sizes.Add(r.Size());
             if (r.Peek() == 10) { r.Byte(); Digests(r, n); }
             r.Expect(0);
         }
@@ -290,7 +356,7 @@ public static class SevenZipExtractor
             }
             r.Expect(12);
             foreach (var f in info.Folders)
-                for (int i = 0; i < f.Outputs; i++) f.UnpackSizes.Add(r.Number());
+                for (int i = 0; i < f.Outputs; i++) f.UnpackSizes.Add(r.Size());
             if (r.Peek() == 10)
             {
                 r.Byte(); var crcs = Digests(r, n);
@@ -367,7 +433,7 @@ public static class SevenZipExtractor
             if (counts[i] > 1 && !sizes) throw new FormatException("Missing 7z substream sizes.");
             for (int j = 1; j < counts[i]; j++)
             {
-                ulong size = r.Number();
+                ulong size = r.Size();
                 if (size > remaining) throw new FormatException("Invalid 7z substream size.");
                 f.SubSizes.Add(size); remaining -= size;
             }
@@ -469,6 +535,12 @@ public static class SevenZipExtractor
                 if ((first & mask) == 0) return value | ((ulong)(first & (mask - 1)) << (8 * i));
                 value |= (ulong)Byte() << (8 * i);
             }
+            return value;
+        }
+        public ulong Size()
+        {
+            ulong value = Number();
+            if (value > long.MaxValue) throw new FormatException("7z stream size exceeds the supported 64-bit range.");
             return value;
         }
         public int Count(int limit = 100000)

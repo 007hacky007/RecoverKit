@@ -17,6 +17,9 @@ public abstract class NativeKernel
 
     public abstract KernelWorker CreateWorker();
 
+    /// <summary>Lets streaming workers stop unfinished checks when the engine stops or finds a password.</summary>
+    public virtual KernelWorker CreateWorker(CancellationToken stop) => CreateWorker();
+
     /// <summary>Whether dictionary bytes can be verified without a different encoding or longer kernel layout.</summary>
     public virtual bool SupportsDictionaryPassword(ReadOnlySpan<byte> password) => password.Length <= MaxPasswordLength;
 

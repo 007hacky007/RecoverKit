@@ -258,26 +258,35 @@ try
             if (argv.Contains("--hybrid")) { settings.HybridCpuGpu = true; settings.PerformanceStrategyExplicit = true; }
             if (argv.Contains("--hashcat-cpu")) settings.HashcatCpuWithGpu = true;
             if (Opt(argv, "--threads") is { } thr) { settings.MaxCpuThreads = int.Parse(thr); settings.PerformanceThreadsExplicit = true; }
-            // macOS app: refresh the per-user copy of the hashcat bundled in RecoverKit.app (no-op elsewhere).
-            if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
-                Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
-            var tool = HashcatTool.Locate(settings.HashcatPath)
-                ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>, or run 'recoverkit-cli install-hashcat --from <folder>'.");
-            Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
-
             var d = Open(argv[1], argv);
             Print(d);
             if (d.Target is null) return 2;
+            HashcatTool tool;
+            if (d.Target.SevenZipCpu is not null)
+            {
+                // CPU-only sessions never invoke this tool.
+                tool = HashcatTool.ForExe("hashcat-unused");
+                Console.WriteLine("Using the built-in CPU engine without the graphics card.");
+            }
+            else
+            {
+                // macOS app: refresh the per-user copy of the bundled hashcat.
+                if (HashcatInstaller.BundledDirectory is not null && HashcatInstaller.TryInstallBundled())
+                    Console.WriteLine($"Bundled hashcat {HashcatInstaller.BundledStamp} is installed.");
+                tool = HashcatTool.Locate(settings.HashcatPath)
+                    ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>, or run 'recoverkit-cli install-hashcat --from <folder>'.");
+                Console.WriteLine($"Using {tool.Exe} ({await tool.VersionAsync()})");
+            }
             DebugLog.RegisterHashes(d.Target.HashLines);
 
             var steps = BuildSteps(argv, d.Target);
             if (argv.Contains("--no-stay")) steps = steps.Where(s => s.Kind != AttackKind.StayZip).ToList();
             // Same device detection as the GUI, so the CPU/GPU strategy and built-in engine decisions match.
-            var devices = await tool.DevicesAsync();
+            var devices = d.Target.SevenZipCpu is not null ? [] : await tool.DevicesAsync();
             foreach (var dev in devices)
                 Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.IsIntegratedGpu ? ", integrated" : "")}" +
                                   $"{(dev.IsSkippedAlias ? ", skipped by hashcat" : "")}{(HashcatRunner.IsDisabled(settings, dev) ? ", unchecked in Preferences" : "")})");
-            if (powerLimit is int watts)
+            if (powerLimit is int watts && d.Target.SevenZipCpu is null)
             {
                 var gpus = await PowerLimiter.QueryAsync();
                 if (gpus.Count == 0) Console.WriteLine("No NVIDIA GPU with an adjustable power limit was found; --power-limit is ignored.");
