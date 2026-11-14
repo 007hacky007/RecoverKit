@@ -101,13 +101,17 @@ public sealed class ZipFalsePositiveTests : IDisposable
     }
 
     [Fact]
-    public void DeflatedEntryIsPreferredUnlessTheStoredOneIsMuchSmaller()
+    public void StoredEntryUsesTheMeasuredSpeedEstimateWhenConfirmationExists()
     {
         var text = new ZipCryptoSample.Entry("text.txt", ZipCryptoSample.Text(4000, new Random(2)), true);
         var stored200 = new ZipCryptoSample.Entry("s200.bin", new byte[200], false);
         var stored20 = new ZipCryptoSample.Entry("s20.bin", new byte[20], false);
-        Assert.Contains(Detect(Archive(stored200, text)).Info, kv => kv.Key == "Attacked entry" && kv.Value.StartsWith("text.txt"));
+        Assert.Contains(Detect(Archive(stored200, text)).Info, kv => kv.Key == "Attacked entry" && kv.Value.StartsWith("s200.bin"));
         Assert.Contains(Detect(Archive(stored20, text)).Info, kv => kv.Key == "Attacked entry" && kv.Value.StartsWith("s20.bin"));
+        Assert.Contains(Detect(Archive(new("s2000.bin", new byte[2000], false), text)).Info,
+            kv => kv.Key == "Attacked entry" && kv.Value.StartsWith("s2000.bin"));
+        Assert.Contains(Detect(Archive(new("s4000.bin", new byte[4000], false), text)).Info,
+            kv => kv.Key == "Attacked entry" && kv.Value.StartsWith("text.txt"));
     }
 
     [Fact]

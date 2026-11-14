@@ -10,7 +10,7 @@ namespace RecoverKit.Core.Diagnostics;
 public static class CpuDiagnosticWorker
 {
     public const string Command = "--rk-cpu-diagnostic-worker";
-    public sealed record WorkerResult(CpuDiagnostics.CorrectnessResult Check, double Speed, double ElapsedSeconds, string ActualPath, string? Error = null);
+    public sealed record WorkerResult(CpuDiagnostics.CorrectnessResult Check, double Speed, double ElapsedSeconds, string ActualPath, string? Error = null, string SelfTestState = "not applicable");
 
     public static int Run(string[] args)
     {
@@ -24,16 +24,20 @@ public static class CpuDiagnosticWorker
         {
             string variant = args[2];
             if (!NativeKernels.BenchmarkHashes.ContainsKey(mode) || !KernelVariants.Supported(mode, variant))
-                result = Failed("Requested CPU variant is unsupported.");
+                result = new(new(false, 0, "Requested CPU variant is unsupported: CPU feature missing or native library unavailable."), 0, 0, NativeKernels.CpuPath(mode), "Requested CPU variant is unsupported: CPU feature missing or native library unavailable.", NativeKernels.WideSelfTestState(mode));
             else
             {
                 if (NativeRunner.LowersProcessPriority)
                     try { Process.GetCurrentProcess().PriorityClass = NativeRunner.ProcessClassFor(priority); }
                     catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
                 using var selection = KernelVariants.Select(mode, variant);
-                var check = Math.Abs(mode) is 17200 or 17210 ? CpuDiagnostics.CheckZipVariant(variant) : CpuDiagnostics.CheckKernel(mode);
-                string path = Math.Abs(mode) is 17200 or 17210 ? NativeKernels.ZipCryptoPath : variant;
-                if (!check.Passed) result = new(check with { Error = DiagnosticHtml.Scrub(check.Error ?? "Correctness check failed.") }, 0, 0, path);
+                var selected = EnforcePath(new(new(true, 0), 0, 0, NativeKernels.CpuPath(mode), SelfTestState: NativeKernels.WideSelfTestState(mode)), variant);
+                var check = !selected.Check.Passed ? selected.Check : Math.Abs(mode) is 17200 or 17210
+                    ? CpuDiagnostics.CheckZipVariant(variant) : CpuDiagnostics.CheckKernel(mode, variant);
+                string path = selected.Check.Passed ? NativeKernels.CpuPath(mode, actualOnly: true) : selected.ActualPath;
+                string state = NativeKernels.WideSelfTestState(mode);
+                check = EnforcePath(new(check, 0, 0, path, SelfTestState: state), variant).Check;
+                if (!check.Passed) result = new(check with { Error = DiagnosticHtml.Scrub(check.Error ?? "Correctness check failed.") }, 0, 0, path, SelfTestState: state);
                 else
                 {
                     var timer = Stopwatch.StartNew();
@@ -58,7 +62,7 @@ public static class CpuDiagnosticWorker
                     }
                     else speed = seconds == 0 ? 0 : NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), length: length,
                         priority: NativeRunner.ThreadPriorityFor(priority));
-                    result = new(check, speed, timer.Elapsed.TotalSeconds, path);
+                    result = EnforcePath(new(check, speed, timer.Elapsed.TotalSeconds, NativeKernels.CpuPath(mode, actualOnly: true), SelfTestState: NativeKernels.WideSelfTestState(mode)), variant);
                 }
             }
         }
@@ -66,6 +70,25 @@ public static class CpuDiagnosticWorker
         try { File.WriteAllText(args[8], JsonSerializer.Serialize(result)); return 0; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 3; }
     }
+
+    internal static WorkerResult EnforcePath(WorkerResult result, string variant)
+    {
+        if (variant is not ("avx2" or "avx512")) return result;
+        string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").ToLowerInvariant();
+        if (actual == variant && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
+        string reason = result.SelfTestState switch
+        {
+            "failed" => "self-test failed",
+            "switched off" => "switched off by the environment",
+            "not run" => "feature missing or self-test not run",
+            _ => "native dispatch or allocation fallback",
+        };
+        string error = $"Requested {variant}, actual {result.ActualPath}: {reason}. Timing rejected.";
+        return result with { Check = new(false, result.Check.Cases, error), Speed = 0, Error = error };
+    }
+
+    public static Task<WorkerResult> CheckResultAsync(int mode, string variant, CancellationToken ct = default)
+        => ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct);
 
     public static async Task<CpuDiagnostics.CorrectnessResult> CheckAsync(int mode, string variant, CancellationToken ct = default)
         => (await ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct)).Check;

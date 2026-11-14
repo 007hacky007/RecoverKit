@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 8;
+    private const int RequiredVersion = 11;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -21,6 +21,22 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_rar3_hash")]
     public static partial int Rar3Hash(byte* salt, byte* passwords, int len, int n, byte* out36);
+
+    /// <summary>Candidates per RAR 3 batch: 32 AVX-512, 16 AVX2/NEON, 1 scalar. Runs the wide-path self-test once.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_lanes")]
+    public static partial int Rar3Lanes();
+
+    /// <summary>AVX-512 guard: 0 not run, 1 passed, 2 failed, 3 switched off. Does not start the test.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_selftest_state")]
+    public static partial int Rar3SelfTestState();
+
+    /// <summary>Paths executed by hashing calls: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-256 16.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_executed_paths")]
+    public static partial int Rar3ExecutedPaths();
+
+    /// <summary>Clears executed paths for mode 12500 or 13000 before a CPU probe; other modes do nothing.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_reset_executed_paths")]
+    public static partial void ResetExecutedPaths(int mode);
 
     [LibraryImport(Lib, EntryPoint = "rk_office97_search")]
     public static partial int Office97Search(byte* salt16, byte* enc32, byte* pws, int len, int n, int* hits, int maxHits);
@@ -54,6 +70,14 @@ internal static unsafe partial class RkNative
     [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_lanes")]
     public static partial int Pbkdf2Sha256Lanes();
 
+    /// <summary>AVX-512 guard: 0 not run, 1 passed, 2 failed, 3 switched off. Does not start the test.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_selftest_state")]
+    public static partial int Pbkdf2Sha256SelfTestState();
+
+    /// <summary>Paths executed by hashing calls: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-256 16.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_executed_paths")]
+    public static partial int Pbkdf2Sha256ExecutedPaths();
+
     [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
     public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);
 
@@ -66,6 +90,11 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_bench")]
     public static partial double Bench(int which, int reps);
+
+    /// <summary>Three arrays of n prefix keys, with one final character per candidate; hits are flat indices.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_zip_search_batch")]
+    public static partial int ZipSearchBatch(byte* header12, byte check1, byte check2, uint* keys,
+        byte* last, int n, int* hits, int capacity, int path);
 
     private static readonly Lazy<bool> _available = new(Probe);
 
@@ -145,6 +174,22 @@ internal sealed unsafe class NativeFilterWorker(NativeKernel kernel, INativeFilt
     private readonly int[] _hits = new int[64];
 
     public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last) => SearchBatch(prefix, 1, last);
+
+    public override int SearchPasswords(ReadOnlySpan<byte> passwords, int length, int count)
+    {
+        if (!RkNative.Available) return fallback.SearchPasswords(passwords, length, count);
+        int nh;
+        fixed (byte* p = passwords)
+        fixed (int* h = _hits)
+            nh = filter.Filter(p, length, count, h, _hits.Length);
+        if (nh < 0 || nh > _hits.Length) return fallback.SearchPasswords(passwords, length, count);
+        for (int q = 0; q < nh; q++)
+        {
+            int idx = _hits[q];
+            if (kernel.Verify(passwords.Slice(idx * length, length))) return idx;
+        }
+        return -1;
+    }
 
     public override int SearchBatch(ReadOnlySpan<byte> prefixes, int count, ReadOnlySpan<byte> last)
     {

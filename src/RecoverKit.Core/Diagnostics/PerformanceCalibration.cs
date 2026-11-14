@@ -1,4 +1,5 @@
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Formats;
 using RecoverKit.Core.Native;
 
 namespace RecoverKit.Core.Diagnostics;
@@ -6,6 +7,58 @@ namespace RecoverKit.Core.Diagnostics;
 public static class PerformanceCalibration
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    /// <summary>Two short windows per mode compare the actual ZIP target on the complete active GPU set.</summary>
+    internal static async Task<PerformanceProfile> EnsureZipAsync(HashcatTool tool, Settings settings,
+        IReadOnlyList<BackendDevice> devices, int mode, string hashLine, ZipCheckBytesTarget filter,
+        Action<string> status, CancellationToken ct, IReadOnlyCollection<int>? exclude = null)
+    {
+        await Gate.WaitAsync(ct);
+        try
+        {
+            var profile = PerformanceProfiles.Load();
+            PerformanceProfiles.Invalidate(profile, PerformanceProfiles.CpuFingerprint, PerformanceProfiles.GpuFingerprint(tool, devices));
+            var active = ZipCheckBytesTarget.ActiveDevices(settings, devices, exclude);
+            if (!settings.AutomaticPerformanceCalibration || active.Count == 0 || settings.Strategy == DeviceStrategy.CpuOnly
+                || settings.HashcatCpuWithGpu || settings.GpuTempGuard || settings.GpuDutyPercent < 100
+                || !string.IsNullOrWhiteSpace(settings.ExtraArguments)
+                || ZipCheckBytesTarget.HasMeasurements(profile, settings, devices, mode, exclude)) return profile;
+            status("Comparing ZIP GPU verification with the header filter on the active GPUs...");
+            var probes = new ZipKernelBenchmark(tool)
+            {
+                Seconds = 2, WithAmpCache = false, Priority = settings.Priority,
+                DeviceArgumentsOverride = HashcatRunner.DeviceArguments(settings, devices, gpuOnly: true,
+                    exclude: exclude, preferMetal: OperatingSystem.IsMacOS()),
+            };
+            var baseline = new List<double>();
+            var headers = new List<double>();
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                baseline.Add(await probes.MeasureAsync(new("automatic original ZIP", mode, hashLine), active[0], "replacement", ct));
+                headers.Add(await probes.MeasureAsync(new("automatic ZIP header filter", 17230, filter.HashLines), active[0], "replacement", ct));
+            }
+            ct.ThrowIfCancellationRequested();
+            var keys = active.Select(d => d.Key).Order(StringComparer.Ordinal).ToList();
+            string policy = PerformanceProfiles.PolicyFingerprint(settings, "zip");
+            profile.Decisions.RemoveAll(d => d.Domain == "zip-filter" && (d.Mode == mode || d.Mode == 17230)
+                && d.DeviceKeys.Order(StringComparer.Ordinal).SequenceEqual(keys));
+            foreach (var (measuredMode, samples) in new[] { (mode, baseline), (17230, headers) })
+                profile.Decisions.Add(new()
+                {
+                    Domain = "zip-filter", Mode = measuredMode, Target = "automatic ZIP comparison", Engine = "gpu",
+                    Variant = "replacement", DeviceKeys = keys, Policy = policy,
+                    Speed = samples.All(v => v > 0 && double.IsFinite(v)) ? measuredMode == mode ? samples.Max() : samples.Min() : 0,
+                    Reason = "two alternating two-second windows on the complete selected GPU set",
+                });
+            profile.Source = "automatic ZIP comparison";
+            profile.MeasuredAt = DateTimeOffset.UtcNow;
+            PerformanceProfiles.Save(profile);
+            status($"ZIP GPU comparison: original {baseline.Min():N0}-{baseline.Max():N0}/s, header filter {headers.Min():N0}-{headers.Max():N0}/s; "
+                + (ZipCheckBytesTarget.IsFaster(profile, settings, devices, mode, exclude) ? "using the header filter." : "keeping original verification."));
+            return profile;
+        }
+        finally { Gate.Release(); }
+    }
 
     /// <summary>A bounded CPU calibration avoids GPU startup overwhelming a short first attack.</summary>
     public static async Task<PerformanceProfile> EnsureAsync(HashcatTool tool, Settings settings, IReadOnlyList<BackendDevice> devices,

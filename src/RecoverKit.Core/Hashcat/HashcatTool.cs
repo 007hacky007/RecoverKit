@@ -257,7 +257,7 @@ public sealed partial class HashcatTool
     }
 
     /// <summary>Runs hashcat to completion and returns (exit code, stdout, stderr).</summary>
-    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default, ProcessPriority? priority = null, bool redactOutput = false)
+    public async Task<(int Code, string Out, string Err)> RunAsync(IEnumerable<string> args, TimeSpan timeout, string? stdin = null, CancellationToken ct = default, ProcessPriority? priority = null, bool redactOutput = false, bool preserveOutputBom = false)
     {
         var psi = StartInfo(args, stdin is not null);
         // --show prints recovered plaintexts: keep them out of the debug log.
@@ -269,7 +269,8 @@ public sealed partial class HashcatTool
         if (priority is { } selectedPriority && Native.NativeRunner.LowersProcessPriority)
             try { p.PriorityClass = Native.NativeRunner.ProcessClassFor(selectedPriority); }
             catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
-        var outTask = p.StandardOutput.ReadToEndAsync(ct);
+        using var output = preserveOutputBom ? new StreamReader(p.StandardOutput.BaseStream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false) : null;
+        var outTask = (output ?? p.StandardOutput).ReadToEndAsync(ct);
         var errTask = p.StandardError.ReadToEndAsync(ct);
         if (stdin is not null)
         {
@@ -480,10 +481,12 @@ public sealed partial class HashcatTool
     public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct, bool optimizedKernels = true)
     {
         HashcatKernels.EnsureFor(this, mode);
-        // hashcat 8's -b forces -O; -B lets the shared decision select the kernel.
-        var args = new List<string> { MajorVersion >= 8 ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
-        if (await RecoverySession.SelectOptimizedKernelAsync(this, mode, null, optimizedKernels)) args.Add("-O");
-        args.AddRange(deviceArgs);
+        // hashcat 8: -b benchmarks the optimized kernel where a mode has one, -B the pure one, and it
+        // refuses -B together with -O. The shared decision picks the kernel, not the caller's arguments.
+        bool optimized = await RecoverySession.SelectOptimizedKernelAsync(this, mode, null, optimizedKernels);
+        var args = new List<string> { MajorVersion >= 8 && !optimized ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
+        if (optimized) args.Add("-O");
+        args.AddRange(deviceArgs.Where(a => a is not ("-O" or "--optimized-kernel-enable")));
         var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct);
         double total = 0;
         foreach (var line in o.Split('\n'))
@@ -520,12 +523,12 @@ public sealed partial class HashcatTool
     public async Task<List<string>> ShowAsync(int mode, string hashFile, string potfile, VolumeCredentials? credentials = null)
         => (await ShowRawAsync(mode, hashFile, potfile)).Select(l => DecodePlain(l, credentials)).ToList();
 
-    /// <summary>Plaintexts hashcat --show reports for these hashes, exactly as it prints them ($HEX[...] kept).</summary>
-    public async Task<List<string>> ShowRawAsync(int mode, string hashFile, string potfile)
+    /// <summary>Plaintexts from --show ($HEX[...] kept); preserveBom retains BOM bytes belonging to the first password.</summary>
+    public async Task<List<string>> ShowRawAsync(int mode, string hashFile, string potfile, bool preserveBom = false)
     {
         var args = new List<string> { "-m", mode.ToString(), hashFile, "--show", "--potfile-path", potfile, "--outfile-format", "2", "--quiet" };
         // PIM options change salt_iter, so hashcat cannot match its own potfile when --show uses them.
-        var (code, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60));
+        var (code, o, _) = await RunAsync(args, TimeSpan.FromSeconds(60), preserveOutputBom: preserveBom);
         var passwords = new List<string>();
         // A failed --show prints its error to stdout (for example a missing hash-mode module).
         if (code != 0) return passwords;

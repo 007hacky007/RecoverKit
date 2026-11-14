@@ -13,7 +13,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
     public static IReadOnlyList<DiagnosticSection> Sections { get; } =
     [
         new("system", "System and devices", 0.5),
-        new("cpu", "Built-in CPU engine and correctness", 3),
+        new("cpu", "Built-in CPU engine and correctness", CpuDiagnostics.HasWidePaths ? 8 : 3),
         new("gpu", "GPU backends and main formats", 20),
         new("zip", "ZIP GPU kernels and entry sizes", 16),
         new("hybrid", "Finite CPU, GPU and hybrid jobs", 20),
@@ -115,7 +115,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         report.System["OS"] = RuntimeInformation.OSDescription;
         report.System["Architecture"] = RuntimeInformation.ProcessArchitecture.ToString();
         report.System["CPU"] = SystemFacts.CpuName();
-        report.System["CPU features"] = NativeKernels.CpuFeatures();
+        CpuDiagnostics.AddSystemFacts(report, settings);
         report.System["Physical cores"] = SystemFacts.PhysicalCores().ToString();
         report.System["Logical threads"] = Environment.ProcessorCount.ToString();
         report.System["RAM bytes"] = SystemFacts.RamBytes().ToString();
@@ -244,7 +244,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
             }
             var checks = new Dictionary<(int Mode, string Variant), bool>();
             foreach (var mode in samples.GroupBy(s => s.Mode))
-            foreach (string variant in new[] { "hashcat", "replacement", "amplifier-cache" })
+            foreach (string variant in mode.Key == 17230 ? new[] { "replacement" } : new[] { "hashcat", "replacement", "amplifier-cache" })
                 plan.Add("zip", $"GPU family {slot.Id}, mode {mode.Key}, checking {variant}", 3, async () =>
                 {
                     var device = Device(mode.Key);
@@ -271,7 +271,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                     report.Measurements.Add(row);
                 }
                 foreach (int repeat in new[] { 1, 2 })
-                foreach (string variant in new[] { "hashcat", "replacement", "amplifier-cache" })
+                foreach (string variant in sample.Mode == 17230 ? new[] { "replacement" } : new[] { "hashcat", "replacement", "amplifier-cache" })
                     plan.Add("zip", $"GPU family {slot.Id}, {sample.Label}, {variant}, sample {repeat}", Thorough ? 10 : 5,
                         () => Measure(variant, repeat), () => checks.GetValueOrDefault((sample.Mode, variant)) && (repeat == 1 || Thorough
                             || DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Variant == variant)?.Speed ?? 0, rows.Select(r => r.Speed))), conditional: !Thorough && repeat == 2);

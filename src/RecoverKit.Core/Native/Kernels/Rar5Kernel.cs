@@ -17,6 +17,7 @@ public sealed unsafe class Rar5Kernel : NativeKernel, INativeFilter
     public override string Name => $"RAR 5 (PBKDF2-HMAC-SHA256 x {1 << _lg2})";
     public override int MaxPasswordLength => 127;           // WinRAR's limit; RarExtractor sets the same
     public override double SpeedHint => 300.0 * 32768 / (1 << _lg2);
+    public override bool SupportsDictionaryPassword(ReadOnlySpan<byte> password) => password.Length <= 256;
 
     private Rar5Kernel(byte[] salt, int lg2, byte[] check) => (_salt, _lg2, _check) = (salt, lg2, check);
 
@@ -41,6 +42,10 @@ public sealed unsafe class Rar5Kernel : NativeKernel, INativeFilter
         if (password.Length > MaxPasswordLength) return false;
         return CheckValue(password, _salt, _lg2).AsSpan().SequenceEqual(_check);
     }
+
+    /// <summary>Dictionary bytes beyond the mask kernel's limit, using hashcat's pure-kernel byte limit.</summary>
+    internal bool VerifyDictionaryPassword(ReadOnlySpan<byte> password)
+        => password.Length <= 256 && CheckValue(password, _salt, _lg2).AsSpan().SequenceEqual(_check);
 
     /// <summary>The 8-byte password check value for a password (WinRAR's PswCheck).</summary>
     internal static byte[] CheckValue(ReadOnlySpan<byte> password, byte[] salt, int lg2)

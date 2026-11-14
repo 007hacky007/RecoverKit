@@ -20,6 +20,25 @@ All notable changes to RecoverKit. Downloads are on the
 - RecoverKit checks for a newer version when it starts, at most once an hour. When one is out, an
   Update button appears in the toolbar: one click downloads, verifies and installs it. The check can
   be turned off in Preferences > Other.
+- The processor now helps the graphics card in dictionary attacks too, not only in brute force:
+  RAR 5, RAR 3, PDF 1.7 level 8 and TrueCrypt (Whirlpool) dictionaries, with or without rules, are
+  shared between hashcat on the GPU and the built-in CPU engine. On an M1 Pro a RAR 5 dictionary job
+  of 9.6 million candidates finished in 10 to 11 minutes instead of 14 to 16.
+- Classic ZIP archives with eight or more encrypted files are searched about three times faster on
+  the GPU: the graphics card checks only each file's check byte and the processor confirms the few
+  candidates that pass (measured on an M1 Pro with an archive of 25 large photos). RecoverKit
+  measures both methods before the first ZIP attack and keeps the faster one.
+- Dictionary attacks on RAR 3, 7-Zip and PDF 1.7 level 8 use hashcat's faster "optimized" kernels,
+  about twice the speed for RAR 3 and 7-Zip. Words too long for those kernels are tested in a second
+  pass, so nothing is skipped.
+- Classic ZIP on the processor is 2 to 7 times faster when it works next to the GPU, and faster for
+  masks whose last position has few characters (M1 Pro).
+- RAR 3 on the processor is about twice as fast for masks that end in fixed characters, for example
+  `?l?l?l?l2024`.
+- RAR 3 has a wider code path for processors with AVX-512. It checks itself against known answers
+  when it is first used and runs only when they match. The detailed performance test reports the
+  AVX2 and AVX-512 rates side by side ("Wide vector paths"), and the Benchmark shows which processor
+  path ran.
 
 ### Removed
 - The run-time hashcat download and the 7-Zip extractor (7zr.exe) download. The "Download hashcat",
@@ -42,6 +61,10 @@ All notable changes to RecoverKit. Downloads are on the
   is remembered until that hashcat changes.
 - An attack step that a large ZIP file cannot run on the CPU (rules, extra hashcat options) ended
   the whole recovery with an error. The step is skipped with the reason and the other steps run.
+- On a Mac, a RAR 3 dictionary attack could end without finding a password that was in the list:
+  hashcat skipped candidates on Apple's OpenCL without reporting an error. RAR 3 now runs through
+  Metal, which found the password in every test run.
+- The Benchmark showed 7-Zip and Electrum wallets as "not supported on this device" with hashcat 8.
 
 ## [1.4.1] - 2026-11-13
 

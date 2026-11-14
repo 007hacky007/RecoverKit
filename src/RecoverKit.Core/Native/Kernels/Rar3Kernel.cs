@@ -10,7 +10,7 @@ namespace RecoverKit.Core.Native.Kernels;
 /// over 262,144 rounds of (UTF-16 password || salt || 24-bit round counter), with an IV byte taken
 /// every 16,384 rounds; the AES-128-CBC decrypted block must start with the end-of-archive header.
 ///
-/// Eight candidates of equal length run per AVX2 vector. A round is P = 2L + 11 bytes, P is odd, so
+/// Equal-length candidates run in 8-lane AVX2/NEON or 16-lane AVX-512 vectors. A round is P = 2L + 11 bytes, P is odd, so
 /// the round layout over 64-byte blocks repeats every 64 rounds (P blocks). Inside such a period the
 /// counter's high bytes are constant and its low byte is (64s &amp; 0xff) | r, so every message word is a
 /// precomputed template OR'ed with the period's counter bytes and the lane's last character.
@@ -25,6 +25,8 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     public override string Name => "RAR 3.x (SHA-1 x 262144 + AES-128)";
     public override int MaxPasswordLength => 26;           // keeps one round within a 64-byte block
     public override double SpeedHint => 400;
+    public override bool SupportsDictionaryPassword(ReadOnlySpan<byte> password)
+        => base.SupportsDictionaryPassword(password) && password.IndexOfAnyInRange((byte)128, byte.MaxValue) < 0;
 
     private Rar3Kernel(byte[] salt, byte[] enc) { _salt = salt; _enc = enc; }
 
@@ -87,6 +89,10 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     /// <summary>The native library has a vector path for this kernel on this CPU.</summary>
     internal static bool NativeFast => RkNative.HasVectorPath;
 
+    internal static string NativePath => !NativeFast ? "managed" : RkNative.Rar3Lanes() == 32
+        ? "native AVX-512, batch 32" : RkNative.Features.HasFlag(RkNative.Feature.Neon)
+            ? "native NEON, batch 16" : "native AVX2, batch 16";
+
     /// <summary>Digest + IV of every candidate prefix + last[i] from the native library (36 bytes each).</summary>
     internal byte[] NativeHash(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last) => NativeHash(prefix, 1, last);
 
@@ -109,19 +115,18 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     }
 
     /// <summary>
-    /// The native path tests 16 candidates per call group: take enough prefixes per call that the last
-    /// group is (almost) full. With ?a (95) one prefix fills 6 groups of 16 to 99 %; with 69 characters
-    /// three prefixes (207 candidates) fill 13 groups to 99.5 %.
+    /// Take enough prefixes per call that the native path's last group is (almost) full.
     /// </summary>
     public override int PrefixBatch(int lastCount)
     {
         if (!NativeFast) return 1;
-        for (int c = 1; c <= 8; c++)
+        int lanes = RkNative.Rar3Lanes();
+        for (int c = 1; c <= lanes; c++)
         {
-            int n = c * lastCount, groups = (n + 15) / 16;
-            if (n >= 0.98 * 16 * groups) return c;
+            int n = c * lastCount, groups = (n + lanes - 1) / lanes;
+            if (n >= 0.98 * lanes * groups) return c;
         }
-        return 8;
+        return lanes;
     }
 
     private sealed class Worker(Rar3Kernel k) : KernelWorker
@@ -283,6 +288,19 @@ public sealed unsafe class Rar3Kernel : NativeKernel
                 pw[^1] = last[i % last.Length];
                 if (k.Verify(pw)) return i;
             }
+            return -1;
+        }
+
+        public override int SearchPasswords(ReadOnlySpan<byte> passwords, int length, int count)
+        {
+            if (!NativeFast) return base.SearchPasswords(passwords, length, count);
+            var result = new byte[36 * count];
+            fixed (byte* salt = k._salt, pws = passwords, output = result)
+                if (RkNative.Rar3Hash(salt, pws, length, count, output) != 0)
+                    return base.SearchPasswords(passwords, length, count);
+            for (int i = 0; i < count; i++)
+                if (k.Decrypts(result.AsSpan(36 * i, 20), result.AsSpan(36 * i + 20, 16))
+                    && k.Verify(passwords.Slice(i * length, length))) return i;
             return -1;
         }
     }

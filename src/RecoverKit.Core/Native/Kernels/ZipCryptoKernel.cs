@@ -12,9 +12,9 @@ namespace RecoverKit.Core.Native.Kernels;
 /// Traditional PKWARE encryption (ZipCrypto), hashcat modes 17200 (deflate) and 17210 (stored).
 /// The fast path decrypts the 12-byte encryption header and compares its check byte; survivors
 /// (1 in 256) are confirmed by decrypting the whole entry and checking its CRC-32.
-/// A large entry (<see cref="ZipPartialTarget"/>) is confirmed from the archive file, which costs as
-/// much as thousands of candidates, so a survivor first has to pass the other entries' header checks
-/// and, when deflated, inflate the prefix kept in memory (random data fails within its first bytes).
+/// Deflated survivors first inflate a bounded prefix (random data fails within its first bytes).
+/// Partial targets first check the session confirmer's own sibling headers, so early rejection
+/// preserves the session result. A large entry is then confirmed from the archive file.
 /// </summary>
 public sealed class ZipCryptoKernel : NativeKernel
 {
@@ -108,6 +108,8 @@ public sealed class ZipCryptoKernel : NativeKernel
 
     public override KernelWorker CreateWorker() => new Worker(this);
 
+    public override int PrefixBatch(int lastCount) => lastCount >= 48 ? 1 : RkNative.BatchFor(lastCount, 48);
+
     /// <summary>
     /// The AdvSimd path on arm64: ~1.6x the scalar one on an M1 Pro (docs/benchmarks/apple-m1-pro-native.txt).
     /// RECOVERKIT_ZIP_NEON=0 turns it off (tuning switch; tests run both).
@@ -118,7 +120,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         uint k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
         foreach (var b in password) Update(ref k0, ref k1, ref k2, b);
-        uint p0 = k0, p1 = k1, p2 = k2;     // the password's keys, for the sibling headers
+        uint p0 = k0, p1 = k1, p2 = k2;     // password keys for the sibling headers
         byte prev = 0, lastHdr = 0;
         for (int i = 0; i < 12; i++)
         {
@@ -129,16 +131,17 @@ public sealed class ZipCryptoKernel : NativeKernel
             Update(ref k0, ref k1, ref k2, p);
         }
         if (!HeaderOk(lastHdr, prev)) return false;
-        if (_partial is { } partial)
+        if (_partial is not null)
         {
+            // These are the session confirmer's own checks, so early rejection cannot change its result.
             foreach (var s in _siblings)
             {
                 byte b = HeaderCheckByte(p0, p1, p2, s.Header);
                 if (b != s.CrcCheck && b != s.TimeCheck) return false;
             }
-            if (_method == 8 && !PrefixInflates(k0, k1, k2)) return false;
-            return VerifyArchive(partial, k0, k1, k2);
         }
+        if (_method == 8 && _uncompressed > 0 && !PrefixInflates(k0, k1, k2)) return false;
+        if (_partial is { } partial) return VerifyArchive(partial, k0, k1, k2);
 
         if (_method == 0)
         {
@@ -207,8 +210,9 @@ public sealed class ZipCryptoKernel : NativeKernel
         if (!DeflateStartIsPlausible(head[..n], _uncompressed)) return false;
         try
         {
-            using var decrypted = new DecryptStream(new MemoryStream(_data, 12, _data.Length - 12, writable: false),
-                _data.Length - 12, k0, k1, k2) { Piece = 32 };
+            int length = Math.Min(_data.Length - 12, 4096);
+            using var decrypted = new DecryptStream(new MemoryStream(_data, 12, length, writable: false),
+                length, k0, k1, k2) { Piece = 32 };
             using var inflated = new DeflateStream(decrypted, CompressionMode.Decompress);
             Span<byte> buffer = stackalloc byte[4096];
             long total = 0;
@@ -478,6 +482,47 @@ public sealed class ZipCryptoKernel : NativeKernel
         private uint _p0, _p1, _p2;          // keys after the cached prefix minus its last byte
         private uint _q0, _q1, _q2;          // keys after the full cached prefix
 
+        private uint[] _keys = [];
+        private byte[] _last = [];
+        private int _batchLastCount;
+
+        public override int SearchBatch(ReadOnlySpan<byte> prefixes, int count, ReadOnlySpan<byte> last)
+        {
+            if (count == 0 || last.IsEmpty) return -1;
+            int path = ZipCryptoNative.Path;
+            if (count == 1 || (path < 0 && (ZipCryptoNative.EffectiveRequestedPath == -2
+                || !(Avx2.IsSupported || (AdvSimd.Arm64.IsSupported && UseAdvSimd)))))
+                return base.SearchBatch(prefixes, count, last);
+            int plen = prefixes.Length / count, n = checked(count * last.Length);
+            // Tail vectors may read up to 31 unused keys; only indices below n can survive.
+            if (_keys.Length < 3 * n + 32) _keys = new uint[3 * n + 32];
+            if (_last.Length < n) _last = new byte[n];
+            for (int pre = 0; pre < count; pre++)
+            {
+                PrefixKeys(prefixes.Slice(pre * plen, plen), out uint a, out uint b, out uint c);
+                int offset = pre * last.Length;
+                _keys.AsSpan(offset, last.Length).Fill(a);
+                _keys.AsSpan(n + offset, last.Length).Fill(b);
+                _keys.AsSpan(2 * n + offset, last.Length).Fill(c);
+                last.CopyTo(_last.AsSpan(offset));
+            }
+            _batchLastCount = last.Length;
+            try
+            {
+                var chars = _last.AsSpan(0, n);
+                var keys = _keys.AsSpan(0, 3 * n);
+                if (path > 0)
+                {
+                    int result = SearchNative(prefixes, chars, 0, 0, 0, path, keys);
+                    if (result != -2) return result;
+                }
+                if (Avx2.IsSupported) return SearchAvx2(prefixes, chars, 0, 0, 0, keys);
+                if (AdvSimd.Arm64.IsSupported && UseAdvSimd) return SearchAdvSimd(prefixes, chars, 0, 0, 0, keys);
+            }
+            finally { _batchLastCount = 0; }
+            return base.SearchBatch(prefixes, count, last);
+        }
+
         public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last)
         {
             PrefixKeys(prefix, out uint a0, out uint a1, out uint a2);
@@ -492,17 +537,19 @@ public sealed class ZipCryptoKernel : NativeKernel
             return SearchScalar(prefix, last, a0, a1, a2);
         }
 
-        private unsafe int SearchNative(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint a0, uint a1, uint a2, int path)
+        private unsafe int SearchNative(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint a0, uint a1, uint a2, int path, ReadOnlySpan<uint> keys = default)
         {
-            Span<int> hits = last.Length <= 256 ? stackalloc int[last.Length] : new int[last.Length];
+            Span<int> hits = last.Length <= 4096 ? stackalloc int[last.Length] : new int[last.Length];
             int count;
             fixed (byte* header = k._header, chars = last)
             fixed (int* output = hits)
-                count = RkNative.ZipSearch(header, k._check1, k._twoBytes ? k._check1 : k._check2,
+            fixed (uint* states = keys)
+                count = !keys.IsEmpty ? RkNative.ZipSearchBatch(header, k._check1, k._twoBytes ? k._check1 : k._check2,
+                    states, chars, last.Length, output, hits.Length, path) : RkNative.ZipSearch(header, k._check1, k._twoBytes ? k._check1 : k._check2,
                     a0, a1, a2, chars, last.Length, output, hits.Length, path);
             if (count < 0 || count > hits.Length) return -2;
             for (int i = 0; i < count; i++)
-                if (Confirm(prefix, last[hits[i]])) return hits[i];
+                if (ConfirmLane(prefix, last, hits[i])) return hits[i];
             return -1;
         }
 
@@ -554,19 +601,19 @@ public sealed class ZipCryptoKernel : NativeKernel
         /// <summary>Interleave depth (vectors of 8 candidates); RECOVERKIT_ZIP_VECTORS=2|3|4 overrides for tuning.</summary>
         internal static readonly int Vectors = int.TryParse(Environment.GetEnvironmentVariable("RECOVERKIT_ZIP_VECTORS"), out var v) && v is >= 2 and <= 4 ? v : 3;
 
-        private unsafe int SearchAvx2(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2)
+        private unsafe int SearchAvx2(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, ReadOnlySpan<uint> keys = default)
         {
             fixed (uint* tbl = SplitTables)
                 return Vectors switch
                 {
-                    2 => SearchAvx2x2(prefix, last, p0, p1, p2, tbl),
-                    3 => SearchAvx2x3(prefix, last, p0, p1, p2, tbl),
-                    _ => SearchAvx2x4(prefix, last, p0, p1, p2, tbl),
+                    2 => SearchAvx2x2(prefix, last, p0, p1, p2, tbl, keys),
+                    3 => SearchAvx2x3(prefix, last, p0, p1, p2, tbl, keys),
+                    _ => SearchAvx2x4(prefix, last, p0, p1, p2, tbl, keys),
                 };
         }
 
         /// <summary>16 candidates per iteration in 2 interleaved AVX2 vectors (generated).</summary>
-        private unsafe int SearchAvx2x2(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl)
+        private unsafe int SearchAvx2x2(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl, ReadOnlySpan<uint> keys)
         {
             int n = last.Length;
             var one = Vector256.Create(1u);
@@ -581,9 +628,9 @@ public sealed class ZipCryptoKernel : NativeKernel
             {
                 for (int l = 0; l < 16; l++) lanes[l] = last[Math.Min(i + l, n - 1)];
                 var ac = Avx.LoadVector256(lanes + 0);
-                Vector256<uint> a0 = Vector256.Create(p0), a1 = Vector256.Create(p1), a2 = Vector256.Create(p2);
+                Vector256<uint> a0 = Key256(keys, p0, i), a1 = Key256(keys, p1, n + i), a2 = Key256(keys, p2, 2 * n + i);
                 var bc = Avx.LoadVector256(lanes + 8);
-                Vector256<uint> b0 = Vector256.Create(p0), b1 = Vector256.Create(p1), b2 = Vector256.Create(p2);
+                Vector256<uint> b0 = Key256(keys, p0, i + 8), b1 = Key256(keys, p1, n + i + 8), b2 = Key256(keys, p2, 2 * n + i + 8);
                 a0 = Avx2.ShiftRightLogical(a0, 8) ^ L(tbl, a0 ^ ac);
                 b0 = Avx2.ShiftRightLogical(b0, 8) ^ L(tbl, b0 ^ bc);
                 a1 = NextK1(a1, a0, ff, one);
@@ -611,14 +658,14 @@ public sealed class ZipCryptoKernel : NativeKernel
                 {
                     int l = System.Numerics.BitOperations.TrailingZeroCount(m);
                     m &= m - 1;
-                    if (i + l < n && Confirm(prefix, last[i + l])) return i + l;
+                    if (i + l < n && ConfirmLane(prefix, last, i + l)) return i + l;
                 }
             }
             return -1;
         }
 
         /// <summary>24 candidates per iteration in 3 interleaved AVX2 vectors (generated).</summary>
-        private unsafe int SearchAvx2x3(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl)
+        private unsafe int SearchAvx2x3(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl, ReadOnlySpan<uint> keys)
         {
             int n = last.Length;
             var one = Vector256.Create(1u);
@@ -633,11 +680,11 @@ public sealed class ZipCryptoKernel : NativeKernel
             {
                 for (int l = 0; l < 24; l++) lanes[l] = last[Math.Min(i + l, n - 1)];
                 var ac = Avx.LoadVector256(lanes + 0);
-                Vector256<uint> a0 = Vector256.Create(p0), a1 = Vector256.Create(p1), a2 = Vector256.Create(p2);
+                Vector256<uint> a0 = Key256(keys, p0, i), a1 = Key256(keys, p1, n + i), a2 = Key256(keys, p2, 2 * n + i);
                 var bc = Avx.LoadVector256(lanes + 8);
-                Vector256<uint> b0 = Vector256.Create(p0), b1 = Vector256.Create(p1), b2 = Vector256.Create(p2);
+                Vector256<uint> b0 = Key256(keys, p0, i + 8), b1 = Key256(keys, p1, n + i + 8), b2 = Key256(keys, p2, 2 * n + i + 8);
                 var cc = Avx.LoadVector256(lanes + 16);
-                Vector256<uint> c0 = Vector256.Create(p0), c1 = Vector256.Create(p1), c2 = Vector256.Create(p2);
+                Vector256<uint> c0 = Key256(keys, p0, i + 16), c1 = Key256(keys, p1, n + i + 16), c2 = Key256(keys, p2, 2 * n + i + 16);
                 a0 = Avx2.ShiftRightLogical(a0, 8) ^ L(tbl, a0 ^ ac);
                 b0 = Avx2.ShiftRightLogical(b0, 8) ^ L(tbl, b0 ^ bc);
                 c0 = Avx2.ShiftRightLogical(c0, 8) ^ L(tbl, c0 ^ cc);
@@ -674,14 +721,14 @@ public sealed class ZipCryptoKernel : NativeKernel
                 {
                     int l = System.Numerics.BitOperations.TrailingZeroCount(m);
                     m &= m - 1;
-                    if (i + l < n && Confirm(prefix, last[i + l])) return i + l;
+                    if (i + l < n && ConfirmLane(prefix, last, i + l)) return i + l;
                 }
             }
             return -1;
         }
 
         /// <summary>32 candidates per iteration in 4 interleaved AVX2 vectors (generated).</summary>
-        private unsafe int SearchAvx2x4(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl)
+        private unsafe int SearchAvx2x4(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, uint* tbl, ReadOnlySpan<uint> keys)
         {
             int n = last.Length;
             var one = Vector256.Create(1u);
@@ -696,13 +743,13 @@ public sealed class ZipCryptoKernel : NativeKernel
             {
                 for (int l = 0; l < 32; l++) lanes[l] = last[Math.Min(i + l, n - 1)];
                 var ac = Avx.LoadVector256(lanes + 0);
-                Vector256<uint> a0 = Vector256.Create(p0), a1 = Vector256.Create(p1), a2 = Vector256.Create(p2);
+                Vector256<uint> a0 = Key256(keys, p0, i), a1 = Key256(keys, p1, n + i), a2 = Key256(keys, p2, 2 * n + i);
                 var bc = Avx.LoadVector256(lanes + 8);
-                Vector256<uint> b0 = Vector256.Create(p0), b1 = Vector256.Create(p1), b2 = Vector256.Create(p2);
+                Vector256<uint> b0 = Key256(keys, p0, i + 8), b1 = Key256(keys, p1, n + i + 8), b2 = Key256(keys, p2, 2 * n + i + 8);
                 var cc = Avx.LoadVector256(lanes + 16);
-                Vector256<uint> c0 = Vector256.Create(p0), c1 = Vector256.Create(p1), c2 = Vector256.Create(p2);
+                Vector256<uint> c0 = Key256(keys, p0, i + 16), c1 = Key256(keys, p1, n + i + 16), c2 = Key256(keys, p2, 2 * n + i + 16);
                 var dc = Avx.LoadVector256(lanes + 24);
-                Vector256<uint> d0 = Vector256.Create(p0), d1 = Vector256.Create(p1), d2 = Vector256.Create(p2);
+                Vector256<uint> d0 = Key256(keys, p0, i + 24), d1 = Key256(keys, p1, n + i + 24), d2 = Key256(keys, p2, 2 * n + i + 24);
                 a0 = Avx2.ShiftRightLogical(a0, 8) ^ L(tbl, a0 ^ ac);
                 b0 = Avx2.ShiftRightLogical(b0, 8) ^ L(tbl, b0 ^ bc);
                 c0 = Avx2.ShiftRightLogical(c0, 8) ^ L(tbl, c0 ^ cc);
@@ -748,7 +795,7 @@ public sealed class ZipCryptoKernel : NativeKernel
                 {
                     int l = System.Numerics.BitOperations.TrailingZeroCount(m);
                     m &= m - 1;
-                    if (i + l < n && Confirm(prefix, last[i + l])) return i + l;
+                    if (i + l < n && ConfirmLane(prefix, last, i + l)) return i + l;
                 }
             }
             return -1;
@@ -787,7 +834,7 @@ public sealed class ZipCryptoKernel : NativeKernel
         }
 
         /// <summary>16 candidates per iteration in 4 interleaved 4-lane vectors; table lookups through tbl.</summary>
-        private unsafe int SearchAdvSimd(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2)
+        private unsafe int SearchAdvSimd(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last, uint p0, uint p1, uint p2, ReadOnlySpan<uint> keys = default)
         {
             int n = last.Length;
             Vector128<byte> lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
@@ -809,8 +856,10 @@ public sealed class ZipCryptoKernel : NativeKernel
             for (int i = 0; i < n; i += 16)
             {
                 for (int l = 0; l < 16; l++) lanes[l] = last[Math.Min(i + l, n - 1)];
-                Vector128<uint> a0 = Vector128.Create(p0), a1 = Vector128.Create(p1), a2 = Vector128.Create(p2);
-                Vector128<uint> b0 = a0, b1 = a1, b2 = a2, c0 = a0, c1 = a1, c2 = a2, d0 = a0, d1 = a1, d2 = a2;
+                Vector128<uint> a0 = Key128(keys, p0, i), a1 = Key128(keys, p1, n + i), a2 = Key128(keys, p2, 2 * n + i);
+                Vector128<uint> b0 = Key128(keys, p0, i + 4), b1 = Key128(keys, p1, n + i + 4), b2 = Key128(keys, p2, 2 * n + i + 4);
+                Vector128<uint> c0 = Key128(keys, p0, i + 8), c1 = Key128(keys, p1, n + i + 8), c2 = Key128(keys, p2, 2 * n + i + 8);
+                Vector128<uint> d0 = Key128(keys, p0, i + 12), d1 = Key128(keys, p1, n + i + 12), d2 = Key128(keys, p2, 2 * n + i + 12);
                 var ap = Vector128.Load(lanes);
                 var bp = Vector128.Load(lanes + 4);
                 var cp = Vector128.Load(lanes + 8);
@@ -848,7 +897,7 @@ public sealed class ZipCryptoKernel : NativeKernel
                 {
                     int l = System.Numerics.BitOperations.TrailingZeroCount(m);
                     m &= m - 1;
-                    if (i + l < n && Confirm(prefix, last[i + l])) return i + l;
+                    if (i + l < n && ConfirmLane(prefix, last, i + l)) return i + l;
                 }
             }
             return -1;
@@ -884,10 +933,10 @@ public sealed class ZipCryptoKernel : NativeKernel
                     Step(ref crc, ref z0, ref z1, ref z2, pz);
                     Step(ref crc, ref w0, ref w1, ref w2, pw);
                 }
-                if (px == c1 || px == c2) { if (Confirm(prefix, last[i])) return i; }
-                if (py == c1 || py == c2) { if (Confirm(prefix, last[i + 1])) return i + 1; }
-                if (pz == c1 || pz == c2) { if (Confirm(prefix, last[i + 2])) return i + 2; }
-                if (pw == c1 || pw == c2) { if (Confirm(prefix, last[i + 3])) return i + 3; }
+                if (px == c1 || px == c2) { if (ConfirmLane(prefix, last, i)) return i; }
+                if (py == c1 || py == c2) { if (ConfirmLane(prefix, last, i + 1)) return i + 1; }
+                if (pz == c1 || pz == c2) { if (ConfirmLane(prefix, last, i + 2)) return i + 2; }
+                if (pw == c1 || pw == c2) { if (ConfirmLane(prefix, last, i + 3)) return i + 3; }
             }
             for (; i < n; i++)
             {
@@ -901,9 +950,24 @@ public sealed class ZipCryptoKernel : NativeKernel
                     if (b == 11) break;
                     Step(ref crc, ref x0, ref x1, ref x2, px);
                 }
-                if ((px == c1 || px == c2) && Confirm(prefix, last[i])) return i;
+                if ((px == c1 || px == c2) && ConfirmLane(prefix, last, i)) return i;
             }
             return -1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector256<uint> Key256(ReadOnlySpan<uint> keys, uint prefixKey, int offset) =>
+            keys.IsEmpty ? Vector256.Create(prefixKey) : Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(keys), (nuint)offset);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector128<uint> Key128(ReadOnlySpan<uint> keys, uint prefixKey, int offset) =>
+            keys.IsEmpty ? Vector128.Create(prefixKey) : Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(keys), (nuint)offset);
+
+        private bool ConfirmLane(ReadOnlySpan<byte> prefixes, ReadOnlySpan<byte> last, int index)
+        {
+            if (_batchLastCount == 0) return Confirm(prefixes, last[index]);
+            int count = last.Length / _batchLastCount, plen = prefixes.Length / count;
+            return Confirm(prefixes.Slice(index / _batchLastCount * plen, plen), last[index]);
         }
 
         private bool Confirm(ReadOnlySpan<byte> prefix, byte lastByte)

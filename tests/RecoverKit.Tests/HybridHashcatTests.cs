@@ -15,6 +15,7 @@ namespace RecoverKit.Tests;
 /// without hashcat. Run with: dotnet test -p:RunSlowTests=true --filter Category=Slow
 /// </summary>
 [Trait("Category", "Slow")]
+[Collection("NativeFeatures")]   // one hashcat at a time: GPU tests must not run in parallel
 public class HybridHashcatTests
 {
     private static HashcatTool? Tool() => HashcatTool.Locate(Environment.GetEnvironmentVariable("RECOVERKIT_TEST_HASHCAT"));

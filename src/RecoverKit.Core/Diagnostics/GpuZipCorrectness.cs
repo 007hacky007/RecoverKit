@@ -24,15 +24,20 @@ internal static class GpuZipCorrectness
             bool deflate = sample.Mode == 17200;
             var bytes = deflate ? ZipCryptoSample.Text(size, rng) : new byte[size];
             if (!deflate) rng.NextBytes(bytes);
-            var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive([new ZipCryptoSample.Entry("synthetic.dat", bytes, deflate, DataDescriptor: sample.Label.EndsWith("crc-time", StringComparison.Ordinal), TwoCheckBytes: sample.Label.EndsWith("check2", StringComparison.Ordinal))], "ABCDABCD"u8.ToArray(), rng));
-            DebugLog.RegisterHashes(target.HashLines);
+            var entries = Enumerable.Range(0, sample.Mode == 17230 ? 8 : 1).Select(i =>
+                new ZipCryptoSample.Entry($"synthetic{i}.dat", bytes, deflate,
+                    DataDescriptor: sample.Mode == 17230 || sample.Label.EndsWith("crc-time", StringComparison.Ordinal),
+                    TwoCheckBytes: sample.Label.EndsWith("check2", StringComparison.Ordinal))).ToArray();
+            var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive(entries, "ABCDABCD"u8.ToArray(), rng));
+            string hashLine = sample.Mode == 17230 ? target.ZipCheckBytes!.HashLines : target.HashLines;
+            DebugLog.RegisterHashes(hashLine);
             var reference = ZipCryptoKernel.TryParse(target.HashLines)!;
-            hashes.Add(target.HashLines);
+            hashes.Add(hashLine);
             foreach (char a in "ABCD")
             foreach (char b in "ABCD")
             {
                 string candidate = $"{a}{b}CDABCD";
-                if (reference.Verify(Encoding.ASCII.GetBytes(candidate))) expected.Add(target.HashLines + ":" + candidate);
+                if (reference.Verify(Encoding.ASCII.GetBytes(candidate))) expected.Add(hashLine + ":" + candidate);
             }
         }
         if (expected.Count != samples.Count) return false;

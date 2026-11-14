@@ -13,7 +13,8 @@ scenarios, the wizard GUI and session management.
 For formats where hashcat's CPU kernels are slow, a built-in CPU engine runs brute-force and mask
 attacks: managed .NET kernels plus a small native C library (`native/rknative.c`, built with
 `zig cc`). Without a GPU it runs them alone; with a GPU it runs next to hashcat on another part of
-the keyspace (hybrid CPU + GPU, below). See [benchmarks.md](benchmarks.md).
+the keyspace and can also share supported file dictionaries (hybrid CPU + GPU, below).
+See [benchmarks.md](benchmarks.md).
 
 The one exception on the GPU side is classic ZIP (ZipCrypto, modes 17200/17210): RecoverKit ships
 its own versions of those two hashcat kernel sources and installs them into hashcat's `OpenCL/`
@@ -46,10 +47,13 @@ The performance profile lives beside settings under `RECOVERKIT_HOME` when set. 
 require correctness and repeated measurements with at least a 5% margin; explicit user settings
 win. CPU and GPU fingerprints allow driver changes to invalidate GPU choices without discarding
 CPU path measurements. The default has 115 seconds of work plus 5 seconds reserved for cleanup:
-system/setup 8, CPU 28, GPU 45, ZIP kernels 24, finite hybrid checks 10. The full step list is planned
+system/setup 8, CPU 28, GPU 45, ZIP kernels 24, finite hybrid checks 10. On AVX-512 systems the
+CPU budget is 180 seconds, making the total 267 seconds plus cleanup. Wide comparisons run first.
+The full step list is planned
 before running. Each step and section has an enforced timeout; omitted or timed-out work is listed
 as "not measured, run the thorough test". All CPU paths get correctness gates first, then selectable
-paths get one one-second timing at the logical-thread count. Representative backend probes cover
+paths get one one-second timing at the logical-thread count. AVX2 and AVX-512 variants also get
+one-thread and physical-core timings. Representative backend probes cover
 PDF R3 and RAR 5; an alternative must win both by 10% to apply across other modes. Main-format GPU
 rates use that backend only. Stored/deflated kernel probes and predicted-worker finite hybrid checks
 follow. Short CPU samples exclude a half-second warmup within their two-second slots. Unconfirmed
@@ -59,6 +63,16 @@ One isolated engine directory and kernel cache serve the whole test. Progress us
 and actual durations. `--thorough` / **Thorough (slower)** retains the full repeated sweep, including
 all eleven modes on each backend, pure kernels, repeats, worker sweeps and integrated-GPU comparisons.
 Preferences exposes automatic calibration and profile reset.
+
+For a CPU-only report without the GUI, run
+`recoverkit-cli bench-full --sections cpu --thorough --out cpu-report.html`.
+In the desktop app choose **Tools > Benchmark > Detailed performance test**, leave only the CPU
+section selected, and enable **Thorough (slower)** for the repeated comparisons. Save the HTML
+report; it also contains the machine-readable JSON. The **Wide vector paths** table compares the
+same target and length at one thread and the configured all-thread count. It shows repeat medians
+and ranges; Thorough takes three samples for AVX2/AVX-512. A requested wide path that fell back
+fails correctness and has no usable rate. Unsupported variants are omitted. Without native
+AVX-512 support, the table contains one explanatory note.
 
 Comparison targets come from `BenchmarkTestFiles`: deterministic real ZipCrypto archives (stored
 17/453/4096 bytes with one/two-byte checks, deflated 1024/16384 bytes with/without descriptors),
@@ -101,6 +115,42 @@ in the normal suite, even when their files are under `Stay/`.
 Tests that run hashcat on the GPU (`Category=Slow`, for example `ZipGpuKernelSlowTests`) are skipped
 as well; run them with `-p:RunSlowTests=true` or an explicit `--filter`.
 CI runs them in a separate workflow (`stay-tests.yml`) only when the attack's code or tests change.
+
+Optimized dictionary kernels use the limit reported by `--hash-info --hash-info -O -a N` for
+the actual attack mode. `OptimizedCandidateBounds` bounds raw bytes and every intermediate rule
+length. Fixed truncation and extraction caps bound later growth; earlier lengths still count.
+For single-mode, directly readable `-a 0` attacks, the planner
+finds the largest safe input length, including length-dependent growth such as doubling. When
+profitable, it saves two ordinary steps: the entire dictionary with `-O`, then the pure kernel
+with the same rules on only the words above that safe input length. Repeated short candidates
+in the second pass are harmless. The decision compares `N / optimized + N_long / pure` against
+`N / pure`, requires a 5% saving, and uses measured GPU rates or the mode's known kernel ratio.
+Unbounded/memory rules, escaped rule operands, streams, converted dictionaries, compressed
+dictionaries and extra candidate-changing arguments use pure. Combinations and dictionary/mask
+attacks keep the conservative all-or-nothing choice.
+Multi-mode sessions also keep that choice rather than changing the order of their mode loop.
+
+`WordlistLengthCache` persists the source path, size, modification time and byte-length histogram
+under the application data folder's `wordlist-lengths` directory. Cached thresholds need no
+rescan. Cold scans run off the calling thread, report "Checking word lengths ..." and honor
+cancellation. A scan is skipped when its estimated cost exceeds 5% of the expected pure attack;
+there is no fixed deadline. Cache hits remain usable even when a cold scan would not be worthwhile.
+
+Each split step saves its exact arguments, input fingerprints and kernel choice. The subset
+belongs to the session folder; missing or modified copies are rebuilt identically and checked
+against their saved SHA-256. Changed source dictionaries or rules refuse resume. Terminal runs
+and discarded sessions remove the subsets. Old sessions are never expanded into split steps,
+and their saved kernel choice remains authoritative. Step progress and checkpoints use the
+existing session machinery, with the second step's actual word/rule count. The tiny pure tail
+does not overwrite the representative speed cached from the full optimized pass.
+
+`OptimizedDictionarySlowTests` and `DictionarySplitSlowTests` compare with real hashcat;
+set `RECOVERKIT_TEST_HASHCAT` to a private writable copy. `RECOVERKIT_TEST_HASHCAT_DEVICE`
+optionally selects a backend device ID from `hashcat -I`. New macOS mode-12500 dictionary jobs
+require a known Metal GPU selection for optimized kernels. OpenCL and unknown selections use
+pure. The guard does not affect Windows, Linux, saved resume choices, masks or CPU-only jobs.
+Earlier contended OpenCL runs missed valid candidates with both kernels; the cause remains
+unconfirmed, and this guard does not fix pure OpenCL's observed misses.
 
 The GUI:
 
@@ -212,7 +262,7 @@ version is left alone. hashcat 8 keys its kernel cache on the kernel
 source and on every non-kernel file in `OpenCL/`, so the new kernel is compiled on first use.
 `RECOVERKIT_HASHCAT_ZIP_KERNELS=0` keeps hashcat's kernels. Combinator and hybrid attacks
 (`-a 1/6/7`, hashcat's `_a1` kernels), multi-file hashes (17220/17225) and checksum-only hashes
-(17230) still run hashcat's kernels; RecoverKit's ZIP targets use none of them.
+(17230) still run hashcat's kernels. Eligible archives can use 17230 as a speculative filter (below).
 
 Why hashcat's kernels are slow: each candidate runs the key schedule and decrypts the 12-byte
 encryption header; when the check byte matches (1 in 128 with the CRC and time check bytes,
@@ -271,10 +321,12 @@ ZipCrypto entries' header checks (`Siblings`, from `ZipPasswordConfirmer`). CPU 
 that file through bounded streams and checks the entire output length, deflate end and CRC-32,
 without the old 64 MiB embedded-data limit. That costs as much as thousands of candidates (about
 170 us for a deflated 1.3 MB entry, 24 ms for a stored one), and 1 candidate in 256 passes the
-header check, so before the file is touched a survivor must pass the sibling headers (16 of them
-leave 2^-128) and, for deflate, `DeflateStartIsPlausible` on the first decrypted bytes plus an
-inflate of the 256 KB prefix in memory (`ZipPartialSpeedTests` keeps the cost under a few
-microseconds). A single large stored entry has no cheap check; it stays a CPU-only, slow case.
+header check. For deflate, survivors first pass `DeflateStartIsPlausible` on the first decrypted
+bytes, then inflate at most 4 KiB of encrypted input in memory. Full embedded targets use the same
+staged check before decrypting the whole body. For partial targets, the session confirmer's own
+sibling header checks run before the inflate stage or archive read. Early rejection cannot change
+the result because the confirmer rejects the same candidates. Stored partial targets without
+siblings have no cheap body check.
 `ConfirmPassword` also runs the existing other-entry checks. Partial GPU runs always use outfile
 confirmation and keep guessing.
 
@@ -296,13 +348,55 @@ also use the CPU. Masks/brute-force and plain dictionaries are supported; CPU di
 does not interpret hashcat rule files or extra options and explains that limit before starting.
 The CLI and GUI Notes describe partial targets. GPU tests are opt-in through `RunSlowTests`.
 
+### Check-byte GPU filter
+
+`ZipCheckBytesTarget` optionally adds a mode 17230 hash with up to eight distinct encryption
+headers, drawn only from the attacked entry and the entries used by `ZipPasswordConfirmer`.
+It preserves the existing all-selected-entries password policy; mixed-password recovery is not added.
+
+Mode 17230 accepts either the CRC checksum field's high byte or the timestamp checksum field's
+high byte for each entry, exactly as the confirmer does. Both fields are retained, including for
+data-descriptor entries whose encryption header uses the CRC convention. The filter uses method 0
+to avoid hashcat's additional deflate-byte test. A second check byte is used only for old entries
+whose full verifier also enforces it; header-only sibling checks cannot supply a second byte.
+
+Eight one-byte entries provide 64 nominal bits, or at least 56 effective bits when each accepts
+two distinct alternatives. At 100 billion candidates/s and 0.1 s per launch, the false-hit estimate
+is at most 1e10/2^56 = 1.4e-7 per launch (five such entries would give 0.29). Four fully verified old
+two-byte entries provide 64 effective bits. Duplicate headers do not count twice. These estimates
+are not a correctness guarantee: an observed rejected hit requires replay of that assigned range
+on the original target, because hashcat can hide another hit in the same launch. A clean exhausted
+range is complete and is never replayed.
+
+The original hash, mode, CPU kernel and sibling checks stay intact. A `.zip-filter.json` sidecar
+records the actual GPU phase and hash for resume. A clean stop keeps hashcat's real restore point
+and resumes mode 17230. After a rejected hit, the sidecar records that the original range needs
+rechecking; a stop before replay starts invalidates only that range's progress. Once original-entry
+replay starts, its own checkpoints resume normally. Hybrid rebalances retain valid filter progress,
+and mode switches require equal base-word counts so `--skip` and `--limit` keep their meaning.
+Sessions saved before speed-based entry selection continue to use the legacy target.
+
+Without measurements the original GPU path is retained. With automatic calibration enabled
+(the default), the first eligible ZIP attack measures both original verification and the filter
+on the exact active GPU set, including multiple GPUs: two alternating two-second windows per mode,
+plus hashcat startup and shader compilation. The conservative comparison uses the slowest filter
+sample and fastest original sample, and requires a 5% gain. Results are cached for the device set
+and policy; a changed hybrid exclusion set is measured separately. Incomplete comparisons retain
+the original path and can retry on the next attack. Calibration is skipped when disabled or when
+raw probes would bypass an active temperature guard or duty limit. No benchmark-window visit is
+needed. The ZIP section of `bench-full` and `bench-zip` also include a separate check-byte row.
+Mode 17230 uses hashcat's stock kernel; no native or OpenCL kernel changes are required.
+
 ### False positives
 
 The hash covers one entry. For a stored entry a wrong password passes the check byte and the CRC-32
 about once in 5 * 10^11 candidates, a few minutes of GPU work; deflated entries must also inflate to
 the stored length, so they are far safer. `ZipExtractor` therefore attacks the smallest deflated
-entry unless a stored one is at least 8 times smaller (entries within hashcat's 320 KB limit first),
-and when the archive has other classic ZipCrypto entries it sets `HashTarget.ConfirmPassword`
+entry when there is no confirmation. With confirmation it estimates survivor work from encrypted
+bytes and the measured stored/deflated rates (2484/781 M/s). A stored entry can be about 3.18 times
+larger and still win. Entries within hashcat's 320 KB limit come first; large stored entries keep
+the deflated fallback because their GPU prefix check is unsafe. The constants live in `ChooseClassic`.
+When the archive has other classic ZipCrypto entries it sets `HashTarget.ConfirmPassword`
 (`ZipPasswordConfirmer`): up to 16 other entries, each checked by its header's check byte and, for
 stored or deflated entries up to 1 MB (4 MB in all), by decrypting, inflating and comparing the
 CRC-32. A single stored entry gets a note to confirm the password by opening the archive.
@@ -503,12 +597,39 @@ folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13
 iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's PBKDF2. The kernel
 is offered when the library has a vector path (AVX2 or NEON).
 
-ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 8 adds `rk_zip_search` and
-`rk_zip_path`. The managed worker keeps its prefix-key cache and passes the three keys after the
-prefix plus the final-position charset. The C filter returns all header survivors in candidate
+RAR 3 (`Rar3Kernel`, mode 12500): `native/rar3_lanes.h` shares the stream, schedule and IV code
+between AVX2/NEON (two groups of 8) and AVX-512 (two groups of 16). API version 11 adds
+`rk_rar3_lanes`, the batch width used by `PrefixBatch`. AVX-512 is enabled by default only after
+a once-per-process known-answer test checks every batch position at lengths 1, 7, 22 and 26
+and confirms that vector code ran rather than the scalar allocation fallback.
+A mismatch keeps the AVX2 fallback for that process. `RECOVERKIT_RAR3_AVX512=0` disables the
+wide path; `1` or unset enables it subject to CPU/OS support and the self-test. Compare in fresh
+processes with `bench-native --mode 12500 --threads 16 --seconds 10 --length 7`, which prints the
+selected path. AVX-512 was cross-compiled but has not been executed on this development host.
+`Rar3NativeTests` compares digest and IV bytes with the reference and narrow paths, including
+partial batches; its slow test sweeps all supported lengths. `native/tests/rar3_test.c` checks
+known answers on the host's narrow vector path and rejects an intentionally corrupted last lane.
+
+API version 11 also exports passive self-test states and observed native execution masks for RAR 3
+and PBKDF2-SHA256. RAR 5 now checks all 16 wide lanes against fixed independent answers before
+allowing AVX-512; `RECOVERKIT_RAR5_AVX512=0` disables it and `1` or unset allows the guarded path.
+The report distinguishes the report process's state from the isolated workers' states. The system
+section lists .NET and native AVX2/AVX-512 F separately, native SHA-NI, OS ZMM support and API version.
+ZIP has no native startup guard; its isolated diagnostic check is the correctness evidence.
+
+ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 11 adds `rk_zip_search_batch`
+alongside `rk_zip_search` and `rk_zip_path`. The managed worker keeps its prefix-key cache and
+passes the three keys after the prefix plus the final-position charset. The C filter returns all header survivors in candidate
 order, then the existing managed `Verify` checks the entry. It deliberately filters only the last
 header byte, including for two-check-byte archives; `Verify` handles the other byte. No password
 packing, heap allocation or prefix re-hashing is needed in the native loop.
+
+Small final charsets request multiple prefixes with `RkNative.BatchFor`. The worker fills lanes
+across prefixes with three arrays of per-candidate prefix keys and a final-character array. Native
+paths share their rounds with single-prefix search; managed AVX2 and NEON load the same keys.
+Charsets of 48 or more keep the single-prefix path, including the 95-character benchmark.
+`ZipCryptoNativeTests.CpuMaskRatesCompareLaneFillWithOnePrefixAtATime` (category `Slow`) prints
+three paired CPU-only rates for literal, digit, lowercase and all-printable mask endings.
 
 `native/zip_lanes.h` supplies the same rounds for AVX-512 (three groups of 16), AVX2 (three groups
 of 8), NEON (four groups of 4, nibble-table lookups), and scalar (four interleaved candidates).
@@ -531,6 +652,91 @@ prefix changes, 64-byte passwords, stored/deflated entries and one/two-check-byt
 builds; its first comment gives build commands.
 
 ## Hybrid CPU + GPU
+
+File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for RAR 5
+(13000), encrypted-header RAR 3 (12500), PDF R6 (10700) and TrueCrypt Whirlpool (29331).
+`DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
+through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
+`$HEX[...]` output. Binary recovered passwords retain `$HEX[...]` when UTF-8 text would lose bytes.
+Equal-length passwords fill the existing native vector exports through
+`KernelWorker.SearchPasswords`; the reference workers provide the managed fallback. No native ABI
+change is needed. Each export buffers at most 65,536 candidates. Larger rule amplifiers use hashcat
+alone. Dictionary hybrid uses pure GPU kernels to avoid optimized-kernel length rejections in the GPU share.
+
+The CPU prefetches one batch while hashing the current one. Hashcat receives a predicted share
+from the bottom; the CPU works down from the top, including otherwise idle work below hashcat's
+limit. Both stop when hashcat's restore frontier meets the CPU's committed frontier. If hashcat
+finishes first, a remainder starts it again only when its estimated CPU time exceeds four
+startups. Mask splitting and rebalancing are unchanged.
+RAR 5 candidates beyond the
+127-byte mask limit use the managed PBKDF2 reference check up to the pure GPU kernel's 256-byte
+limit. Other overlong candidates and non-ASCII RAR 3 candidates are saved as exact expanded
+`$HEX[...]` strings in a deferred wordlist while the CPU continues on supported candidates.
+Hashcat checks that list at the end without reapplying the original rules. The checkpoint stores
+its committed byte length and cursor, so a stop in either phase can resume; any uncommitted file
+suffix is truncated. The file remains alongside a stopped session and is removed on completion.
+Fast formats, RAR 3 data-only modes 23700/23800 (no built-in kernel), attacks 1/6/7,
+stdin/generators, extra hashcat arguments and TrueCrypt keyfiles keep their existing paths.
+Dictionary checkpoints fingerprint the wordlist, rules and arguments; changed input or invalid
+checkpoint bounds are refused, retaining the saved session so the original input can be restored.
+A deterministic sort by byte length and bytes supplies a saved candidate ordinal within the CPU
+batch. All claimed vector groups finish before a stop is saved, so CPU groups are not replayed.
+Hashcat retains its own restore-point behavior, which can replay work still in flight at a stop.
+Old GPU-only dictionary sessions continue with their original engine.
+Disabling hybrid before resume restarts the original step, so a deferred wordlist's cursor cannot
+be mistaken for an original-wordlist position.
+`DictionaryHybridTests` checks coverage, overlap, prefetch, deferred candidates and stop/resume with a fake GPU;
+`DictionaryHybridHashcatTests` checks real stdout/cracking ranges and RAR first/middle/last finds.
+Set `RECOVERKIT_TEST_HASHCAT` to a private hashcat 8 binary and run
+`dotnet test --filter FullyQualifiedName~DictionaryHybridHashcatTests` for the latter.
+
+For a Windows RAR 5 comparison, use a hash file whose password is absent from the fixed job,
+a private hashcat 8 copy and a separate settings directory. The commands below preserve the
+wordlist bytes when taking the first two million lines. They require PowerShell and .NET 10.
+
+```powershell
+$env:RECOVERKIT_HOME = Join-Path $PWD 'dictionary-benchmark-home'
+$hc = Join-Path $PWD 'private-hashcat\hashcat.exe'
+$rule = Join-Path $PWD 'private-hashcat\rules\best66.rule'
+$cli = 'src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.dll'
+dotnet build src\RecoverKit.Cli -c Release
+$src = [IO.File]::OpenRead((Join-Path $PWD 'rockyou.txt'))
+$dst = [IO.File]::Create((Join-Path $PWD 'rockyou-2m.txt'))
+$buf = [byte[]]::new(65536)
+$lines = 0
+try {
+    while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+        $take = $n
+        for ($i = 0; $i -lt $n; $i++) {
+            if ($buf[$i] -eq 10) { $lines++; if ($lines -eq 2000000) { $take = $i + 1; break } }
+        }
+        $dst.Write($buf, 0, $take)
+        if ($lines -eq 2000000) { break }
+    }
+} finally { $src.Dispose(); $dst.Dispose() }
+
+foreach ($pair in 1..3) {
+    dotnet $cli crack rar5.hash --hash-mode 13000 --dict rockyou-2m.txt --rules $rule --hashcat $hc --strategy GpuOnly --no-hybrid --no-potfile --new --debug | Tee-Object "gpu-$pair.txt"
+    dotnet $cli crack rar5.hash --hash-mode 13000 --dict rockyou-2m.txt --rules $rule --hashcat $hc --strategy GpuOnly --hybrid --no-potfile --new --debug | Tee-Object "hybrid-$pair.txt"
+}
+Get-Content gpu-*.txt,hybrid-*.txt | Select-String 'RESULT:|Elapsed:'
+Get-ChildItem "$env:RECOVERKIT_HOME\logs\recoverkit-cli-*.log" | ForEach-Object {
+    $starts = @(Select-String -Path $_.FullName -Pattern ' CMD .* --session ')
+    "{0}: {1} cracking starts" -f $_.Name, $starts.Count
+    $starts.Line
+    Select-String -Path $_.FullName -Pattern 'Hybrid GPU first status|Hybrid CPU export ready|Hybrid CPU hashed|fronts met|deferred GPU|Recovery completed'
+}
+```
+
+Use `--dict rockyou.txt` in both commands for the full requested rockyou/best66 job. Do not use
+`--stop-after`: `RESULT: NotFound` and `Elapsed:` measure completion, including startup and cleanup.
+The status row's total H/s sums the device rows; `CPU (built-in engine)` is the CPU share and
+the named GPU is hashcat's share. The debug log path prints at startup. `CMD ... --session` counts
+cracking process starts, excluding device/count probes and `--stdout` exporters; matching `EXIT`
+lines identify their stops. A nonempty deferred wordlist adds a separate cracking start.
+On an integrated GPU, a remembered CPU contribution below one quarter of the GPU rate keeps
+fresh jobs on the GPU; a saved hybrid job still resumes its pending CPU/deferred work.
+
 
 With a GPU, brute-force and mask attacks on formats with a built-in kernel run on both engines at
 once (`HybridRunner`; on by default, Preferences > Performance, `--no-hybrid`): hashcat on the GPUs

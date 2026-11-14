@@ -23,8 +23,29 @@ public static class KernelVariants
         [10400] = NativeAndManaged,
         [10500] = NativeAndManaged,
         [10510] = NativeAndManaged,
-        [12500] = NativeAndManaged,
+        [12500] = [.. NativeAndManaged, .. WideVariants],
+        [13000] = [new("default", () => true, () => null), .. WideVariants],
     };
+
+    private static Registration[] WideVariants =>
+    [
+        new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
+        new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => null),
+    ];
+
+    internal static bool WideSupported(string variant, bool available, RkNative.Feature features) => available && variant switch
+    {
+        "avx2" => features.HasFlag(RkNative.Feature.Avx2),
+        "avx512" => features.HasFlag(RkNative.Feature.Avx512),
+        _ => false,
+    };
+
+    private sealed class FeatureSelection : IDisposable
+    {
+        private readonly RkNative.Feature _saved = RkNative.Features;
+        public FeatureSelection() => RkNative.LimitFeatures(_saved & ~RkNative.Feature.Avx512);
+        public void Dispose() => RkNative.LimitFeatures(_saved);
+    }
 
     public static IReadOnlyList<Variant> ForMode(int mode)
     {

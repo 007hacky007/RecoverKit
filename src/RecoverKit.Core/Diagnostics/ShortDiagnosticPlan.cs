@@ -9,16 +9,17 @@ public sealed partial class DetailedBenchmarkRunner
 {
     public static double DefaultSectionSeconds(string section) => ShortBudgets.GetValueOrDefault(section);
 
-    internal static Dictionary<string, double> ShortBudgets => new() { ["system"] = 8, ["cpu"] = 28, ["gpu"] = 45, ["zip"] = 24, ["hybrid"] = 10 };
+    internal static Dictionary<string, double> ShortBudgets => new() { ["system"] = 8, ["cpu"] = CpuDiagnostics.HasWidePaths ? 180 : 28, ["gpu"] = 45, ["zip"] = 24, ["hybrid"] = 10 };
 
     private async Task<DiagnosticReport> RunShortAsync(string[] selected, IProgress<DiagnosticProgress>? progress, CancellationToken ct)
     {
         var clock = Stopwatch.StartNew();
         var report = new DiagnosticReport { CpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "cpu"), GpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "gpu") };
         if (selected.Length == 0) { report.Finished = DateTimeOffset.UtcNow; return report; }
-        var plan = new DiagnosticPlan { TotalBudget = TimeSpan.FromSeconds(115), SectionBudgets = ShortBudgets };
+        var plan = new DiagnosticPlan { TotalBudget = TimeSpan.FromSeconds(ShortBudgets.Values.Sum()), SectionBudgets = ShortBudgets };
         report.Plan = plan.Steps;
-        report.System["Test plan"] = "Default: 115 seconds for work, 5 seconds reserved for cleanup and profile storage";
+        report.System["Test plan"] = $"Default: {ShortBudgets.Values.Sum()} seconds for work, 5 seconds reserved for cleanup and profile storage";
+        CpuDiagnostics.AddSystemFacts(report, settings);
         report.System["Section budgets (seconds)"] = string.Join(", ", ShortBudgets.Select(p => $"{p.Key}: {p.Value}"));
         HashcatTool? local = null;
         string? isolated = null;
@@ -58,20 +59,34 @@ public sealed partial class DetailedBenchmarkRunner
             foreach (var d in devices) report.System[$"Device {d.Id}"] = $"{d.Name}; {d.Backend}; driver {d.DriverVersion}; alias {d.AliasOf}; skipped {d.IsSkippedAlias}";
             gpuAllowed = HashcatRunner.ActiveGpus(settings, devices).Count > 0 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
+        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 17200, 17210 } : Array.Empty<int>())
+        foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && v.Name is "avx2" or "avx512"))
+        foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name))
+            Add("cpu", $"Wide comparison mode {mode}, {variant.Name}, {count} workers", 12, async token =>
+            {
+                var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, count, settings.Priority, 1, token, 1);
+                report.Measurements.Add(new() { Section = "cpu", Step = "Wide comparison", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = 7,
+                    Engine = "cpu", Variant = variant.Name, Threads = count, Repeat = 1, Correct = result.Check.Passed, Speed = result.Speed,
+                    Error = result.Error ?? result.Check.Error, ElapsedSeconds = result.ElapsedSeconds,
+                    Details = new() { ["actual path"] = result.ActualPath, ["self-test state"] = result.SelfTestState,
+                        ["correctness cases"] = result.Check.Cases.ToString(), ["Short plan"] = "True", ["Isolation"] = "Separate process" } });
+                CpuDiagnostics.WorkerStates(report);
+            });
         int threads = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
         var cpuModes = NativeKernels.BenchmarkHashes.Keys.Where(m => m > 0).ToList();
         foreach (int mode in cpuModes)
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
         {
-            if (mode == 17200) continue; // A ZIP path check covers both stored and deflated vectors.
+            if (variant.Name is "avx2" or "avx512" || mode == 17200) continue; // A ZIP path check covers both stored and deflated vectors.
             Add("cpu", $"Correctness mode {mode}, {variant.Name}", 1, async token =>
             {
-                var check = await CpuDiagnosticWorker.CheckAsync(mode, variant.Name, token);
+                var result = await CpuDiagnosticWorker.CheckResultAsync(mode, variant.Name, token);
+                var check = result.Check;
                 foreach (int checkedMode in mode == 17210 ? new[] { 17210, 17200 } : new[] { mode })
                 {
                     checks[(checkedMode, variant.Name)] = check.Passed;
                     report.Measurements.Add(new() { Section = "cpu", Step = "Correctness", Mode = checkedMode, Engine = "cpu", Variant = variant.Name,
-                        Correct = check.Passed, Error = check.Error, Details = new() { ["Cases"] = check.Cases.ToString(), ["Check"] = check.Passed ? "PASS" : "FAIL" } });
+                        Correct = check.Passed, Error = check.Error, Details = new() { ["actual path"] = result.ActualPath, ["self-test state"] = result.SelfTestState, ["Cases"] = check.Cases.ToString(), ["Check"] = check.Passed ? "PASS" : "FAIL" } });
                 }
             });
         }
@@ -80,14 +95,14 @@ public sealed partial class DetailedBenchmarkRunner
         {
             var variants = KernelVariants.ForMode(mode).Where(v => v.Supported).ToList();
             if (variants.Count < 2 && mode != 13000) continue;
-            foreach (var variant in variants.OrderByDescending(v => v.Name == (mode is 17200 or 17210 ? PerformanceProfiles.DefaultZipVariant() : "default")))
+            foreach (var variant in variants.Where(v => v.Name is not ("avx2" or "avx512")).OrderByDescending(v => v.Name == (mode is 17200 or 17210 ? PerformanceProfiles.DefaultZipVariant() : "default")))
             {
                 async Task Measure(int repeat, CancellationToken token)
                 {
                     var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, threads, settings.Priority, repeat, token, 1);
                     report.Measurements.Add(new() { Section = "cpu", Step = "Short CPU window", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = 7,
-                        Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed, Error = result.Error,
-                        ElapsedSeconds = result.ElapsedSeconds, Details = new() { ["Short plan"] = "True", ["Selection"] = "Unconfirmed choices use automatic calibration" } });
+                        Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed, Error = result.Error ?? result.Check.Error,
+                        ElapsedSeconds = result.ElapsedSeconds, Details = new() { ["actual path"] = result.ActualPath, ["self-test state"] = result.SelfTestState, ["Short plan"] = "True", ["Selection"] = "Unconfirmed choices use automatic calibration" } });
                 }
                 string label = $"Mode {mode}, {variant.Name}, {threads} workers, 1-second window";
                 Add("cpu", label, 2, token => Measure(1, token), () => checks.GetValueOrDefault((mode, variant.Name)));
@@ -120,8 +135,8 @@ public sealed partial class DetailedBenchmarkRunner
                 report.Measurements.Add(await MeasureComparisonAsync(local!, Chosen(0)!, file, "replacement", 1, token));
             }, () => gpuAllowed && Chosen(0) is not null && !report.Measurements.Any(r => r.Correct && r.Details.GetValueOrDefault("Test file") == file.FileName));
         foreach (int repeat in new[] { 1, 2 })
-        foreach (var sample in ComparisonZipSamples().Where(s => s.Label.Contains("stored, 453 bytes, check1") || s.Label == "deflated, 1 KB, crc"))
-        foreach (string variant in new[] { "replacement", "hashcat" })
+        foreach (var sample in ComparisonZipSamples().Where(s => s.Label.Contains("stored, 453 bytes, check1") || s.Label == "deflated, 1 KB, crc" || s.Mode == 17230))
+        foreach (string variant in sample.Mode == 17230 ? new[] { "replacement" } : new[] { "replacement", "hashcat" })
             Add("zip", $"{sample.Label}, {variant}, chosen backend", 6, async token =>
             {
                 var dev = Chosen(0)!;
@@ -155,7 +170,7 @@ public sealed partial class DetailedBenchmarkRunner
             }, () => gpuAllowed && Chosen(0) is not null && checks.GetValueOrDefault((mode, mode == 17210 ? PerformanceProfiles.DefaultZipVariant() : "default")));
         void Update() => progress?.Report(plan.Progress(clock.Elapsed));
         using var pulse = new Timer(_ => Update(), null, 1000, 1000);
-        plan.TotalBudget = TimeSpan.FromSeconds(Math.Max(.001, 115 - clock.Elapsed.TotalSeconds));
+        plan.TotalBudget = TimeSpan.FromSeconds(Math.Max(.001, ShortBudgets.Values.Sum() - clock.Elapsed.TotalSeconds));
         try { await plan.RunAsync(report, Update, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { report.Cancelled = true; }
         finally
@@ -163,7 +178,7 @@ public sealed partial class DetailedBenchmarkRunner
             pulse.Change(Timeout.Infinite, Timeout.Infinite);
             if (isolated is not null) try { Directory.Delete(isolated, true); } catch (IOException) { }
         }
-        report.Summary.Add("Default test: short windows within a two-minute limit. Unconfirmed CPU choices use automatic calibration before an attack (at most six seconds). Unconfirmed GPU and whole-job choices keep their defaults until the thorough test.");
+        report.Summary.Add("Default test: short windows within the reported section budgets. Unconfirmed CPU choices use automatic calibration before an attack (at most six seconds). Unconfirmed GPU and whole-job choices keep their defaults until the thorough test.");
         report.Summary.Add("Full backend/mode sweeps, pure kernels, repeats, worker sweeps and integrated-GPU whole-job comparisons: not measured, run the thorough test.");
         if (!gpuAllowed && selected.Any(s => s is "gpu" or "zip" or "hybrid"))
             report.Summary.Add("GPU work was not measured: no eligible GPU was detected or configured guard/power/duty limits prevented it.");

@@ -62,10 +62,10 @@ public sealed class HashcatStatus
     };
 
     /// <summary>A copy with other devices, status or start time (used by the GPU temperature guard).</summary>
-    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null) => new()
+    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null, long? restorePoint = null) => new()
     {
         Status = status ?? Status, GuessBase = GuessBase, GuessMod = GuessMod, GuessBasePercent = GuessBasePercent,
-        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = ProgressTotal, RestorePoint = RestorePoint,
+        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = ProgressTotal, RestorePoint = restorePoint ?? RestorePoint,
         ResumedFrom = ResumedFrom, Rejected = Rejected, RecoveredHashes = RecoveredHashes, TotalHashes = TotalHashes,
         TimeStart = timeStart ?? TimeStart, EstimatedStop = EstimatedStop, Devices = devices ?? Devices,
     };
