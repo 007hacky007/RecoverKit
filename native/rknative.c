@@ -38,7 +38,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 8
+#define RK_API_VERSION 9
 
 enum
 {
@@ -3715,6 +3715,24 @@ RK_EXPORT int rk_zip_search(const uint8_t* header, uint8_t c1, uint8_t c2,
         case 2: return zip_search_neon(header, c1, c2, p0, p1, p2, last, n, hits, cap);
 #endif
         case 1: return zip_search_scalar(header, c1, c2, p0, p1, p2, last, n, hits, cap);
+        default: return -1;
+    }
+}
+
+RK_EXPORT int rk_zip_search_batch(const uint8_t* header, uint8_t c1, uint8_t c2,
+    const uint32_t* keys, const uint8_t* last, int n, int* hits, int cap, int path)
+{
+    if (!header || n < 0 || n > INT32_MAX / 3 || cap < 0 || (n && (!last || !keys)) || (cap && !hits)) return -1;
+    switch (rk_zip_path(path))
+    {
+#if RK_X64
+        case 4: return zip_search_batch_avx512(header, c1, c2, keys, last, n, hits, cap);
+        case 3: return zip_search_batch_avx2(header, c1, c2, keys, last, n, hits, cap);
+#elif RK_ARM64
+        case 5: return zip_search_batch_armcrc(header, c1, c2, keys, last, n, hits, cap);
+        case 2: return zip_search_batch_neon(header, c1, c2, keys, last, n, hits, cap);
+#endif
+        case 1: return zip_search_batch_scalar(header, c1, c2, keys, last, n, hits, cap);
         default: return -1;
     }
 }

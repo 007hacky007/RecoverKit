@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 8;
+    private const int RequiredVersion = 9;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -66,6 +66,11 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_bench")]
     public static partial double Bench(int which, int reps);
+
+    /// <summary>Three arrays of n prefix keys, with one final character per candidate; hits are flat indices.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_zip_search_batch")]
+    public static partial int ZipSearchBatch(byte* header12, byte check1, byte check2, uint* keys,
+        byte* last, int n, int* hits, int capacity, int path);
 
     private static readonly Lazy<bool> _available = new(Probe);
 

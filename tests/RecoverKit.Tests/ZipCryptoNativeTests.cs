@@ -1,12 +1,14 @@
+using System.Diagnostics;
 using RecoverKit.Core.Formats;
 using RecoverKit.Core.Native;
 using RecoverKit.Core.Native.Kernels;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace RecoverKit.Tests;
 
 [Collection("NativeFeatures")]
-public class ZipCryptoNativeTests
+public class ZipCryptoNativeTests(ITestOutputHelper output)
 {
     private static IEnumerable<int> Paths()
     {
@@ -117,6 +119,59 @@ public class ZipCryptoNativeTests
     }
 
     [Fact]
+    public void SmallLastCharsetsRequestEnoughPrefixesToFillLanes()
+    {
+        var kernel = ZipCryptoKernel.TryParse(NativeEngineTests.Pkzip17210)!;
+        Assert.True(kernel.PrefixBatch(1) >= 48);
+        Assert.True(kernel.PrefixBatch(10) > 1);
+        Assert.True(kernel.PrefixBatch(26) > 1);
+        Assert.Equal(1, kernel.PrefixBatch(95));
+    }
+
+    [Fact]
+    public void BatchMatchesIndividualSearchesIncludingTailsAndEmptyPrefixes()
+    {
+        int saved = ZipCryptoNative.RequestedPath;
+        bool disabled = RkNative.Disabled;
+        try
+        {
+            int[] paths = RkNative.Available ? Paths().Prepend(-2).Prepend(-1).ToArray() : [-2, -1];
+            var rng = new Random(291);
+            foreach (bool noNative in new[] { false, true })
+            foreach (int path in paths)
+            foreach (int plen in new[] { 0, 1, 6, 63 })
+            foreach (int n in new[] { 1, 3, 10, 26, 95 })
+            {
+                RkNative.Disabled = noNative;
+                var prefixes = new byte[plen * 49]; rng.NextBytes(prefixes);
+                var last = new byte[n]; rng.NextBytes(last);
+                foreach (int winningPrefix in new[] { 0, 7, 23, 47, 48 })
+                {
+                    var password = prefixes.AsSpan(winningPrefix * plen, plen).ToArray().Append(last[^1]).ToArray();
+                    var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive(
+                        [new("data", "payload"u8.ToArray(), true, true)], password, rng));
+                    var kernel = ZipCryptoKernel.TryParse(target.HashLines)!;
+                    ZipCryptoNative.RequestedPath = -2;
+                    var reference = kernel.CreateWorker();
+                    int expected = -1;
+                    for (int i = 0; i < 49; i++)
+                    {
+                        int hit = reference.Search(prefixes.AsSpan(i * plen, plen), last);
+                        if (hit >= 0) { expected = i * n + hit; break; }
+                    }
+                    ZipCryptoNative.RequestedPath = path;
+                    var worker = kernel.CreateWorker();
+                    Assert.Equal(expected, worker.SearchBatch(prefixes, 49, last));
+                    Assert.Equal(expected, worker.SearchBatch(prefixes, 49, last));
+                    Assert.Equal(-1, worker.SearchBatch([], 0, last));
+                    Assert.Equal(-1, worker.SearchBatch(prefixes, 49, []));
+                }
+            }
+        }
+        finally { ZipCryptoNative.RequestedPath = saved; RkNative.Disabled = disabled; }
+    }
+
+    [Fact]
     public void FeatureMaskDisablesUnsupportedPaths()
     {
         if (!RkNative.Available) return;
@@ -155,6 +210,40 @@ public class ZipCryptoNativeTests
             RkNative.LimitFeatures((RkNative.Feature)~0);
             ZipCryptoNative.RequestedPath = saved;
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public void CpuMaskRatesCompareLaneFillWithOnePrefixAtATime()
+    {
+        output.WriteLine($"API={RkNative.ApiVersion}, path={ZipCryptoNative.PathName}");
+        var target = ZipCryptoSample.Extract(ZipCryptoSample.Archive(
+            [new("payload", "synthetic benchmark payload"u8.ToArray(), false)], "outside-mask"u8, new Random(91)));
+        var kernel = ZipCryptoKernel.TryParse(target.HashLines)!;
+        foreach (string suffix in new[] { "x", "?d", "?l", "?a" })
+        {
+            var space = MaskSpace.FromHashcatArgs(["-a", "3", "?l?l?l?l?l?l" + suffix])!;
+            for (int trial = 0; trial < 3; trial++)
+            foreach (bool batch in new[] { false, true })
+            {
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var engine = new NativeEngine(batch ? kernel : new OnePrefixKernel(kernel), space) { Threads = 1 };
+                var timer = Stopwatch.StartNew();
+                var result = engine.Run(null, stop.Token);
+                double seconds = timer.Elapsed.TotalSeconds;
+                Assert.Equal(NativeOutcome.Stopped, result.Outcome);
+                Assert.Null(result.Password);
+                output.WriteLine($"suffix={suffix}, trial={trial}, batch={batch}: {result.Tested / seconds:F0}/s");
+            }
+        }
+    }
+
+    private sealed class OnePrefixKernel(ZipCryptoKernel kernel) : NativeKernel
+    {
+        public override string Name => kernel.Name;
+        public override double SpeedHint => kernel.SpeedHint;
+        public override KernelWorker CreateWorker() => kernel.CreateWorker();
+        public override bool Verify(ReadOnlySpan<byte> password) => kernel.Verify(password);
     }
 
     private static void Step(ref uint a, ref uint b, ref uint c, byte plain)

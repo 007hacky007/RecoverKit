@@ -252,10 +252,12 @@ ZipCrypto entries' header checks (`Siblings`, from `ZipPasswordConfirmer`). CPU 
 that file through bounded streams and checks the entire output length, deflate end and CRC-32,
 without the old 64 MiB embedded-data limit. That costs as much as thousands of candidates (about
 170 us for a deflated 1.3 MB entry, 24 ms for a stored one), and 1 candidate in 256 passes the
-header check, so before the file is touched a survivor must pass the sibling headers (16 of them
-leave 2^-128) and, for deflate, `DeflateStartIsPlausible` on the first decrypted bytes plus an
-inflate of the 256 KB prefix in memory (`ZipPartialSpeedTests` keeps the cost under a few
-microseconds). A single large stored entry has no cheap check; it stays a CPU-only, slow case.
+header check. For deflate, survivors first pass `DeflateStartIsPlausible` on the first decrypted
+bytes, then inflate at most 4 KiB of encrypted input in memory. Full embedded targets use the same
+staged check before decrypting the whole body. For partial targets, the session confirmer's own
+sibling header checks run before the inflate stage or archive read. Early rejection cannot change
+the result because the confirmer rejects the same candidates. Stored partial targets without
+siblings have no cheap body check.
 `ConfirmPassword` also runs the existing other-entry checks. Partial GPU runs always use outfile
 confirmation and keep guessing.
 
@@ -481,12 +483,19 @@ folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13
 iteration count comes from the hash (lg2 1-24); hits are confirmed with .NET's PBKDF2. The kernel
 is offered when the library has a vector path (AVX2 or NEON).
 
-ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 8 adds `rk_zip_search` and
-`rk_zip_path`. The managed worker keeps its prefix-key cache and passes the three keys after the
-prefix plus the final-position charset. The C filter returns all header survivors in candidate
+ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 9 adds `rk_zip_search_batch`
+alongside `rk_zip_search` and `rk_zip_path`. The managed worker keeps its prefix-key cache and
+passes the three keys after the prefix plus the final-position charset. The C filter returns all header survivors in candidate
 order, then the existing managed `Verify` checks the entry. It deliberately filters only the last
 header byte, including for two-check-byte archives; `Verify` handles the other byte. No password
 packing, heap allocation or prefix re-hashing is needed in the native loop.
+
+Small final charsets request multiple prefixes with `RkNative.BatchFor`. The worker fills lanes
+across prefixes with three arrays of per-candidate prefix keys and a final-character array. Native
+paths share their rounds with single-prefix search; managed AVX2 and NEON load the same keys.
+Charsets of 48 or more keep the single-prefix path, including the 95-character benchmark.
+`ZipCryptoNativeTests.CpuMaskRatesCompareLaneFillWithOnePrefixAtATime` (category `Slow`) prints
+three paired CPU-only rates for literal, digit, lowercase and all-printable mask endings.
 
 `native/zip_lanes.h` supplies the same rounds for AVX-512 (three groups of 16), AVX2 (three groups
 of 8), NEON (four groups of 4, nibble-table lookups), and scalar (four interleaved candidates).
