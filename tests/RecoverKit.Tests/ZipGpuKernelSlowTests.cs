@@ -20,6 +20,7 @@ namespace RecoverKit.Tests;
 ///   dotnet test tests/RecoverKit.Tests --filter FullyQualifiedName~ZipGpuKernelSlowTests
 /// </summary>
 [Trait("Category", "Slow")]
+[Collection("NativeFeatures")]   // one hashcat at a time: GPU tests must not run in parallel
 public class ZipGpuKernelSlowTests(ITestOutputHelper output)
 {
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";

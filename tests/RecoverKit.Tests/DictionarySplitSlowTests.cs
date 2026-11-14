@@ -9,6 +9,7 @@ using Xunit.Abstractions;
 namespace RecoverKit.Tests;
 
 [Trait("Category", "Slow")]
+[Collection("NativeFeatures")]   // one hashcat at a time: GPU tests must not run in parallel
 public sealed class DictionarySplitSlowTests(ITestOutputHelper output) : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("rk-dictionary-split").FullName;

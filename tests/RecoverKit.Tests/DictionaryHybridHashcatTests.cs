@@ -13,6 +13,7 @@ using Xunit;
 namespace RecoverKit.Tests;
 
 [Trait("Category", "Slow")]
+[Collection("NativeFeatures")]   // one hashcat at a time: GPU tests must not run in parallel
 public class DictionaryHybridHashcatTests(ITestOutputHelper log)
 {
     [Fact]
