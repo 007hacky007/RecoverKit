@@ -172,7 +172,7 @@ public class MacHashcatTests
     {
         var macOs = Directory.CreateDirectory(System.IO.Path.Combine(root, "RecoverKit.app", "Contents", "MacOS")).FullName;
         var bundle = Directory.CreateDirectory(System.IO.Path.Combine(root, "RecoverKit.app", "Contents", "Resources", "hashcat")).FullName;
-        File.WriteAllText(System.IO.Path.Combine(bundle, "hashcat"), "#!/bin/sh\necho v7.1.2\n");
+        File.WriteAllText(System.IO.Path.Combine(bundle, HashcatInstaller.ExeName), "#!/bin/sh\necho v7.1.2\n");
         Directory.CreateDirectory(System.IO.Path.Combine(bundle, "modules"));
         File.WriteAllText(System.IO.Path.Combine(bundle, "modules", "module_00000.so"), "x");
         Directory.CreateDirectory(System.IO.Path.Combine(bundle, "kernels"));
@@ -202,7 +202,6 @@ public class MacHashcatTests
         using var t = new TempDir();
         var (_, bundle) = MakeApp(t.Path, "7.1.2-1");
         var inst = new HashcatInstaller(System.IO.Path.Combine(t.Path, "engines"));
-        if (OperatingSystem.IsWindows()) File.Move(System.IO.Path.Combine(bundle, "hashcat"), System.IO.Path.Combine(bundle, "hashcat.exe"));
 
         Assert.True(inst.BundleNeedsInstall(bundle));
         var stages = new List<string>();
