@@ -39,6 +39,7 @@ public sealed class SessionState
     public bool Restorable { get; set; }
     /// <summary>Kernel choice for the saved step/mode. Null in older sessions, which resume without -O.</summary>
     public bool? UseOptimizedKernel { get; set; }
+    public bool DictionaryPlanPending { get; set; }
     public DateTime SavedUtc { get; set; }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
@@ -72,6 +73,7 @@ public sealed class SessionState
     public static void Delete(Settings s, string key)
     {
         try { File.Delete(PathFor(s, key)); } catch (IOException) { }
+        DictionaryKernelPlanner.Cleanup(s, key);
     }
 }
 
@@ -117,13 +119,22 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                 var cached = target.ConfirmPassword is { } confirm
                     ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm)
                     : await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
-                if (cached.Count > 0) return new SessionResult { Outcome = SessionOutcome.FoundInCache, Passwords = cached };
+                if (cached.Count > 0)
+                {
+                    DictionaryKernelPlanner.Cleanup(settings, key);
+                    return new SessionResult { Outcome = SessionOutcome.FoundInCache, Passwords = cached };
+                }
             }
         }
 
         var power = await StartPowerLimitAsync(ct);
         if (power.Cancelled) return new SessionResult { Outcome = SessionOutcome.Stopped };
-        try { return await RunStepsAsync(target, filePath, resume, key, potfile, hashFile, steps, ct); }
+        try
+        {
+            var result = await RunStepsAsync(target, filePath, resume, key, potfile, hashFile, steps, ct);
+            if (result.Outcome != SessionOutcome.Stopped) DictionaryKernelPlanner.Cleanup(settings, key);
+            return result;
+        }
         finally
         {
             if (power.Session is not null)
@@ -199,7 +210,11 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     private async Task<SessionResult> RunStepsAsync(HashTarget target, string filePath, SessionState? resume, string key,
         string potfile, string hashFile, IReadOnlyList<AttackSpec> steps, CancellationToken ct)
     {
-        var state = resume ?? new SessionState { FilePath = filePath, Key = key, Modes = target.Modes.ToList(), Steps = steps.ToList() };
+        var state = resume ?? new SessionState { FilePath = filePath, Key = key, Modes = target.Modes.ToList(), Steps = steps.ToList(), DictionaryPlanPending = true };
+        try { await DictionaryKernelPlanner.PrepareSessionAsync(state, target, tool, settings, Devices, PlannerContext, message => Log?.Invoke(LogKind.Info, message), ct); }
+        catch (OperationCanceledException) { state.Save(settings); return new SessionResult { Outcome = SessionOutcome.Stopped }; }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        { SessionState.Delete(settings, key); return new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }; }
         var runner = new HashcatRunner(tool) { KnownDevices = Devices };
         runner.StatusReceived += s => Status?.Invoke(s);
         runner.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
@@ -232,7 +247,14 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         {
             var spec = state.Steps[si];
             PreparedAttack attack;
-            try { attack = AttackPlanner.Prepare(spec, target, PlannerContext); }
+            try
+            {
+                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, message => Log?.Invoke(LogKind.Info, message), ct, settings.ExtraArguments);
+                attack = AttackPlanner.Prepare(spec, target, PlannerContext);
+            }
+            catch (OperationCanceledException) { state.Save(settings); return new SessionResult { Outcome = SessionOutcome.Stopped }; }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            { SessionState.Delete(settings, key); return new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }; }
             catch (AttackPlanException ex)
             {
                 Log?.Invoke(LogKind.Warning, $"Step {si + 1}/{state.Steps.Count} skipped: {ex.Message}");
@@ -402,8 +424,25 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                                           (restore ? " - resuming" : $" - {attack.Keyspace:N0} candidates"));
                 foreach (var n in attack.Notes) Log?.Invoke(LogKind.Warning, n);
 
-                bool optimized = nativePlan is null && !cpuDictionary && await SelectOptimizedKernelAsync(tool, mode, attack, runSettings.OptimizedKernels && (runSettings.PerformanceChoice?.Optimized ?? runSettings.GpuPerformanceChoice?.Optimized) != false,
-                    restore, state.UseOptimizedKernel);
+                bool optimizedAllowed = runSettings.OptimizedKernels && runSettings.PerformanceChoice?.Optimized != false
+                    && runSettings.GpuPerformanceChoice?.Optimized != false && OptimizedDictionaryBackendAllowed(mode, attack, runSettings, Devices, OperatingSystem.IsMacOS());
+                bool optimized;
+                try
+                {
+                    optimized = nativePlan is null && !cpuDictionary && await SelectOptimizedKernelAsync(tool, mode, attack, optimizedAllowed,
+                        restore, state.UseOptimizedKernel, runSettings.ExtraArguments, ct, spec.DictionaryKernel?.Optimized,
+                        (done, total) => Log?.Invoke(LogKind.Info, $"Checking word lengths ... {(total > 0 ? 100.0 * done / total : 100):F0}%"));
+                }
+                catch (OperationCanceledException)
+                {
+                    state.StepIndex = si;
+                    state.ModeIndex = mi;
+                    state.HashcatSession = session;
+                    state.UseOptimizedKernel = null;
+                    state.Restorable = false;
+                    state.Save(settings);
+                    return new SessionResult { Outcome = SessionOutcome.Stopped };
+                }
                 state.UseOptimizedKernel = optimized;
                 state.StepIndex = si;
                 state.ModeIndex = mi;
@@ -456,7 +495,8 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     result = await new Native.ZipDictionaryRunner { Status = s => Status?.Invoke(s) }.RunAsync(target, request, ct);
                 }
 
-                if (result.LastStatus is { TotalSpeed: > 0 } ls) settings.SpeedByMode[mode] = ls.TotalSpeed;
+                if (spec.DictionaryKernel is not { Pass: 2 } && result.LastStatus is { TotalSpeed: > 0 } ls)
+                    settings.SpeedByMode[mode] = ls.TotalSpeed;
 
                 switch (result.Outcome)
                 {
@@ -478,6 +518,14 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
                     default:
                         Log?.Invoke(LogKind.Info, $"Step {si + 1} finished, password not found ({result.LastStatus?.ProgressDone ?? 0:N0} candidates tested).");
                         Cleanup(session);
+                        if (spec.DictionaryKernel is { Pass: 1, TailPath: not null })
+                        {
+                            state.StepIndex = si + 1;
+                            state.ModeIndex = 0;
+                            state.Restorable = false;
+                            state.UseOptimizedKernel = null;
+                            state.Save(settings);
+                        }
                         break;
                 }
             }
@@ -578,23 +626,40 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
         Log?.Invoke(LogKind.Info, "GPU guard: " + string.Join("; ", parts) + ".");
     }
 
+    internal static bool OptimizedDictionaryBackendAllowed(int mode, PreparedAttack attack, Settings runSettings,
+        IReadOnlyList<BackendDevice>? devices, bool isMacOS)
+    {
+        if (!isMacOS || mode != 12500 || runSettings.Strategy == DeviceStrategy.CpuOnly
+            || Native.MaskSpace.FromHashcatArgs(attack.Args) is not null) return true;
+        // Apple's OpenCL missed RAR3 dictionary candidates with -O; only Metal passed the comparison.
+        var gpus = HashcatRunner.ActiveGpus(runSettings, devices);
+        return gpus.Count > 0 && gpus.All(d => d.IsMetal);
+    }
+
     /// <summary>
     /// Selects the kernel once per attack, or reuses its saved choice on resume. A null attack
     /// selects for hashcat's benchmark mask. Unknown limits and unbounded candidate sources use pure.
     /// </summary>
     public static async Task<bool> SelectOptimizedKernelAsync(HashcatTool tool, int mode, PreparedAttack? attack,
-        bool enabled, bool restore = false, bool? savedChoice = null)
+        bool enabled, bool restore = false, bool? savedChoice = null, string? extraArguments = null, CancellationToken ct = default,
+        bool? plannedChoice = null, Action<long, long>? scanProgress = null)
     {
         if (restore) return savedChoice ?? false;
         if (!enabled) return false;
-        var info = await tool.ModeInfoAsync(mode, 3);
+        int attackMode = attack is null ? 3 : HashcatRunner.EffectiveAttackMode(attack, null);
+        // Extra arguments may change rules, encodings or the candidate source after preparation.
+        if (attackMode != 3 && !string.IsNullOrWhiteSpace(extraArguments)) return false;
+        if (plannedChoice is bool planned) return planned;
+        var info = await tool.ModeInfoAsync(mode, attackMode, ct);
         if (attack is null && info?.BenchmarkMask is { } mask)
         {
             attack = new PreparedAttack { Description = "Benchmark", Args = { "-a", "3" } };
             if (info.BenchmarkCharset1 is { Length: > 0 } cs && cs != "N/A") attack.Args.AddRange(["-1", cs]);
             attack.Args.Add(mask);
         }
-        return attack is not null && CanUseOptimizedKernel(info, attack);
+        if (attack is null || attack.Stdin is not null || info is not { HasOptimizedKernel: true, OptimizedPasswordLenMax: > 0 }) return false;
+        if (attackMode == 3) return CanUseOptimizedKernel(info, attack);
+        return await OptimizedCandidateBounds.MaximumAsync(attack, ct, tool.Directory, scanProgress) is { } maximum && maximum <= info.OptimizedPasswordLenMax;
     }
 
     internal static bool CanUseOptimizedKernel(HashModeInfo? info, PreparedAttack attack)

@@ -115,6 +115,42 @@ Tests that run hashcat on the GPU (`Category=Slow`, for example `ZipGpuKernelSlo
 as well; run them with `-p:RunSlowTests=true` or an explicit `--filter`.
 CI runs them in a separate workflow (`stay-tests.yml`) only when the attack's code or tests change.
 
+Optimized dictionary kernels use the limit reported by `--hash-info --hash-info -O -a N` for
+the actual attack mode. `OptimizedCandidateBounds` bounds raw bytes and every intermediate rule
+length. Fixed truncation and extraction caps bound later growth; earlier lengths still count.
+For single-mode, directly readable `-a 0` attacks, the planner
+finds the largest safe input length, including length-dependent growth such as doubling. When
+profitable, it saves two ordinary steps: the entire dictionary with `-O`, then the pure kernel
+with the same rules on only the words above that safe input length. Repeated short candidates
+in the second pass are harmless. The decision compares `N / optimized + N_long / pure` against
+`N / pure`, requires a 5% saving, and uses measured GPU rates or the mode's known kernel ratio.
+Unbounded/memory rules, escaped rule operands, streams, converted dictionaries, compressed
+dictionaries and extra candidate-changing arguments use pure. Combinations and dictionary/mask
+attacks keep the conservative all-or-nothing choice.
+Multi-mode sessions also keep that choice rather than changing the order of their mode loop.
+
+`WordlistLengthCache` persists the source path, size, modification time and byte-length histogram
+under the application data folder's `wordlist-lengths` directory. Cached thresholds need no
+rescan. Cold scans run off the calling thread, report "Checking word lengths ..." and honor
+cancellation. A scan is skipped when its estimated cost exceeds 5% of the expected pure attack;
+there is no fixed deadline. Cache hits remain usable even when a cold scan would not be worthwhile.
+
+Each split step saves its exact arguments, input fingerprints and kernel choice. The subset
+belongs to the session folder; missing or modified copies are rebuilt identically and checked
+against their saved SHA-256. Changed source dictionaries or rules refuse resume. Terminal runs
+and discarded sessions remove the subsets. Old sessions are never expanded into split steps,
+and their saved kernel choice remains authoritative. Step progress and checkpoints use the
+existing session machinery, with the second step's actual word/rule count. The tiny pure tail
+does not overwrite the representative speed cached from the full optimized pass.
+
+`OptimizedDictionarySlowTests` and `DictionarySplitSlowTests` compare with real hashcat;
+set `RECOVERKIT_TEST_HASHCAT` to a private writable copy. `RECOVERKIT_TEST_HASHCAT_DEVICE`
+optionally selects a backend device ID from `hashcat -I`. New macOS mode-12500 dictionary jobs
+require a known Metal GPU selection for optimized kernels. OpenCL and unknown selections use
+pure. The guard does not affect Windows, Linux, saved resume choices, masks or CPU-only jobs.
+Earlier contended OpenCL runs missed valid candidates with both kernels; the cause remains
+unconfirmed, and this guard does not fix pure OpenCL's observed misses.
+
 The GUI:
 
 ```
