@@ -215,5 +215,8 @@ public sealed class DictionaryKernelPlannerTests : IDisposable
         Assert.Equal(expected, RecoverySession.OptimizedDictionaryBackendAllowed(12500, attack, new(),
             [new BackendDevice { Id = 1, Type = "GPU", Backend = "OpenCL", Vendor = "Apple" }], isMacOS));
         Assert.True(RecoverySession.OptimizedDictionaryBackendAllowed(12500, attack, new(), null, isMacOS: false));
+        // Every format runs through Metal on macOS, so the same applies beyond RAR 3.
+        Assert.Equal(expected, RecoverySession.OptimizedDictionaryBackendAllowed(13000, attack, new(),
+            [new BackendDevice { Id = 1, Type = "GPU", Backend = "OpenCL", Vendor = "Apple" }], isMacOS));
     }
 }

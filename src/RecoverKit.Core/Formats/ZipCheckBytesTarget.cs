@@ -16,7 +16,7 @@ public sealed record ZipCheckBytesTarget(string HashLines, Func<byte[], bool> Co
 
     internal static IReadOnlyList<BackendDevice> ActiveDevices(Settings settings, IReadOnlyList<BackendDevice> devices, IReadOnlyCollection<int>? exclude = null)
     {
-        var args = HashcatRunner.DeviceArguments(settings, devices, gpuOnly: true, exclude: exclude, preferMetal: OperatingSystem.IsMacOS());
+        var args = HashcatRunner.GpuArguments(settings, devices, 17230, exclude);
         int selection = args.IndexOf("-d");
         if (selection < 0) return HashcatRunner.ActiveGpus(settings, devices).Where(d => exclude?.Contains(d.Id) != true).ToList();
         var ids = args[selection + 1].Split(',').Where(s => s.Length > 0).Select(int.Parse).ToHashSet();

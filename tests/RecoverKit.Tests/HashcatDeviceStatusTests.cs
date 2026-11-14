@@ -72,7 +72,8 @@ public sealed class HashcatDeviceStatusTests : IDisposable
     [Fact]
     public async Task ExtraBackendIgnoreFlagsAlsoRestoreOriginalIds()
     {
-        if (OperatingSystem.IsWindows()) return;
+        // On macOS every run also ignores OpenCL, which would leave hashcat no device here.
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()) return;
         var known = new BackendDevice[]
         {
             new() { Id = 1, Backend = "HIP", Type = "GPU", Name = "AMD GPU" },
