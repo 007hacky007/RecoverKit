@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #if defined(_WIN32)
 #define RK_EXPORT __declspec(dllexport)
@@ -23,6 +24,7 @@
 #define RK_X64 1
 #include <immintrin.h>
 #define AVX2 __attribute__((target("avx2")))
+#define AVX512 __attribute__((target("avx512f,evex512")))
 #elif defined(__aarch64__)
 #define RK_ARM64 1
 #include <arm_neon.h>
@@ -38,14 +40,14 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 8
+#define RK_API_VERSION 10
 
 enum
 {
     RK_FEAT_AVX2 = 1, RK_FEAT_SHANI = 2, RK_FEAT_AESNI = 4, RK_FEAT_NEON = 8,
     RK_FEAT_ARM_AES = 16, RK_FEAT_ARM_SHA1 = 32, RK_FEAT_ARM_SHA2 = 64, RK_FEAT_ARM_SHA512 = 128, RK_FEAT_ARM_SHA3 = 256,
     RK_FEAT_ARM_CRC = 1024,
-    RK_FEAT_AVX512 = 512,      /* AVX-512 F with the OS saving the ZMM state: the 16-lane PBKDF2-SHA256 path */
+    RK_FEAT_AVX512 = 512,      /* AVX-512 F with the OS saving the ZMM state: 16-lane vector paths */
 };
 
 /* The feature that enables the 16-lane vector kernels on this architecture. */
@@ -389,207 +391,86 @@ static inline uint32_t v8_eqmask(V256 a, V256 b)
 #define F2(b, c, d) VXOR(VXOR(b, c), d)
 #define F3(b, c, d) VOR(VAND(b, c), VAND(d, VOR(b, c)))
 
-/* Plain 8-lane SHA-1 block with its own schedule (rare paths). */
-VECFN static void sha1x8_block(V256 st[5], const V256* m)
+typedef uint32_t rar3_v8 __attribute__((vector_size(32)));
+#define R3_V rar3_v8
+#define R3_L 8
+#define R3_SUFFIX _8
+#define R3_FN VECFN
+#include "rar3_lanes.h"
+#endif
+
+#if RK_X64
+typedef uint32_t rar3_v16 __attribute__((vector_size(64)));
+#define R3_V rar3_v16
+#define R3_L 16
+#define R3_SUFFIX _16
+#define R3_FN AVX512
+#include "rar3_lanes.h"
+#endif
+
+#if RK_VEC
+#include "rar3_selftest.h"
+#endif
+
+/* Guard states are internal: 0 untested, 1 testing, 2 passed, 3 failed. */
+static atomic_int g_rar3_paths = 0, g_pbkdf2_paths = 0;
+static atomic_int g_rar3_wide_test = 0, g_pbkdf2_wide_test = 0;
+
+enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16 };
+
+static int wide_switched_off(const char* name)
 {
-    V256 w[80];
-    for (int j = 0; j < 16; j++) w[j] = m[j];
-    for (int t = 16; t < 80; t++) w[t] = VROTL(VXOR(VXOR(w[t - 3], w[t - 8]), VXOR(w[t - 14], w[t - 16])), 1);
-    V256 a = st[0], b = st[1], c = st[2], d = st[3], e = st[4];
-    for (int t = 0; t < 80; t++)
+    const char* value = getenv(name);
+    return value && strcmp(value, "0") == 0;
+}
+
+/* Reading state never starts a guard; an explicit off switch always takes precedence. */
+static int wide_selftest_state(const char* name, atomic_int* guard)
+{
+    if (wide_switched_off(name)) return 3;
+    int state = atomic_load(guard);
+    return state == 2 ? 1 : state == 3 ? 2 : 0;
+}
+
+RK_EXPORT int rk_rar3_selftest_state(void) { return wide_selftest_state("RECOVERKIT_RAR3_AVX512", &g_rar3_wide_test); }
+RK_EXPORT int rk_pbkdf2_sha256_selftest_state(void) { return wide_selftest_state("RECOVERKIT_RAR5_AVX512", &g_pbkdf2_wide_test); }
+RK_EXPORT int rk_rar3_executed_paths(void) { return atomic_load(&g_rar3_paths); }
+RK_EXPORT int rk_pbkdf2_sha256_executed_paths(void) { return atomic_load(&g_pbkdf2_paths); }
+RK_EXPORT void rk_reset_executed_paths(int mode)
+{
+    if (mode == 12500) atomic_store(&g_rar3_paths, 0);
+    else if (mode == 13000) atomic_store(&g_pbkdf2_paths, 0);
+}
+
+#if RK_X64
+static int rar3_wide_ok(void)
+{
+    if (wide_switched_off("RECOVERKIT_RAR3_AVX512")) return 0;
+    int state = atomic_load(&g_rar3_wide_test);
+    if (state == 0 && atomic_compare_exchange_strong(&g_rar3_wide_test, &state, 1))
     {
-        V256 f, k;
-        if (t < 20) { f = VXOR(d, VAND(b, VXOR(c, d))); k = VSET1(0x5A827999); }
-        else if (t < 40) { f = VXOR(VXOR(b, c), d); k = VSET1(0x6ED9EBA1); }
-        else if (t < 60) { f = VOR(VAND(b, c), VAND(d, VOR(b, c))); k = VSET1(0x8F1BBCDCu); }
-        else { f = VXOR(VXOR(b, c), d); k = VSET1(0xCA62C1D6u); }
-        V256 tmp = VADD(VADD(VROTL(a, 5), f), VADD(VADD(e, k), w[t]));
-        e = d; d = c; c = VROTL(b, 30); b = a; a = tmp;
+        state = rar3_selftest(rar3_vec_16) ? 2 : 3;
+        atomic_store(&g_rar3_wide_test, state);
     }
-    st[0] = VADD(st[0], a); st[1] = VADD(st[1], b); st[2] = VADD(st[2], c); st[3] = VADD(st[3], d); st[4] = VADD(st[4], e);
-}
-
-/* Schedule expansion of the shared words, 8 blocks per vector. */
-VECFN static void rar3_expand_vec(const rar3_layout* L, uint32_t* S)
-{
-    const int n = RAR3_NBP, cols = (L->nb + 7) & ~7;
-    for (int t = 16; t < 80; t++)
-        for (int b = 0; b < cols; b += 8)
-        {
-            V256 x = VXOR(VXOR(VLOAD(S + (t - 3) * n + b), VLOAD(S + (t - 8) * n + b)),
-                          VXOR(VLOAD(S + (t - 14) * n + b), VLOAD(S + (t - 16) * n + b)));
-            VSTORE(S + t * n + b, VROTL(x, 1));
-        }
-    /* Rows 80..95: words 0..15 with the round constant already added, for the rounds whose word
-       does not involve the last character (the same for every candidate). */
-    const V256 k1 = VSET1(0x5A827999);
-    for (int t = 0; t < 16; t++)
-        for (int b = 0; b < cols; b += 8)
-            VSTORE(S + (80 + t) * n + b, VADD(VLOAD(S + t * n + b), k1));
-}
-
-/* One round for both groups: W = broadcast(shared word) ^ per-group last-character word. */
-#define RND(F, K, t, a, b, c, d, e)                                                     \
-    do {                                                                                \
-        V256 ws_ = VSET1(Sb[(t) * RAR3_NBP]);                                           \
-        e##0 = VADD(VADD(e##0, VADD(K, VXOR(ws_, Va[t]))), VADD(VROTL(a##0, 5), F(b##0, c##0, d##0))); \
-        e##1 = VADD(VADD(e##1, VADD(K, VXOR(ws_, Vb[t]))), VADD(VROTL(a##1, 5), F(b##1, c##1, d##1))); \
-        b##0 = VROTL(b##0, 30);                                                         \
-        b##1 = VROTL(b##1, 30);                                                         \
-    } while (0)
-
-/* Rounds 0..15: when word t is shared by all lanes, W + K is one broadcast. */
-#define RNDE(t, a, b, c, d, e)                                                          \
-    do {                                                                                \
-        if (lcm & (1u << (t))) RND(F1, k1, t, a, b, c, d, e);                           \
-        else {                                                                          \
-            V256 wk_ = VSET1(Sb[(80 + (t)) * RAR3_NBP]);                                \
-            e##0 = VADD(VADD(e##0, wk_), VADD(VROTL(a##0, 5), F1(b##0, c##0, d##0)));   \
-            e##1 = VADD(VADD(e##1, wk_), VADD(VROTL(a##1, 5), F1(b##1, c##1, d##1)));   \
-            b##0 = VROTL(b##0, 30);                                                     \
-            b##1 = VROTL(b##1, 30);                                                     \
-        }                                                                               \
-    } while (0)
-
-#define R5E(t)                              \
-    RNDE((t), a, b, c, d, e);               \
-    RNDE((t) + 1, e, a, b, c, d);           \
-    RNDE((t) + 2, d, e, a, b, c);           \
-    RNDE((t) + 3, c, d, e, a, b);           \
-    RNDE((t) + 4, b, c, d, e, a)
-
-#define R5(F, K, t)                         \
-    RND(F, K, (t), a, b, c, d, e);          \
-    RND(F, K, (t) + 1, e, a, b, c, d);      \
-    RND(F, K, (t) + 2, d, e, a, b, c);      \
-    RND(F, K, (t) + 3, c, d, e, a, b);      \
-    RND(F, K, (t) + 4, b, c, d, e, a)
-
-/* One block for two groups of 8 candidates. Sb points at the block's column of S (stride nbp). */
-VECFN static inline void rar3_block2(V256* st0, V256* st1, const uint32_t* Sb, uint32_t lcm, const V256* Va, const V256* Vb)
-{
-    V256 a0 = st0[0], b0 = st0[1], c0 = st0[2], d0 = st0[3], e0 = st0[4];
-    V256 a1 = st1[0], b1 = st1[1], c1 = st1[2], d1 = st1[3], e1 = st1[4];
-    const V256 k1 = VSET1(0x5A827999), k2 = VSET1(0x6ED9EBA1);
-    const V256 k3 = VSET1(0x8F1BBCDCu), k4 = VSET1(0xCA62C1D6u);
-    R5E(0); R5E(5); R5E(10); RNDE(15, a, b, c, d, e); RND(F1, k1, 16, e, a, b, c, d);
-    RND(F1, k1, 17, d, e, a, b, c); RND(F1, k1, 18, c, d, e, a, b); RND(F1, k1, 19, b, c, d, e, a);
-    R5(F2, k2, 20); R5(F2, k2, 25); R5(F2, k2, 30); R5(F2, k2, 35);
-    R5(F3, k3, 40); R5(F3, k3, 45); R5(F3, k3, 50); R5(F3, k3, 55);
-    R5(F2, k4, 60); R5(F2, k4, 65); R5(F2, k4, 70); R5(F2, k4, 75);
-    st0[0] = VADD(st0[0], a0); st0[1] = VADD(st0[1], b0); st0[2] = VADD(st0[2], c0); st0[3] = VADD(st0[3], d0); st0[4] = VADD(st0[4], e0);
-    st1[0] = VADD(st1[0], a1); st1[1] = VADD(st1[1], b1); st1[2] = VADD(st1[2], c1); st1[3] = VADD(st1[3], d1); st1[4] = VADD(st1[4], e1);
-}
-
-VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint8_t* out)
-{
-    int nb = L->nb, nbp = L->nbp, p = L->p;
-    void *rawS, *rawV;
-    uint32_t* S = (uint32_t*)aligned_buf(96 * (size_t)nbp * 4, &rawS);
-    V256* V = (V256*)aligned_buf(2 * (size_t)nb * 80 * sizeof(V256), &rawV);
-    if (!S || !V) { free(rawS); free(rawV); rar3_scalar(L, pws, n, out); return; }
-    int cutOff = p % 64;
-    int len = L->len;
-    uint32_t lanes[8];
-    V256 pb[RAR3_MAXLEN];
-
-    for (int i = 0; i < n; i += 16)
-    {
-        /* Per-group schedule of the lane bytes, per block. */
-        for (int g = 0; g < 2; g++)
-        {
-            for (int q = 0; q < len; q++)
-            {
-                for (int l = 0; l < 8; l++)
-                {
-                    int idx = i + 8 * g + l;
-                    lanes[l] = pws[(idx < n ? idx : n - 1) * len + q];
-                }
-                pb[q] = VLOADU(lanes);
-            }
-            for (int blk = 0; blk < nb; blk++)
-            {
-                V256* w = V + ((size_t)g * nb + blk) * 80;
-                for (int j = 0; j < 16; j++)
-                {
-                    int wi = blk * 16 + j;
-                    V256 v = VZERO;
-                    for (int k = 0; k < L->nent[wi]; k++)
-                        v = VOR(v, VSLLV(pb[L->entq[wi][k]], VSET1(L->ents[wi][k])));
-                    w[j] = v;
-                }
-                for (int t = 16; t < 80; t++) w[t] = VROTL(VXOR(VXOR(w[t - 3], w[t - 8]), VXOR(w[t - 14], w[t - 16])), 1);
-            }
-        }
-        V256 st[2][5];
-        for (int g = 0; g < 2; g++)
-            for (int q = 0; q < 5; q++) st[g][q] = VSET1(SHA1_IV[q]);
-        uint8_t iv[16][16];
-        memset(iv, 0, sizeof iv);
-
-        rar3_template_words(L, S);
-        for (int s = 0; s < RAR3_PERIODS; s++)
-        {
-            rar3_period_words(L, s, S);
-            rar3_expand_vec(L, S);
-            if ((s & 255) == 0)
-            {
-                /* IV byte: SHA-1 final of a copy after the first round of this period (inside block 0). */
-                for (int g = 0; g < 2; g++)
-                {
-                    V256 cs[5], m[16];
-                    memcpy(cs, st[g], sizeof cs);
-                    const V256* Vg = V + (size_t)g * nb * 80;
-                    for (int j = 0; j < 16; j++)
-                    {
-                        V256 v = VXOR(VSET1(S[j * nbp]), Vg[j]);
-                        int start = 4 * j;
-                        if (start >= cutOff) v = VZERO;
-                        else if (start + 4 > cutOff) v = VAND(v, VSET1(0xffffffffu << (8 * (start + 4 - cutOff))));
-                        m[j] = v;
-                    }
-                    m[cutOff / 4] = VOR(m[cutOff / 4], VSET1(0x80u << (8 * (3 - cutOff % 4))));
-                    uint64_t bits = ((uint64_t)(64 * s) + 1) * (uint64_t)p * 8;
-                    if (cutOff > 55)
-                    {
-                        sha1x8_block(cs, m);
-                        for (int j = 0; j < 14; j++) m[j] = VZERO;
-                    }
-                    m[14] = VSET1((uint32_t)(bits >> 32));
-                    m[15] = VSET1((uint32_t)bits);
-                    sha1x8_block(cs, m);
-                    uint32_t ev[8];
-                    VSTOREU(ev, cs[4]);
-                    for (int l = 0; l < 8; l++) iv[8 * g + l][s >> 8] = (uint8_t)ev[l];
-                }
-            }
-            for (int blk = 0; blk < nb; blk++)
-                rar3_block2(st[0], st[1], S + blk, L->lcm[blk], V + (size_t)blk * 80, V + ((size_t)nb + blk) * 80);
-        }
-        /* Final padding block: the total length is a multiple of 64 bytes. */
-        V256 m[16];
-        for (int j = 0; j < 16; j++) m[j] = VZERO;
-        uint64_t total = (uint64_t)RAR3_ROUNDS * (uint64_t)p * 8;
-        m[0] = VSET1(0x80000000u);
-        m[14] = VSET1((uint32_t)(total >> 32));
-        m[15] = VSET1((uint32_t)total);
-        for (int g = 0; g < 2; g++)
-        {
-            sha1x8_block(st[g], m);
-            uint32_t sv[5][8];
-            for (int q = 0; q < 5; q++) VSTOREU(sv[q], st[g][q]);
-            for (int l = 0; l < 8; l++)
-            {
-                int idx = i + 8 * g + l;
-                if (idx >= n) continue;
-                for (int q = 0; q < 5; q++) put_be32(out + 36 * idx + 4 * q, sv[q][l]);
-                memcpy(out + 36 * idx + 20, iv[8 * g + l], 16);
-            }
-        }
-    }
-    free(rawS); free(rawV);
+    /* Other threads use AVX2 while the first caller tests the wide path. */
+    return state == 2;
 }
 #endif
+
+/* Candidates per call group, including the two interleaved vectors. */
+RK_EXPORT int rk_rar3_lanes(void)
+{
+    int f = features();
+#if RK_X64
+    if ((f & RK_FEAT_AVX512) && rar3_wide_ok()) return 32;
+    if (f & RK_FEAT_AVX2) return 16;
+#elif RK_ARM64
+    if (f & RK_FEAT_NEON) return 16;
+#else
+    (void)f;
+#endif
+    return 1;
+}
 
 /*
  * n candidates of length len, packed in pws (n * len bytes). For each: the 20-byte SHA-1 digest
@@ -602,15 +483,18 @@ RK_EXPORT int rk_rar3_hash(const uint8_t* salt, const uint8_t* pws, int len, int
     rar3_layout* L = (rar3_layout*)malloc(sizeof(rar3_layout));
     if (!L) return -1;
     rar3_layout_init(L, salt, pws, len, n);
+    int path = RK_PATH_SCALAR;
 #if RK_X64
-    if (features() & RK_FEAT_AVX2) rar3_vec(L, pws, n, out);
+    if (rk_rar3_lanes() == 32) { if (rar3_vec_16(L, pws, n, out)) path = RK_PATH_AVX512; }
+    else if (features() & RK_FEAT_AVX2) { if (rar3_vec_8(L, pws, n, out)) path = RK_PATH_AVX2; }
     else
 #elif RK_ARM64
     /* NEON, 16 lanes: on the M1 the SHA-1 instructions (one sha1c per 4 cycles) are ~30 % slower. */
-    if (features() & RK_FEAT_NEON) rar3_vec(L, pws, n, out);
+    if (features() & RK_FEAT_NEON) { if (rar3_vec_8(L, pws, n, out)) path = RK_PATH_NEON; }
     else
 #endif
         rar3_scalar(L, pws, n, out);
+    atomic_fetch_or(&g_rar3_paths, path);
     free(L);
     return 0;
 }
@@ -3385,7 +3269,6 @@ static void pbkdf2_sha256_u1(const uint32_t ist[8], const uint32_t ost[8], const
 #include "sha256_lanes.h"
 
 #if RK_X64
-#define AVX512 __attribute__((target("avx512f,evex512")))
 typedef uint32_t v8u __attribute__((vector_size(32)));
 typedef uint32_t v16u __attribute__((vector_size(64)));
 #define PS_SUFFIX _avx2
@@ -3461,13 +3344,29 @@ ARMCE static void pbkdf2_sha256_iter_ce(const uint32_t (*ist)[8], const uint32_t
 
 typedef void (*pbkdf2_iter_fn)(const uint32_t (*)[8], const uint32_t (*)[8], uint32_t (*)[8], uint32_t);
 
+#include "pbkdf2_sha256_selftest.h"
+
+#if RK_X64
+static int pbkdf2_wide_ok(void)
+{
+    if (wide_switched_off("RECOVERKIT_RAR5_AVX512")) return 0;
+    int state = atomic_load(&g_pbkdf2_wide_test);
+    if (state == 0 && atomic_compare_exchange_strong(&g_pbkdf2_wide_test, &state, 1))
+    {
+        state = pbkdf2_sha256_selftest(pbkdf2_sha256_iter_avx512) ? 2 : 3;
+        atomic_store(&g_pbkdf2_wide_test, state);
+    }
+    return state == 2;
+}
+#endif
+
 /* The fastest iteration path this CPU (and the feature mask) allows, and its lane count. */
 static pbkdf2_iter_fn pbkdf2_sha256_path(int* lanes)
 {
     int f = features();
     (void)f;
 #if RK_X64
-    if (f & RK_FEAT_AVX512) { *lanes = 16; return pbkdf2_sha256_iter_avx512; }
+    if ((f & RK_FEAT_AVX512) && pbkdf2_wide_ok()) { *lanes = 16; return pbkdf2_sha256_iter_avx512; }
     if (f & RK_FEAT_AVX2) { *lanes = 8; return pbkdf2_sha256_iter_avx2; }
 #elif RK_ARM64
     if (f & RK_FEAT_ARM_SHA2) { *lanes = PBKDF2_CE_STREAMS; return pbkdf2_sha256_iter_ce; }
@@ -3486,6 +3385,15 @@ static void pbkdf2_sha256(const uint8_t* pws, int stride, const int* lens, int n
 {
     int L;
     pbkdf2_iter_fn fn = pbkdf2_sha256_path(&L);
+    int path = RK_PATH_SCALAR;
+#if RK_X64
+    if (iter > 1 && fn == pbkdf2_sha256_iter_avx512) path = RK_PATH_AVX512;
+    else if (iter > 1 && fn == pbkdf2_sha256_iter_avx2) path = RK_PATH_AVX2;
+#elif RK_ARM64
+    if (iter > 1 && fn == pbkdf2_sha256_iter_ce) path = RK_PATH_ARM_SHA256;
+    else if (iter > 1 && fn == pbkdf2_sha256_iter_neon) path = RK_PATH_NEON;
+#endif
+    if (n > 0) atomic_fetch_or(&g_pbkdf2_paths, path);
     uint32_t ist[PBKDF2_MAXLANES][8], ost[PBKDF2_MAXLANES][8], u[PBKDF2_MAXLANES][8];
     for (int i0 = 0; i0 < n; i0 += L)
     {

@@ -57,16 +57,50 @@ public static class CpuDiagnostics
         foreach (var row in report.Measurements) add(row);
     }
 
+    internal static bool HasWidePaths => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Avx512);
+
+    internal static int[] ThreadCounts(Settings settings, string variant)
+    {
+        int limit = settings.MaxCpuThreads > 0 ? Math.Min(settings.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
+        return (variant is "avx2" or "avx512" ? new[] { 1, SystemFacts.PhysicalCores(), Environment.ProcessorCount }
+            : new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }).Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
+    }
+
+    internal static void AddSystemFacts(DiagnosticReport report, Settings settings)
+    {
+        report.System["CPU"] = SystemFacts.CpuName();
+        report.System["Architecture"] = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString();
+        report.System["OS"] = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+        report.System[".NET runtime"] = Environment.Version.ToString();
+        report.System["Physical cores"] = SystemFacts.PhysicalCores().ToString();
+        report.System["CPU features"] = NativeKernels.CpuFeatures();
+        report.System["Native library API"] = NativeKernels.NativeApiVersion.ToString();
+        report.System["AVX-512 available"] = HasWidePaths.ToString();
+        report.System["Logical threads"] = Environment.ProcessorCount.ToString();
+        report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
+        report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
+        report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
+    }
+
+    internal static void WorkerStates(DiagnosticReport report)
+    {
+        foreach (int mode in new[] { 12500, 13000 })
+        {
+            string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
+                .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
+            report.System[$"{(mode == 12500 ? "RAR3" : "RAR5")} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
+        }
+    }
+
     internal static void AddSteps(DiagnosticPlan plan, DiagnosticReport report, Settings settings, bool thorough, CancellationToken ct)
     {
-        int limit = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
-        int[] counts = new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }.Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
+        AddSystemFacts(report, settings);
         var repeats = new List<(string Label, Func<Task> Run, Func<bool> Needed)>();
         foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
         {
             var rows = new List<DiagnosticMeasurement>();
             foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
-            foreach (int threads in counts)
+            foreach (int threads in ThreadCounts(settings, variant.Name))
             {
                 var option = variant;
                 async Task Measure(int repeat)
@@ -79,15 +113,18 @@ public static class CpuDiagnostics
                         Error = result.Error ?? result.Check.Error ?? (result.Speed <= 0 ? "No CPU benchmark rate was reported." : null),
                         ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = 7,
                         Details = new() { ["correctness cases"] = result.Check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = result.ActualPath,
-                            ["Adaptive sampling"] = (!thorough).ToString(), ["Isolation"] = "Separate process for each correctness check and timing sample." },
+                            ["self-test state"] = result.SelfTestState, ["Adaptive sampling"] = (!thorough).ToString(), ["Isolation"] = "Separate process for each correctness check and timing sample." },
                     };
                     rows.Add(row);
                     report.Measurements.Add(row);
+                    WorkerStates(report);
                 }
                 string label = $"Mode {mode}, {option.Name}, {threads} workers";
                 plan.Add("cpu", label, thorough ? 4 : 3, () => Measure(1), () => !rows.Any(r => r.Variant == option.Name && !r.Correct));
                 // Repeat slots are added after the complete first sweep below.
                 repeats.Add((label, () => Measure(2), () => !rows.Any(r => r.Variant == option.Name && !r.Correct) && (thorough || rows.Count > 1 && DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Variant == option.Name && r.Threads == threads)?.Speed ?? 0, rows.Select(r => r.Speed)))));
+                if (option.Name is "avx2" or "avx512")
+                    repeats.Add((label + ", third sample", () => Measure(3), () => !rows.Any(r => r.Variant == option.Name && !r.Correct)));
             }
             foreach (var repeat in repeats)
                 plan.Add("cpu", repeat.Label + ", confirmation", thorough ? 4 : 3, repeat.Run, repeat.Needed, conditional: !thorough);
@@ -110,7 +147,7 @@ public static class CpuDiagnostics
         return (result, result.Passed ? measure() : 0);
     }
 
-    public static CorrectnessResult CheckKernel(int mode)
+    public static CorrectnessResult CheckKernel(int mode, string variant = "default")
     {
         try
         {
@@ -135,6 +172,11 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512")
+            {
+                var wide = WideCpuChecks.Check(mode);
+                return wide with { Cases = wide.Cases + 7 };
+            }
             return new(true, 7);
         }
         catch (Exception ex) { return new(false, 0, ex.Message); }
@@ -151,6 +193,22 @@ public static class CpuDiagnostics
             var rng = new Random(17210512);
             if (path > 0)
             {
+                if (path is 3 or 4)
+                {
+                    int batch = path == 4 ? 48 : 24;
+                    for (int position = 0; position < batch + 3; position++)
+                    {
+                        byte[] header = new byte[12], last = Enumerable.Range(0, batch + 3).Select(i => (byte)i).ToArray();
+                        rng.NextBytes(header);
+                        uint a = (uint)rng.NextInt64(1L << 32), b = (uint)rng.NextInt64(1L << 32), c = (uint)rng.NextInt64(1L << 32);
+                        byte check = HeaderByte(header, a, b, c, last[position]);
+                        var input = new HeaderCase(header, check, check, a, b, c, last);
+                        int[] expected = Enumerable.Range(0, last.Length).Where(i => HeaderByte(header, a, b, c, last[i]) == check).ToArray();
+                        int[] actual = nativeSearch is null ? NativeHits(input, path) : nativeSearch(input);
+                        cases++;
+                        if (!actual.SequenceEqual(expected)) return new(false, cases, $"ZIP survivor mismatch at batch position {position}.");
+                    }
+                }
                 foreach (int n in new[] { 0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 32, 47, 48, 49, 63, 64, 65, 127, 255, 256 })
                 for (int trial = 0; trial < 8; trial++)
                 {

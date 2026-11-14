@@ -157,5 +157,5 @@ public class ShortBackendTests
 
     [Fact]
     public void SectionAllocationsLeaveFiveSecondsForCleanup()
-        => Assert.Equal(115, DetailedBenchmarkRunner.ShortBudgets.Values.Sum());
+        => Assert.Equal(CpuDiagnostics.HasWidePaths ? 267 : 115, DetailedBenchmarkRunner.ShortBudgets.Values.Sum());
 }

@@ -32,6 +32,7 @@ public sealed class DiagnosticReport
     public List<string> Summary { get; set; } = [];
     public List<PerformanceDecision> Decisions { get; set; } = [];
     public Dictionary<string, string> System { get; set; } = new();
+    public WideVectorPathsSummary WideVectorPaths => global::RecoverKit.Core.Diagnostics.WideVectorPaths.Build(this);
 }
 
 public sealed record DiagnosticProgress(string Section, string Step, TimeSpan Elapsed, TimeSpan EstimatedRemaining, double Fraction = 0);
