@@ -18,6 +18,7 @@ internal static class Icons
     public const string HelpData = "M21,12 A9,9 0 1 1 3,12 A9,9 0 1 1 21,12 Z M9.5,9.5 A2.5,2.5 0 1 1 13,11.8 C12.4,12.1 12,12.6 12,13.3 V13.7 M12,17 H12.01";
     public const string LockData = "M7,10 H17 A2,2 0 0 1 19,12 V18 A2,2 0 0 1 17,20 H7 A2,2 0 0 1 5,18 V12 A2,2 0 0 1 7,10 Z M8,10 V7 A4,4 0 0 1 16,7 V10 M12,14 V16";
     public const string CheckData = "M5,12.5 L9.5,17 L19,7.5";
+    public const string DownloadData = "M12,4 V15 M7.5,10.5 L12,15 L16.5,10.5 M5,19.5 H19";
 
     /// <summary>A gear outline: eight rounded teeth around a ring with a hole.</summary>
     public static string GearData
@@ -45,6 +46,7 @@ internal static class Icons
     public static LineIcon Help(double size = 20) => new(HelpData, size);
     public static LineIcon Lock(double size = 44) => new(LockData, size, 1.4);
     public static LineIcon Check(double size = 20) => new(CheckData, size, 2.4);
+    public static LineIcon Download(double size = 20) => new(DownloadData, size);
 
     /// <summary>The window icon, from the embedded multi-resolution .ico.</summary>
     public static WindowIcon? AppIcon()

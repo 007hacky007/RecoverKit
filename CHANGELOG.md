@@ -5,6 +5,30 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- Help > Check for updates now installs a newer version from here: the release file is downloaded,
+  checked against its published SHA-256 and installed (the installer on Windows, the app bundle on
+  Macs, the folder of a portable copy), and RecoverKit starts again. The download page remains the
+  fallback for installations it cannot update in place.
+- RecoverKit checks for a newer version when it starts, at most once an hour. When one is out, an
+  Update button appears in the toolbar: one click downloads, verifies and installs it. The check can
+  be turned off in Preferences > Other.
+
+### Fixed
+- Classic ZIP archives whose encrypted files are all larger than 320 KB (for example photos) were
+  searched by the built-in CPU engine at about 16 million passwords per second instead of hundreds
+  of millions: every candidate that passed the 12-byte header check (1 in 256) was confirmed by
+  decrypting the whole file. Such candidates are now rejected by the other files' headers and by
+  the beginning of the compressed data first, which takes a fraction of a microsecond.
+- After upgrading from an earlier RecoverKit, the hashcat 7.1.2 it had installed stayed in use.
+  RecoverKit's fast ZIP GPU kernels need hashcat 8.0.0, so ZIP attacks silently ran on the CPU.
+  RecoverKit now offers hashcat 8.0.0 at start whenever the hashcat it uses reports an older version,
+  wherever that copy came from (an earlier RecoverKit, a path set in Preferences, Homebrew, PATH), and
+  the attack log says why the GPU kernels are not used. Your own hashcat is left in place, and a "No"
+  for it is remembered until it changes.
+- An attack step that a large ZIP file cannot run on the CPU (rules, extra hashcat options) ended
+  the whole recovery with an error. The step is skipped with the reason and the other steps run.
+
 ## [1.4.1] - 2026-11-13
 
 ### Fixed

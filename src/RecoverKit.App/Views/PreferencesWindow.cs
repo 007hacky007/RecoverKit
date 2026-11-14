@@ -77,6 +77,7 @@ public sealed class PreferencesWindow : Window
     private readonly CheckBox _noKeyCache = Check("Don't use key cache");
     private readonly CheckBox _tryStay = Check("Try the fast ZIP key search first (WinZip-style archives with 5+ encrypted files)");
     private readonly CheckBox _reduce = Check("Reduce informational output (hide hashcat messages)");
+    private readonly CheckBox _autoUpdate = Check("Check for updates when RecoverKit starts (at most once an hour)");
     private readonly CheckBox _logHashes = Check("Include extracted hashes (only needed to debug file parsing)");
     private readonly Button _apply;
 
@@ -445,6 +446,8 @@ public sealed class PreferencesWindow : Window
             L.Group("Fast ZIP key search", L.Column(4, _tryStay,
                 L.Text("Stay's attack on weak WinZip-style encryption headers recovers the cipher keys in minutes, without a password, and writes a decrypted copy.", dim: true, wrap: true))),
             L.Group("", _reduce),
+            L.Group("Updates", L.Column(4, _autoUpdate,
+                L.Text("Asks GitHub which version is the latest. Your files and passwords are never sent.", dim: true, wrap: true))),
             L.Group("Interrupted attacks", clearSessions),
             L.Group("Debug log", Line(_logHashes, openLog)));
     }
@@ -487,6 +490,7 @@ public sealed class PreferencesWindow : Window
         _tryStay.IsChecked = _s.TryStayZipAttack;
         _reduce.IsChecked = _s.ReduceOutput;
         _logHashes.IsChecked = _s.DebugLogIncludeHashes;
+        _autoUpdate.IsChecked = _s.CheckForUpdatesAtStart;
         FillDevices();
     }
 
@@ -559,6 +563,7 @@ public sealed class PreferencesWindow : Window
         _s.TryStayZipAttack = _tryStay.IsChecked == true;
         _s.ReduceOutput = _reduce.IsChecked == true;
         _s.DebugLogIncludeHashes = _logHashes.IsChecked == true;
+        _s.CheckForUpdatesAtStart = _autoUpdate.IsChecked == true;
         DebugLog.IncludeHashes = _s.DebugLogIncludeHashes;
     }
 

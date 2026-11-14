@@ -247,10 +247,26 @@ module passes `data_type_enum == 1` to RecoverKit's kernels. They check the head
 block and available inflate data without requiring end-of-stream or the full length. Full hashes
 retain the original inflate/CRC checks.
 
-`HashTarget.ZipPartial` keeps the archive path, entry offset, lengths, method and CRC. CPU `Verify`
-decrypts from that file through bounded streams and checks the entire output length, deflate end
-and CRC-32, without the old 64 MiB embedded-data limit. `ConfirmPassword` also runs the existing
-other-entry checks. Partial GPU runs always use outfile confirmation and keep guessing.
+`HashTarget.ZipPartial` keeps the archive path, entry offset, lengths, method and CRC, and the other
+ZipCrypto entries' header checks (`Siblings`, from `ZipPasswordConfirmer`). CPU `Verify` decrypts from
+that file through bounded streams and checks the entire output length, deflate end and CRC-32,
+without the old 64 MiB embedded-data limit. That costs as much as thousands of candidates (about
+170 us for a deflated 1.3 MB entry, 24 ms for a stored one), and 1 candidate in 256 passes the
+header check, so before the file is touched a survivor must pass the sibling headers (16 of them
+leave 2^-128) and, for deflate, `DeflateStartIsPlausible` on the first decrypted bytes plus an
+inflate of the 256 KB prefix in memory (`ZipPartialSpeedTests` keeps the cost under a few
+microseconds). A single large stored entry has no cheap check; it stays a CPU-only, slow case.
+`ConfirmPassword` also runs the existing other-entry checks. Partial GPU runs always use outfile
+confirmation and keep guessing.
+
+The GPU kernels need hashcat 8.0.0's kernel files (`HashcatKernels.Originals`). An older hashcat (one
+left by an earlier RecoverKit in `engines/hashcat-7.1.2`, or the user's own) makes `Inspect` return
+`Unsupported`, which used to send ZIP attacks to the CPU without a word; `HashcatKernels.UnavailableReason`
+now names the cause in the log. At start the main window compares the version hashcat reports with
+`HashcatInstaller.Version` (`HashcatTool.IsOlderThanPinned`, not the folder name) and offers the pinned
+version (`OfferHashcatUpgradeAsync`): once per start for a copy RecoverKit installed, and for the user's
+own copy until they decline it (`Settings.DeclinedHashcatUpgrade`, keyed by path and version). `Locate`
+prefers the pinned copy over any other `engines/hashcat-*` (`IsUnpinnedManagedCopy`).
 
 Stored partials have only the header check (1 in 128 or 256 candidates), which overwhelms
 hashcat's one-hit-per-launch result buffer and can hide the real password. Recovery therefore

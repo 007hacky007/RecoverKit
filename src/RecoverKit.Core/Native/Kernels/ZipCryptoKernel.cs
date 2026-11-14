@@ -12,6 +12,9 @@ namespace RecoverKit.Core.Native.Kernels;
 /// Traditional PKWARE encryption (ZipCrypto), hashcat modes 17200 (deflate) and 17210 (stored).
 /// The fast path decrypts the 12-byte encryption header and compares its check byte; survivors
 /// (1 in 256) are confirmed by decrypting the whole entry and checking its CRC-32.
+/// A large entry (<see cref="ZipPartialTarget"/>) is confirmed from the archive file, which costs as
+/// much as thousands of candidates, so a survivor first has to pass the other entries' header checks
+/// and, when deflated, inflate the prefix kept in memory (random data fails within its first bytes).
 /// </summary>
 public sealed class ZipCryptoKernel : NativeKernel
 {
@@ -21,6 +24,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     private readonly Vector256<uint>[] _hdrVec;
     private readonly byte[] _data;          // full encrypted data, header included
     private readonly ZipPartialTarget? _partial;
+    private readonly ZipHeaderCheck[] _siblings;
     private readonly int _method;           // 0 stored, 8 deflate
     private readonly uint _crc;
     private readonly long _uncompressed;
@@ -36,6 +40,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         _data = data;
         _partial = partial;
+        _siblings = partial?.Siblings.ToArray() ?? [];
         _method = method;
         _crc = crc;
         _uncompressed = uncompressed;
@@ -113,6 +118,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         uint k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
         foreach (var b in password) Update(ref k0, ref k1, ref k2, b);
+        uint p0 = k0, p1 = k1, p2 = k2;     // the password's keys, for the sibling headers
         byte prev = 0, lastHdr = 0;
         for (int i = 0; i < 12; i++)
         {
@@ -123,7 +129,16 @@ public sealed class ZipCryptoKernel : NativeKernel
             Update(ref k0, ref k1, ref k2, p);
         }
         if (!HeaderOk(lastHdr, prev)) return false;
-        if (_partial is { } partial) return VerifyArchive(partial, k0, k1, k2);
+        if (_partial is { } partial)
+        {
+            foreach (var s in _siblings)
+            {
+                byte b = HeaderCheckByte(p0, p1, p2, s.Header);
+                if (b != s.CrcCheck && b != s.TimeCheck) return false;
+            }
+            if (_method == 8 && !PrefixInflates(k0, k1, k2)) return false;
+            return VerifyArchive(partial, k0, k1, k2);
+        }
 
         if (_method == 0)
         {
@@ -170,6 +185,168 @@ public sealed class ZipCryptoKernel : NativeKernel
         finally { pool.Return(body); }
     }
 
+    /// <summary>
+    /// Deflate: whether the prefix kept in memory inflates with these keys, within the entry's size.
+    /// Wrong keys give random data, which the inflater rejects within its first bytes (a reserved block
+    /// type, a stored block whose length check fails, an over-subscribed code, a distance before the
+    /// start), so the decryption is handed over in small pieces and almost never goes far.
+    /// </summary>
+    private bool PrefixInflates(uint k0, uint k1, uint k2)
+    {
+        // The first bytes by hand first: an inflater costs about 10 us to set up, a few thousand candidates' worth.
+        Span<byte> head = stackalloc byte[DeflateHeadLength];
+        int n = Math.Min(head.Length, _data.Length - 12);
+        uint h0 = k0, h1 = k1, h2 = k2;
+        for (int i = 0; i < n; i++)
+        {
+            uint t = (h2 | 2) & 0xffff;
+            byte p = (byte)(_data[12 + i] ^ (byte)((t * (t ^ 1)) >> 8));
+            head[i] = p;
+            Update(ref h0, ref h1, ref h2, p);
+        }
+        if (!DeflateStartIsPlausible(head[..n], _uncompressed)) return false;
+        try
+        {
+            using var decrypted = new DecryptStream(new MemoryStream(_data, 12, _data.Length - 12, writable: false),
+                _data.Length - 12, k0, k1, k2) { Piece = 32 };
+            using var inflated = new DeflateStream(decrypted, CompressionMode.Decompress);
+            Span<byte> buffer = stackalloc byte[4096];
+            long total = 0;
+            int read;
+            while ((read = inflated.Read(buffer)) > 0)
+            {
+                total += read;
+                if (total > _uncompressed) return false;
+            }
+            return true;   // the prefix is consistent (or ran out): the whole entry decides
+        }
+        catch (InvalidDataException) { return false; }
+    }
+
+    internal const int DeflateHeadLength = 48;
+
+    private static ReadOnlySpan<ushort> LengthBase => [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+    private static ReadOnlySpan<byte> LengthExtra => [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+    private static ReadOnlySpan<ushort> DistanceBase => [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    private static ReadOnlySpan<byte> DistanceExtra => [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+
+    /// <summary>
+    /// Whether <paramref name="plain"/>, the first bytes of a deflate stream, can be the start of a
+    /// valid one with <paramref name="uncompressed"/> bytes of output. Only what an inflater would
+    /// reject is rejected: a reserved block type, a stored block whose length check fails or does not
+    /// fit the output, a dynamic block whose code-length code is not complete, and in a fixed-Huffman
+    /// block an invalid symbol or a distance before the start of the output. Random bytes fail nearly
+    /// always; a real stream never does. Runs out of bytes undecided (true).
+    /// </summary>
+    internal static bool DeflateStartIsPlausible(ReadOnlySpan<byte> plain, long uncompressed)
+    {
+        var bits = new BitReader(plain);
+        if (!bits.Try(3, out uint header)) return true;
+        bool final = (header & 1) != 0;
+        switch (header >> 1)
+        {
+            case 3: return false;
+            case 0:
+            {
+                // Stored: LEN and its one's complement after the byte boundary.
+                bits.AlignToByte();
+                if (!bits.Try(16, out uint len) || !bits.Try(16, out uint nlen)) return true;
+                if ((len ^ nlen) != 0xffff) return false;
+                return final ? len == uncompressed : len <= uncompressed;
+            }
+            case 2:
+            {
+                // Dynamic: HLIT <= 29, HDIST <= 29, and a complete code-length code (zlib rejects
+                // over-subscribed and incomplete sets).
+                if (!bits.Try(5, out uint hlit) || !bits.Try(5, out uint hdist) || !bits.Try(4, out uint hclen)) return true;
+                if (hlit > 29 || hdist > 29) return false;
+                int kraft = 0;
+                for (int i = 0; i < hclen + 4; i++)
+                {
+                    if (!bits.Try(3, out uint l)) return true;
+                    if (l > 0) kraft += 128 >> (int)l;
+                }
+                return kraft == 128;
+            }
+            default:
+            {
+                // Fixed Huffman: decode symbols until the bytes run out.
+                long output = 0;
+                while (true)
+                {
+                    if (!bits.TryCode(7, out uint code)) return true;
+                    int symbol;
+                    if (code < 24) symbol = 256 + (int)code;
+                    else
+                    {
+                        if (!bits.TryBit(out uint b)) return true;
+                        code = (code << 1) | b;
+                        if (code is >= 48 and <= 191) symbol = (int)code - 48;
+                        else if (code is >= 192 and <= 199) symbol = 280 + (int)code - 192;
+                        else
+                        {
+                            if (!bits.TryBit(out b)) return true;
+                            code = (code << 1) | b;
+                            symbol = 144 + (int)code - 400;
+                        }
+                    }
+                    if (symbol < 256) { if (++output > uncompressed) return false; continue; }
+                    if (symbol == 256) return !final || output == uncompressed;
+                    if (symbol > 285) return false;
+                    int li = symbol - 257;
+                    if (!bits.Try(LengthExtra[li], out uint lextra)) return true;
+                    long length = LengthBase[li] + lextra;
+                    if (!bits.TryCode(5, out uint dcode)) return true;
+                    if (dcode > 29) return false;
+                    if (!bits.Try(DistanceExtra[(int)dcode], out uint dextra)) return true;
+                    long distance = DistanceBase[(int)dcode] + dextra;
+                    if (distance > output) return false;
+                    output += length;
+                    if (output > uncompressed) return false;
+                }
+            }
+        }
+    }
+
+    /// <summary>Deflate's bit order: least significant bit first; Huffman codes most significant bit first.</summary>
+    private ref struct BitReader(ReadOnlySpan<byte> data)
+    {
+        private readonly ReadOnlySpan<byte> _data = data;
+        private int _pos;   // in bits
+
+        public bool TryBit(out uint bit)
+        {
+            if (_pos >> 3 >= _data.Length) { bit = 0; return false; }
+            bit = (uint)(_data[_pos >> 3] >> (_pos & 7)) & 1;
+            _pos++;
+            return true;
+        }
+
+        public bool Try(int count, out uint value)
+        {
+            value = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!TryBit(out uint b)) return false;
+                value |= b << i;
+            }
+            return true;
+        }
+
+        public bool TryCode(int count, out uint code)
+        {
+            code = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!TryBit(out uint b)) return false;
+                code = (code << 1) | b;
+            }
+            return true;
+        }
+
+        public void AlignToByte() => _pos = (_pos + 7) & ~7;
+    }
+
     private bool VerifyArchive(ZipPartialTarget partial, uint k0, uint k1, uint k2)
     {
         try
@@ -203,6 +380,8 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         public long Remaining { get; private set; } = remaining;
         public bool RequestedPastEnd { get; private set; }
+        /// <summary>When set, at most this many bytes per read, doubling each time: an inflater that is going to fail gets little work first.</summary>
+        public int Piece { get; set; }
         public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
         public override int Read(Span<byte> buffer)
         {
@@ -213,7 +392,9 @@ public sealed class ZipCryptoKernel : NativeKernel
                 RequestedPastEnd = true;
                 return 0;
             }
-            int read = archive.Read(buffer[..(int)Math.Min(buffer.Length, Remaining)]);
+            long want = Math.Min(buffer.Length, Remaining);
+            if (Piece > 0) { want = Math.Min(want, Piece); Piece = Math.Min(Piece * 2, 8192); }
+            int read = archive.Read(buffer[..(int)want]);
             if (read == 0) throw new EndOfStreamException();
             Remaining -= read;
             for (int i = 0; i < read; i++)
@@ -244,6 +425,12 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         uint k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
         foreach (var b in password) Update(ref k0, ref k1, ref k2, b);
+        return HeaderCheckByte(k0, k1, k2, header);
+    }
+
+    /// <summary>The same, from the keys the password leaves (<paramref name="k0"/>..<paramref name="k2"/>).</summary>
+    private static byte HeaderCheckByte(uint k0, uint k1, uint k2, ReadOnlySpan<byte> header)
+    {
         byte p = 0;
         for (int i = 0; i < 12; i++)
         {

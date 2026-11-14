@@ -94,10 +94,10 @@ public sealed partial class HashcatTool
     {
         string exeName = OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
         var candidates = new List<string>();
-        // A configured path to an older copy that RecoverKit itself installed (engines/hashcat-7.1.2)
+        // A configured path to a copy that RecoverKit installed for another release (engines/hashcat-7.1.2)
         // gives way to the pinned version once that is installed too.
         string pinned = Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName);
-        if (!string.IsNullOrWhiteSpace(configured) && !(IsOlderManagedCopy(configured, enginesDir) && File.Exists(pinned)))
+        if (!string.IsNullOrWhiteSpace(configured) && !(IsUnpinnedManagedCopy(configured, enginesDir) && File.Exists(pinned)))
             candidates.Add(configured);
         if (OperatingSystem.IsMacOS() || File.Exists(pinned))
             candidates.Add(pinned);
@@ -130,25 +130,51 @@ public sealed partial class HashcatTool
         return new HashcatTool(hit);
     }
 
-    /// <summary>
-    /// True when <paramref name="exe"/> lies in a hashcat-&lt;version&gt; folder of the engines folder (a copy
-    /// RecoverKit downloaded or copied) whose version is not the pinned <see cref="HashcatInstaller.Version"/>.
-    /// </summary>
-    internal static bool IsOlderManagedCopy(string exe, string enginesDir)
+    /// <summary>The hashcat-&lt;version&gt; folder of the engines folder that holds <paramref name="exe"/> (a copy RecoverKit installed), or null.</summary>
+    private static string? ManagedFolder(string exe, string enginesDir)
     {
         try
         {
             var dir = Path.GetDirectoryName(Path.GetFullPath(exe));
             if (dir is null || !string.Equals(Path.GetDirectoryName(dir), Path.GetFullPath(enginesDir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-                return false;
+                return null;
             var name = Path.GetFileName(dir);
-            return name.StartsWith("hashcat-", StringComparison.Ordinal) && name != "hashcat-" + HashcatInstaller.Version;
+            return name.StartsWith("hashcat-", StringComparison.Ordinal) ? name : null;
         }
-        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return false; }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return null; }
     }
 
-    /// <summary>True when this is an older copy in the engines folder: offer the download of the pinned version.</summary>
-    public bool IsOutdatedManagedCopy => IsOlderManagedCopy(Exe, Path.Combine(Settings.AppDataDir, "engines"));
+    /// <summary>True when <paramref name="exe"/> is a copy RecoverKit installed into the engines folder.</summary>
+    internal static bool IsManagedCopy(string exe, string enginesDir) => ManagedFolder(exe, enginesDir) is not null;
+
+    /// <summary>
+    /// True when <paramref name="exe"/> is a copy RecoverKit installed for another release (any version but
+    /// the pinned <see cref="HashcatInstaller.Version"/>, whose kernel files RecoverKit's ZIP kernels need).
+    /// </summary>
+    internal static bool IsUnpinnedManagedCopy(string exe, string enginesDir)
+        => ManagedFolder(exe, enginesDir) is { } name && name != "hashcat-" + HashcatInstaller.Version;
+
+    /// <summary>True when this hashcat was installed by RecoverKit (the engines folder), not by the user.</summary>
+    public bool IsManaged => IsManagedCopy(Exe, Path.Combine(Settings.AppDataDir, "engines"));
+
+    /// <summary>
+    /// The version in hashcat's <c>--version</c> output ("v7.1.2", "v6.2.6-851-g6716447df" -> 6.2.6), or
+    /// null when it cannot be read.
+    /// </summary>
+    public static Version? ParseVersion(string versionOutput)
+    {
+        var m = Regex.Match(versionOutput.Trim(), @"^v?(\d+)\.(\d+)(?:\.(\d+))?");
+        if (!m.Success) return null;
+        int Part(int i) => m.Groups[i].Success && int.TryParse(m.Groups[i].Value, out var v) ? v : 0;
+        return new Version(Part(1), Part(2), Part(3));
+    }
+
+    /// <summary>
+    /// True when <paramref name="versionOutput"/> names a hashcat older than the pinned
+    /// <see cref="HashcatInstaller.Version"/>, wherever it is installed. Unknown versions are not older.
+    /// </summary>
+    public static bool IsOlderThanPinned(string versionOutput)
+        => ParseVersion(versionOutput) is { } v && v < Version.Parse(HashcatInstaller.Version);
 
     private int? _major;
 

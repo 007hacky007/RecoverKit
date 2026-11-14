@@ -26,6 +26,9 @@ public sealed class ZipPasswordConfirmer
     /// <summary>Entries checked with their whole data (CRC-32), not only the header's check byte.</summary>
     public int FullChecks => _checks.Count(c => c.Full is not null);
 
+    /// <summary>The header checks alone, for a kernel that confirms a large entry from the archive file.</summary>
+    public IReadOnlyList<ZipHeaderCheck> HeaderChecks => _checks.Select(c => new ZipHeaderCheck(c.Header, c.CrcCheck, c.TimeCheck)).ToArray();
+
     /// <summary>True when the password opens every entry checked.</summary>
     public bool Confirm(byte[] password)
     {
