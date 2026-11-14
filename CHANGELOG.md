@@ -6,8 +6,8 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
-- An experimental AVX-512 processor option for Whirlpool password recovery, off by default until
-  measured on more CPUs. The previous processor path remains the default. On supported CPUs the
+- An experimental AVX-512 path for TrueCrypt volumes protected with Whirlpool when the processor
+  checks passwords (Preferences), off by default until measured on more CPUs. The previous processor path remains the default. On supported CPUs the
   quick benchmark and detailed CPU report compare both paths and report any self-test failure.
 
 ### Fixed
