@@ -42,6 +42,7 @@ public sealed class DependenciesPage : UserControl
     private readonly Button _install;
     private readonly ProgressBar _bar = new() { Minimum = 0, Maximum = 1000, Height = 6, MinHeight = 6, IsVisible = false };
     private readonly TextBlock _status = L.Text("", dim: true, wrap: true);
+    private readonly TextBlock _sub = L.Text("", dim: true, wrap: true);
 
     private readonly Dictionary<DependencyId, string> _lastMessage = [];
 
@@ -67,8 +68,7 @@ public sealed class DependenciesPage : UserControl
         _status.IsVisible = false;
 
         var heading = new TextBlock { Text = "Getting RecoverKit ready", FontSize = 17, FontWeight = FontWeight.SemiBold };
-        var sub = L.Text("A few components are missing. Install them once and RecoverKit won't ask again.", dim: true, wrap: true);
-        sub.FontSize = 12.5;
+        _sub.FontSize = 12.5;
 
         var footer = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
         var buttons = L.Row(Platform.IsMac ? [_skip, _install] : [_install, _skip]);
@@ -79,7 +79,7 @@ public sealed class DependenciesPage : UserControl
         left.VerticalAlignment = VerticalAlignment.Center;
         footer.Children.Add(left);
 
-        var body = L.Column(10, heading, sub, _rows, _licenseList, _bar, _status, footer);
+        var body = L.Column(10, heading, _sub, _rows, _licenseList, _bar, _status, footer);
         body.MaxWidth = 640;
         body.Margin = new Thickness(28, 24);
         body.HorizontalAlignment = HorizontalAlignment.Center;
@@ -101,6 +101,9 @@ public sealed class DependenciesPage : UserControl
     public Task<(DependenciesOutcome Outcome, IReadOnlyList<string> NewlySkipped)> Completion => _done.Task;
 
     public bool Installing { get; private set; }
+
+    /// <summary>True once any component finished installing, also when the user cancelled or skipped afterwards.</summary>
+    public bool AnythingInstalled { get; private set; }
 
     /// <summary>"Skip for now": remembers every installable yellow row as skipped. Ignored while installing.</summary>
     public void Skip()
@@ -229,7 +232,14 @@ public sealed class DependenciesPage : UserControl
         _checkAgain.IsEnabled = !busy;
         bool licensed = _licenses.Where(l => l.Line.IsVisible).All(l => l.Accept.IsChecked == true);
         _install.IsEnabled = !busy && selected.Count > 0 && licensed;
-        _skip.Content = Installing ? "Cancel" : "Skip for now";
+        // Nothing to install (opened from Tools with every row green or fixable only outside RecoverKit).
+        bool nothingToDo = !_items.Any(HasCheckBox);
+        _sub.Text = !nothingToDo
+            ? "A few components are missing. Install them once and RecoverKit won't ask again."
+            : _items.All(i => !i.Pending && i.Light == Light.Green)
+                ? "Everything RecoverKit needs is in place."
+                : "Nothing here can be installed by RecoverKit. Follow the notes below, then Check again.";
+        _skip.Content = Installing ? "Cancel" : nothingToDo ? "Close" : "Skip for now";
         _skip.IsEnabled = Installing ? !_scanning && _cts is { IsCancellationRequested: false } : !_scanning;
     }
 
@@ -299,7 +309,11 @@ public sealed class DependenciesPage : UserControl
             var failures = new Dictionary<DependencyId, string>();
             foreach (var (item, error) in results)
             {
-                if (error is null) SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
+                if (error is null)
+                {
+                    AnythingInstalled = true;
+                    SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
+                }
                 else
                 {
                     failures[item.Id] = error.Message;
@@ -330,8 +344,8 @@ public sealed class DependenciesPage : UserControl
                 return;
             }
 
-            // Stay open with the new rows; a failed row keeps the error as its reason.
-            _items = [.. fresh.Select(i => failures.TryGetValue(i.Id, out var msg) && i.Light != Light.Green && !i.Pending ? i with { Reason = msg } : i)];
+            // Stay open with the new rows; a failed row stays red with the error until Check again or the page closes.
+            _items = [.. fresh.Select(i => failures.TryGetValue(i.Id, out var msg) && i.Light != Light.Green && !i.Pending ? i with { Light = Light.Red, Reason = msg } : i)];
             ShowStatus(failures.Count > 0 ? "Some components could not be installed." : "");
             BuildRows();
         }
@@ -364,6 +378,7 @@ public sealed class DependenciesPage : UserControl
     /// <summary>The row turns green as soon as its component finishes and leaves the checked set and the total, also if the user cancels later.</summary>
     private void OnDone(DependencyItem item)
     {
+        AnythingInstalled = true;
         if (_done.Task.IsCompleted || _items.FirstOrDefault(i => i.Id == item.Id) is not { } row || row.Light == Light.Green) return;
         SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
         BuildRows();

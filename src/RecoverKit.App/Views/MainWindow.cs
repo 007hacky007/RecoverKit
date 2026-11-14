@@ -601,9 +601,11 @@ public sealed partial class MainWindow : Window
             }
             else ShowDevices();
         }
-        if (scan.Items.Any(i => i.Light != Light.Green))
+        // Rows the user skipped or cannot fix from the page do not bring up the notice.
+        bool attention = DependencyCheck.ShouldShowAtStart(scan.Items, _settings.SkippedDependencies);
+        if (attention)
             Notice(AttentionNotice, scan.Items.Any(i => i.Light == Light.Red) ? Palette.ErrorBrush : Palette.WarningBrush);
-        if (showPage && DependencyCheck.ShouldShowAtStart(scan.Items, _settings.SkippedDependencies))
+        if (showPage && attention)
         {
             _depsQueued = true;
             Dispatcher.UIThread.Post(() => _ = ShowDependenciesAsync(DepsTrigger.Startup, scan.Items));
@@ -744,12 +746,31 @@ public sealed partial class MainWindow : Window
         var pillState = _pillState;
         var pillText = _pillBase;
         bool rescanned = false;
-        if (items is null) _depsItems = items = (await ScanAsync()).Items;
-        var page = new DependenciesPage(items, _settings.SkippedDependencies, async () =>
+        if (items is null)
+        {
+            // A fresh scan may see a change _hashcat does not know about yet.
+            _depsItems = items = (await ScanAsync()).Items;
+            rescanned = true;
+            var needed = trigger switch { DepsTrigger.NeedHashcat => DependencyId.Hashcat, DepsTrigger.NeedCpu => DependencyId.CpuRuntime, _ => (DependencyId?)null };
+            if (needed is { } id && RowGreen(id))
+            {
+                // Nothing is missing for what the action needs: no page.
+                DebugLog.Info($"Dependencies page not shown: {id} is ready");
+                await InitHashcatAsync(showPage: false);
+                return DependenciesOutcome.Installed;
+            }
+        }
+        // Remembered skips only apply to the page shown at start; an action or the menu shows every row checked.
+        IReadOnlyCollection<string> skipped = trigger == DepsTrigger.Startup ? _settings.SkippedDependencies : [];
+        var page = new DependenciesPage(items, skipped, async () =>
         {
             rescanned = true;
             return _depsItems = (await ScanAsync()).Items;
-        }, new DependencyInstaller(_settings));
+        }, new DependencyInstaller(_settings, updateSettings: change => Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            change(_settings);
+            _settings.Save();
+        }).GetTask()));
         _depsPage = page;
         _depsLayer.Child = page;
         _depsLayer.IsVisible = true;
@@ -766,8 +787,8 @@ public sealed partial class MainWindow : Window
             _settings.SkippedDependencies = [.. _settings.SkippedDependencies.Concat(newlySkipped).Distinct()];
             try { _settings.Save(); } catch (IOException ex) { DebugLog.Warn("Settings not saved: " + ex.Message); }
         }
-        // Installed, or "Check again" may have found a change made outside RecoverKit: pick up the new state.
-        if (outcome == DependenciesOutcome.Installed || rescanned)
+        // Installed (also partly, before a cancel), or a scan may have found a change made outside RecoverKit: pick up the new state.
+        if (outcome == DependenciesOutcome.Installed || rescanned || page.AnythingInstalled)
         {
             // Redraw the start page so stale notices disappear.
             if (_current is null) ShowStartPage();
@@ -890,7 +911,6 @@ public sealed partial class MainWindow : Window
     private async void OpenAsDialog()
     {
         if (_cts is not null || _busyDialog) return;
-        if (_depsPage is { Installing: false } idle) idle.Skip();
         _busyDialog = true;
         Detection? det;
         try { det = await OpenAsWindow.RunAsync(this, _settings); }
@@ -1414,7 +1434,8 @@ public sealed partial class MainWindow : Window
         {
             // Not the start page: a page shown from here does not remember skips.
             await InitHashcatAsync(showPage: false);
-            if (DependencyCheck.ShouldShowAtStart(_depsItems, []))
+            // The user just chose this hashcat: only a hashcat that cannot be used brings up the page.
+            if (_depsItems.Any(i => i.Id == DependencyId.Hashcat && i.Light == Light.Red))
                 await ShowDependenciesAsync(DepsTrigger.User, _depsItems);
         }
         bool cpuTurnedOn = (!cpuOnlyBefore && _settings.Strategy == DeviceStrategy.CpuOnly) || (!cpuWithGpuBefore && _settings.HashcatCpuWithGpu);
