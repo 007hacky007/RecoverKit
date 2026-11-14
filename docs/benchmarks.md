@@ -346,6 +346,41 @@ the engine fed the GPU at 2,500/s instead of 9,600/s. On macOS neither is lowere
 Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without `--no-hybrid`, and
 `--strategy CpuOnly`; the status lines list each device's speed.
 
+## Ryzen 7 9800X3D + RTX 4060 against a commercial product (RecoverKit 1.6.1)
+
+Measured on the tester's Windows PC: AMD Ryzen 7 9800X3D (Zen 5, 8 cores, 16 threads, AVX-512),
+NVIDIA GeForce RTX 4060, the processor's integrated Radeon unticked. Each program's own built-in
+benchmark: the commercial product on 2026-11-12, RecoverKit 1.6.1 on 2026-11-14. Passwords per
+second; the commercial product uses the processor next to the GPU for every format.
+
+| Format | Commercial | RecoverKit 1.6.1 | Ratio | RecoverKit engine |
+|---|---:|---:|---:|---|
+| Word 97 (RC4/MD5) | 43.4 M | **558.8 M** | **12.9x** | hashcat + built-in CPU engine |
+| Word 2003 (RC4/SHA-1) | 56.3 M | **634.1 M** | **11.3x** | hashcat + built-in CPU engine |
+| PDF R6 (AES-256) | 23,158 | **159,061** | **6.9x** | hashcat + built-in CPU engine |
+| RAR 5 | 50,812 | **68,383** | **1.35x** | hashcat + built-in CPU engine (AVX2, AVX-512) |
+| TrueCrypt RIPEMD-160 | 260,444 | **332,109** | **1.28x** | hashcat |
+| ZIP classic | 13.39 G | **14.68 G** | **1.10x** | hashcat + built-in CPU engine |
+| PowerPoint 2013+ | 12,704 | 12,392 | 0.98x | hashcat |
+| RAR 3 | 98,014 | 87,951 | 0.90x | hashcat + built-in CPU engine (AVX-512) |
+| WPA | 531,252 | 456,779 | 0.86x | hashcat |
+| TrueCrypt SHA-512 | 590,736 | 507,259 | 0.86x | hashcat |
+| Word 2007 | 181,756 | 154,338 | 0.85x | hashcat |
+| PDF R3 (128-bit) | 34.6 M | 28.8 M | 0.83x | hashcat + built-in CPU engine |
+| TrueCrypt Whirlpool | 87,438 | 71,267 | 0.82x | hashcat + built-in CPU engine (no AVX-512 path) |
+| WinZip AES | 4.15 M | 3.26 M | 0.79x | hashcat |
+
+- RecoverKit 1.3.0 on the same PC: ZIP classic 1.36 G, RAR 3 61,758, RAR 5 43,904. 1.6.1 is 10.8x,
+  1.42x and 1.56x of that.
+- The RAR 3 AVX-512 path ran here for the first time on real hardware and passed its self-test.
+- RecoverKit leads where its built-in CPU engine carries the work (Office 97-2003, PDF R6) or adds
+  to hashcat (RAR 5, ZIP). The formats that run on hashcat alone are 14% to 21% behind; the
+  commercial product adds the processor there.
+- The commercial report prints a second figure in brackets (RAR 3: 98,014 (92,947)); the first
+  one is compared. Its Word 2007 test file uses 256-bit AES, RecoverKit's 128-bit AES, so that row
+  is approximate. PDF R6 and RAR 3 costs depend on password length, and the two benchmarks may use
+  different lengths (see "Same inputs, live attacks" above).
+
 ## Version 1.5.0 performance work
 
 Measured on 2026-11-14 on the Apple M1 Pro (16-core GPU, hashcat 8.0.0) and on the Xeon VM above,
