@@ -71,7 +71,8 @@ internal static class SpeedProbe
 
         // hashcat's standalone benchmark has no live guard. Keep configured limits intact by leaving this measurement out.
         if (HashcatRunner.GuardFor(s, devices) is { Active: true } || !await MatchedSpeedProbe.PowerLimitAllowsAsync(s)) return (0, false);
-        var args = HashcatRunner.DeviceArguments(s, devices);
+        var args = HashcatRunner.MustAvoidAppleOpenCl(mode, OperatingSystem.IsMacOS())
+            ? HashcatRunner.MetalOnlyArguments(s, devices) : HashcatRunner.DeviceArguments(s, devices);
         args.AddRange(["-w", s.Workload.ToString()]);
         return (await hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false), false);
     }

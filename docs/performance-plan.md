@@ -355,22 +355,32 @@ Candidates then run in byte order instead of hashcat's likely-characters-first o
 is the same, but a typical human password is found later. Worth weighing against the CPU's share
 on formats where a discrete GPU does almost all the work.
 
-## Open finding: RAR 3 wordlists on Apple's OpenCL
+## RAR 3 on macOS runs through Metal
 
-hashcat 8.0.0 on the M1 Pro can miss the password in a RAR 3 (12500) wordlist attack when it runs
-on the OpenCL device. Reproduced on an idle machine with hashcat alone: the example hash, a list
-of 8,193 words with the password first, pure kernel.
+hashcat 8.0.0 on the M1 Pro can end a RAR 3 (12500) wordlist attack without the password and
+without an error when it runs on Apple's OpenCL device. Measured on an idle machine with hashcat
+alone, one run at a time: the example hash, a mask, and wordlists with the password first, in the
+middle, last, in a 10-word list, in a 200,000-word list and reached through a rule; five runs each
+(three for the large list).
 
-| Run | Result |
-|---|---|
-| Wordlist, OpenCL device | missed in 4 of 5 runs |
-| Wordlist, Metal device (`-d 1`) | found in 3 of 3 runs |
-| Mask, OpenCL and Metal | found (1 run each) |
-| One-word list, OpenCL | found (1 run) |
+| Device | Kernel | Password found | Benchmark rate |
+|---|---|---|---:|
+| Metal | pure | 33 of 33 | 5,360/s |
+| Metal | optimized | 33 of 33 | 15,630/s |
+| OpenCL | pure | 30 of 33 | 8,350/s |
+| OpenCL | optimized | 33 of 33 | 15,220/s |
 
-RecoverKit prefers Metal only for formats with a confirmation step, so RAR 3 runs on OpenCL on
-macOS. Not fixed. For RAR 3 on macOS, the wordlist split of item 3 uses `-O` only when every
-active GPU is a Metal device.
+- The three misses were wordlist runs (password first, in the middle, and through a rule). An
+  earlier session also saw misses with the optimized kernel on OpenCL.
+- A device that can skip a password is not used: on macOS the RAR 3 modes (12500, 23700, 23800)
+  run with every GPU replaced by its Metal device and with `--backend-ignore-opencl`, so a GPU
+  without a Metal device makes hashcat stop with an error
+  (`HashcatRunner.MetalOnlyArguments`). Ten wordlist attacks through the application afterwards
+  all found the password.
+- Cost: the pure kernel is 36% slower on Metal; the optimized kernel is the same speed. Metal also
+  starts in about 4 s where OpenCL took about 47 s in these runs.
+- Not examined: other formats on Apple's OpenCL. Formats with a confirmation step (ZIP) already
+  run on Metal for a separate reason; the rest still use OpenCL.
 
 ## Checked, not worth doing
 

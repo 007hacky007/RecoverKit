@@ -652,9 +652,10 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     {
         if (!isMacOS || mode != 12500 || runSettings.Strategy == DeviceStrategy.CpuOnly
             || Native.MaskSpace.FromHashcatArgs(attack.Args) is not null) return true;
-        // Apple's OpenCL missed RAR3 dictionary candidates with -O; only Metal passed the comparison.
+        // Apple's OpenCL missed RAR 3 wordlist candidates; these runs go through Metal
+        // (HashcatRunner.MetalOnlyArguments), so every active GPU needs a Metal device.
         var gpus = HashcatRunner.ActiveGpus(runSettings, devices);
-        return gpus.Count > 0 && gpus.All(d => d.IsMetal);
+        return gpus.Count > 0 && gpus.All(d => d.IsMetal || devices!.Any(m => m.IsMetal && (m.AliasOf == d.Id || d.AliasOf == m.Id)));
     }
 
     /// <summary>

@@ -146,6 +146,35 @@ public class MacHashcatTests
         Assert.Equal(["-D", "2", "-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip"], HashcatRunner.DeviceArguments(new Settings(), devs, gpuOnly: true, preferMetal: true));
     }
 
+    [Theory]
+    [InlineData(12500, true, true)]
+    [InlineData(23700, true, true)]
+    [InlineData(23800, true, true)]
+    [InlineData(13000, true, false)]
+    [InlineData(12500, false, false)]
+    public void Rar3AvoidsOpenClOnlyOnMacOS(int mode, bool isMacOS, bool expected)
+        => Assert.Equal(expected, HashcatRunner.MustAvoidAppleOpenCl(mode, isMacOS));
+
+    [Fact]
+    public void MetalOnlyArgumentsReplaceEveryGpuAndCloseOpenCl()
+    {
+        var devs = HashcatTool.ParseDevices(AppleSiliconInfo);
+        Assert.Equal(["-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip", "--backend-ignore-opencl"],
+            HashcatRunner.MetalOnlyArguments(new Settings(), devs));
+        Assert.Equal(["-D", "2", "-d", "1", "--backend-ignore-cuda", "--backend-ignore-hip", "--backend-ignore-opencl"],
+            HashcatRunner.MetalOnlyArguments(new Settings(), devs, gpuOnly: true));
+        // A measured choice of the OpenCL device is mapped to its Metal device as well.
+        var openCl = devs.First(d => d.IsGpu && !d.IsMetal);
+        var measured = new Settings { GpuPerformanceChoice = new() { DeviceKeys = [openCl.Key] } };
+        var args = HashcatRunner.MetalOnlyArguments(measured, devs);
+        Assert.Equal("1", args[args.IndexOf("-d") + 1]);
+        Assert.Contains("--backend-ignore-opencl", args);
+        // Unknown devices: hashcat still cannot open OpenCL, so it fails instead of skipping candidates.
+        Assert.Contains("--backend-ignore-opencl", HashcatRunner.MetalOnlyArguments(new Settings(), null));
+        // hashcat reaches the processor only through OpenCL.
+        Assert.DoesNotContain("--backend-ignore-opencl", HashcatRunner.MetalOnlyArguments(new Settings { Strategy = DeviceStrategy.CpuOnly }, devs));
+    }
+
     [Fact]
     public void CpuOnlyIsFlaggedWhenHashcatHasNoCpuDevice()
     {

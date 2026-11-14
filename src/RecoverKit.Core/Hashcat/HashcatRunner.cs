@@ -112,7 +112,9 @@ public sealed class HashcatRunner(HashcatTool tool)
         else if (s.DontUsePasswordCache) a.Add("--potfile-disable");
         else a.AddRange(["--potfile-path", r.PasswordCachePath ?? s.PotfilePath]);
         a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
-        a.AddRange(DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices, preferMetal: r.ConfirmPassword is not null && OperatingSystem.IsMacOS()));
+        a.AddRange(MustAvoidAppleOpenCl(r.Mode, OperatingSystem.IsMacOS())
+            ? MetalOnlyArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices)
+            : DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices, preferMetal: r.ConfirmPassword is not null && OperatingSystem.IsMacOS()));
         if (r.UseOptimizedKernel) a.Add("-O");
         if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
@@ -248,6 +250,35 @@ public sealed class HashcatRunner(HashcatTool tool)
         => s.DisabledDeviceKeys.Count > 0 ? s.DisabledDeviceKeys.Contains(d.Key) : s.DisabledDevices.Contains(d.Id);
 
     /// <summary>The GPUs hashcat will run on with these settings (not skipped as an alias, not unchecked).</summary>
+    /// <summary>
+    /// RAR 3 on macOS must not run on Apple's OpenCL. On an idle M1 Pro hashcat 8.0.0 ended wordlist
+    /// attacks without the password and without an error in 3 of 33 runs with the pure kernel on the
+    /// OpenCL device; the Metal device found it in 66 of 66 runs with both kernels.
+    /// </summary>
+    public static bool MustAvoidAppleOpenCl(int mode, bool isMacOS) => isMacOS && mode is 12500 or 23700 or 23800;
+
+    /// <summary>
+    /// Device arguments that keep hashcat off OpenCL: every selected GPU is replaced by its Metal
+    /// device and the OpenCL interface is not opened, so a GPU without a Metal device makes hashcat
+    /// stop with an error instead of skipping candidates. The "don't use GPUs" strategy is left as it
+    /// is, because hashcat reaches the processor only through OpenCL.
+    /// </summary>
+    public static List<string> MetalOnlyArguments(Settings s, IReadOnlyList<BackendDevice>? known, bool gpuOnly = false,
+        IReadOnlyCollection<int>? exclude = null)
+    {
+        var a = DeviceArguments(s, known, gpuOnly, exclude, preferMetal: true);
+        if (s.Strategy == DeviceStrategy.CpuOnly) return a;
+        int at = a.IndexOf("-d");
+        if (at >= 0 && at + 1 < a.Count && known is not null)
+            a[at + 1] = string.Join(',', a[at + 1].Split(',').Select(text =>
+            {
+                if (!int.TryParse(text, out int id) || known.FirstOrDefault(k => k.Id == id) is not { IsGpu: true, IsMetal: false } d) return text;
+                return known.FirstOrDefault(m => m.IsMetal && (m.AliasOf == d.Id || d.AliasOf == m.Id))?.Id.ToString() ?? text;
+            }).Distinct());
+        a.Add("--backend-ignore-opencl");
+        return a;
+    }
+
     public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
     {
         if (known is null) return [];
