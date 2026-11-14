@@ -63,9 +63,9 @@ public sealed class HashcatInstaller
         return await Task.Run(() => CopyBundle(bundle, progress, ct), ct);
     }
 
-    // ---------------------------------------------------------------- macOS: hashcat bundled with the app
+    // ---------------------------------------------------------------- hashcat bundled with the app
 
-    /// <summary>Stamp file written by macos/build-hashcat.sh: "&lt;hashcat version&gt;-&lt;bundle revision&gt;".</summary>
+    /// <summary>Stamp file written by macos/build-hashcat.sh and installer/build.ps1: "&lt;hashcat version&gt;-&lt;bundle revision&gt;".</summary>
     public const string BundleStampFile = "RECOVERKIT_BUNDLE";
 
     internal static string ExeName => OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
@@ -109,10 +109,10 @@ public sealed class HashcatInstaller
     }
 
     /// <summary>
-    /// macOS: makes sure the engines folder holds a current copy of the bundled hashcat, copying it
-    /// when missing or outdated. Meant to be called on startup (off the UI thread: the first copy is
+    /// Makes sure the engines folder holds a current copy of the bundled hashcat, copying it when
+    /// missing or outdated. Meant to be called on startup (off the UI thread: the first copy is
     /// about 200 MB). Returns true when an up-to-date copy is in place afterwards, false when there is
-    /// no bundle (or not on macOS) or the copy failed (logged). Never throws for I/O problems.
+    /// no bundle (a source build) or the copy failed (logged). Never throws for I/O problems.
     /// </summary>
     public static bool TryInstallBundled(IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
         => TryInstallBundledError(progress, ct) is null;

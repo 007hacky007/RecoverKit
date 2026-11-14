@@ -182,4 +182,72 @@ public class DependencyCheckTests
         var items = DependencyCheck.Evaluate(Win(NvidiaOpenCl()));
         Assert.True(DependencyCheck.ShouldShowAtStart(items, ["nvrtc|12.4.127"]));
     }
+    [Fact]
+    public void ElevatedWithNoDeviceIsRedAndExplainsAdministrator()
+    {
+        var c = Row(DependencyCheck.Evaluate(Win([], f => f with { Elevated = true })), DependencyId.CpuRuntime);
+        Assert.Equal(Light.Red, c.Light);
+        Assert.Equal(DependencyAction.None, c.Action);
+        Assert.Contains("administrator", c.Reason);
+    }
+
+    [Fact]
+    public void ElevatedWithInstalledCpuRuntimeIsNotGreen()
+    {
+        var c = Row(DependencyCheck.Evaluate(Win([], f => f with { Elevated = true, CpuRuntimeInstalled = true })), DependencyId.CpuRuntime);
+        Assert.NotEqual(Light.Green, c.Light);
+        Assert.Equal(DependencyAction.None, c.Action);
+        Assert.Contains("administrator", c.Reason);
+    }
+
+    [Fact]
+    public void FailedBundleCopyIsNotHiddenByAnOlderManagedCopy()
+    {
+        var h = Row(DependencyCheck.Evaluate(Win(NvidiaCuda(), f => f with
+        {
+            HashcatExe = @"C:\Users\u\AppData\Roaming\RecoverKit\engines\hashcat-7.1.2\hashcat.exe",
+            HashcatVersion = "v7.1.2", BundleCopyError = "Disk full",
+        })), DependencyId.Hashcat);
+        Assert.Equal(Light.Red, h.Light);
+        Assert.Equal(DependencyAction.CopyBundledHashcat, h.Action);
+        Assert.Contains("Disk full", h.Reason);
+    }
+
+    [Fact]
+    public void BrokenOwnHashcatOffersTheBundledOne()
+    {
+        var h = Row(DependencyCheck.Evaluate(Win(null, f => f with { HashcatIsManaged = false, HashcatError = "hashcat could not run: x" })), DependencyId.Hashcat);
+        Assert.Equal(Light.Red, h.Light);
+        Assert.Equal(DependencyAction.UseBundledHashcat, h.Action);
+        Assert.Contains("could not run", h.Reason);
+    }
+
+    [Fact]
+    public void BrokenPinnedManagedCopyOffersNothing()
+    {
+        var h = Row(DependencyCheck.Evaluate(Win(null, f => f with
+        {
+            HashcatExe = "/home/u/.config/RecoverKit/engines/hashcat-8.0.0/hashcat", HashcatError = "hashcat could not run: x",
+        })), DependencyId.Hashcat);
+        Assert.Equal(Light.Red, h.Light);
+        Assert.Equal(DependencyAction.None, h.Action);
+    }
+
+    [Fact]
+    public void OlderOwnHashcatWithoutBundleSaysWhatToDo()
+    {
+        var h = DependencyCheck.Evaluate(new MachineFacts { HashcatExe = "/usr/bin/hashcat", HashcatVersion = "v6.2.6", Devices = [] })[0];
+        Assert.Equal(Light.Yellow, h.Light);
+        Assert.Equal(DependencyAction.None, h.Action);
+        Assert.Contains("Preferences", h.Reason);
+    }
+
+    [Fact]
+    public void RowNamesCarryTheirVersions()
+    {
+        var items = DependencyCheck.Evaluate(Win(NvidiaOpenCl()));
+        Assert.Equal("hashcat 8.0.0", Row(items, DependencyId.Hashcat).Name);
+        Assert.Equal("NVIDIA CUDA compiler (NVRTC 12.8.93)", Row(items, DependencyId.Nvrtc).Name);
+        Assert.Equal("CPU runtime (OpenCL) 2026.1.2", Row(items, DependencyId.CpuRuntime).Name);
+    }
 }

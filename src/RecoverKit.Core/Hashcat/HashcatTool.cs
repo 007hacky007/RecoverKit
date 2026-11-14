@@ -83,9 +83,10 @@ public sealed partial class HashcatTool
     }
 
     /// <summary>
-    /// Finds hashcat: configured path, ./hashcat/ next to the application, the per-user engines
-    /// folder, then PATH. On macOS the engines copy of the bundled hashcat comes first and the copy
-    /// inside the app bundle is never used directly (see <see cref="HashcatInstaller.TryInstallBundled"/>).
+    /// Finds hashcat: the configured path, the engines copy of the pinned hashcat (when the app has a
+    /// bundle, on macOS, or when that copy exists), ./hashcat/ next to the application, the per-user engines
+    /// folder, then PATH. The bundled hashcat itself (Contents/Resources/hashcat on macOS, hashcat/ beside
+    /// the executable on Windows) is never used directly (see <see cref="HashcatInstaller.TryInstallBundled"/>).
     /// </summary>
     public static HashcatTool? Locate(string? configured)
         => Locate(configured, AppContext.BaseDirectory, Path.Combine(Settings.AppDataDir, "engines"));

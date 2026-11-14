@@ -44,29 +44,51 @@ public static class DependencyCheck
 
     private static DependencyItem Hashcat(MachineFacts f)
     {
-        const string name = "hashcat";
+        const string pinnedName = "hashcat " + HashcatInstaller.Version;
         if (f.HashcatExe is null)
         {
             if (f.BundleAvailable)
-                return new(DependencyId.Hashcat, name, Light.Red,
+                return new(DependencyId.Hashcat, pinnedName, Light.Red,
                     f.BundleCopyError ?? "hashcat is not installed; RecoverKit can copy its bundled hashcat.",
                     DependencyAction.CopyBundledHashcat);
-            return new(DependencyId.Hashcat, name, Light.Red, HashcatInstaller.NoBundleMessage, DependencyAction.None);
+            return new(DependencyId.Hashcat, pinnedName, Light.Red, HashcatInstaller.NoBundleMessage, DependencyAction.None);
         }
         if (!string.IsNullOrEmpty(f.HashcatError))
-            return new(DependencyId.Hashcat, name, Light.Red, f.HashcatError, DependencyAction.None);
+        {
+            // A broken hashcat of the user's own (or an older managed copy) gives way to the bundled one.
+            return f.BundleAvailable && !IsPinnedManagedCopy(f)
+                ? new(DependencyId.Hashcat, pinnedName, Light.Red,
+                    $"{f.HashcatError} RecoverKit can switch to the hashcat {HashcatInstaller.Version} it comes with.",
+                    DependencyAction.UseBundledHashcat)
+                : new(DependencyId.Hashcat, pinnedName, Light.Red, f.HashcatError, DependencyAction.None);
+        }
 
         var version = f.HashcatVersion ?? "";
-        if (HashcatTool.IsOlderThanPinned(version) && !f.HashcatIsManaged)
+        var v = version.Trim();
+        var name = HashcatTool.ParseVersion(v) is { } parsed ? $"hashcat {parsed.ToString(3)}" : pinnedName;
+        bool older = HashcatTool.IsOlderThanPinned(version);
+        // The bundle copy failed and only an older copy (an earlier RecoverKit's, or the user's) is left.
+        if (older && f.BundleAvailable && f.BundleCopyError is { Length: > 0 } copyError)
+            return new(DependencyId.Hashcat, pinnedName, Light.Red, copyError, DependencyAction.CopyBundledHashcat);
+        if (older && !f.HashcatIsManaged)
         {
-            var v = version.Trim();
             var reason = $"Your hashcat ({v}) is older than the {HashcatInstaller.Version} that comes with RecoverKit.";
             return f.BundleAvailable
                 ? new(DependencyId.Hashcat, name, Light.Yellow, reason, DependencyAction.UseBundledHashcat,
                     SkipKey: $"hashcat|{f.HashcatExe}|{v}")
-                : new(DependencyId.Hashcat, name, Light.Yellow, reason, DependencyAction.None);
+                : new(DependencyId.Hashcat, name, Light.Yellow,
+                    reason + $" Install hashcat {HashcatInstaller.Version}, or set its location in Preferences > Files and Paths.",
+                    DependencyAction.None);
         }
-        return new(DependencyId.Hashcat, name, Light.Green, $"hashcat {version.Trim()} is ready.", DependencyAction.None);
+        return new(DependencyId.Hashcat, name, Light.Green, $"hashcat {v} is ready.", DependencyAction.None);
+    }
+
+    /// <summary>The exe sits in the engines folder's hashcat-&lt;pinned version&gt; copy (either path separator).</summary>
+    private static bool IsPinnedManagedCopy(MachineFacts f)
+    {
+        if (!f.HashcatIsManaged || f.HashcatExe is null) return false;
+        var parts = f.HashcatExe.Split('/', '\\');
+        return parts.Length >= 2 && parts[^2] == "hashcat-" + HashcatInstaller.Version;
     }
 
     private static bool IsNvidia(BackendDevice d)
@@ -78,51 +100,55 @@ public static class DependencyCheck
 
     private static DependencyItem Nvrtc(MachineFacts f)
     {
-        const string name = "NVIDIA NVRTC";
+        const string name = "NVIDIA CUDA compiler (NVRTC)";
         if (f.Devices is not { } devices) return Pending(DependencyId.Nvrtc, name);
 
         if (!devices.Any(IsNvidia) || devices.Any(d => d.Backend == "CUDA"))
             return new(DependencyId.Nvrtc, name, Light.Green, "Not needed.", DependencyAction.None);
         if (f.NvrtcInstalled)
             return new(DependencyId.Nvrtc, name, Light.Green, "The NVIDIA runtime is installed.", DependencyAction.None);
+        var pkg = NvrtcRuntime.Choose(f.NvidiaDriverCuda);
+        var versioned = pkg is null ? name : $"NVIDIA CUDA compiler (NVRTC {pkg.Version})";
         if (f.Elevated)
-            return new(DependencyId.Nvrtc, name, Light.Yellow,
+            return new(DependencyId.Nvrtc, versioned, Light.Yellow,
                 "NVIDIA GPUs would run faster with the CUDA runtime, but it cannot be installed while RecoverKit runs as administrator.",
                 DependencyAction.None);
-        var pkg = NvrtcRuntime.Choose(f.NvidiaDriverCuda);
         if (pkg is null)
             return new(DependencyId.Nvrtc, name, Light.Yellow,
                 "NVIDIA GPUs would run faster with the CUDA runtime, but the installed driver is too old or unknown; update the NVIDIA driver.",
                 DependencyAction.None);
-        return new(DependencyId.Nvrtc, name, Light.Yellow,
+        return new(DependencyId.Nvrtc, versioned, Light.Yellow,
             "NVIDIA GPUs run faster with the CUDA runtime, which RecoverKit can download.",
             DependencyAction.DownloadNvrtc, pkg.Size, NvrtcRuntime.LicenseName, NvrtcRuntime.LicenseUrl,
             $"nvrtc|{pkg.Version}", NvrtcPackage: pkg);
     }
 
+    internal const string ElevatedCpuReason =
+        "Start RecoverKit normally (not as administrator) to use the processor: Windows does not let an administrator process load the per-user CPU runtime.";
+
     private static DependencyItem Cpu(MachineFacts f)
     {
-        const string name = "Intel CPU runtime";
+        const string name = "CPU runtime (OpenCL) " + CpuRuntime.Version;
         if (f.Devices is not { } devices) return Pending(DependencyId.CpuRuntime, name);
 
         var usable = devices.Where(d => !d.IsSkippedAlias).ToList();
         bool hasCpu = usable.Any(d => d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
-        var download = f.Elevated ? DependencyAction.None : DependencyAction.DownloadCpuRuntime;
+
+        // An administrator process ignores the per-user runtime: say so instead of offering an install it would not use.
+        DependencyItem Need(Light light, string reason, string? skipKey = null) => f.Elevated
+            ? new(DependencyId.CpuRuntime, name, light, ElevatedCpuReason, DependencyAction.None)
+            : new(DependencyId.CpuRuntime, name, light, reason, DependencyAction.DownloadCpuRuntime,
+                CpuRuntime.DownloadBytes, CpuRuntime.LicenseName, CpuRuntime.LicenseUrl, skipKey);
 
         if (f.CpuRuntimeInstalled && !f.Elevated)
             return new(DependencyId.CpuRuntime, name, Light.Green, "The Intel CPU runtime is installed.", DependencyAction.None);
         if (usable.Count == 0)
-            return new(DependencyId.CpuRuntime, name, Light.Red,
-                "hashcat found no usable device; the Intel CPU runtime lets it run on the processor.",
-                download, CpuRuntime.DownloadBytes, CpuRuntime.LicenseName, CpuRuntime.LicenseUrl);
+            return Need(Light.Red, "hashcat found no usable device; the Intel CPU runtime lets it run on the processor.");
         if (f.Strategy == DeviceStrategy.CpuOnly && !hasCpu)
-            return new(DependencyId.CpuRuntime, name, Light.Red,
-                "Your settings use only the CPU, but hashcat sees no CPU device; the Intel CPU runtime provides one.",
-                download, CpuRuntime.DownloadBytes, CpuRuntime.LicenseName, CpuRuntime.LicenseUrl);
+            return Need(Light.Red, "Your settings use only the CPU, but hashcat sees no CPU device; the Intel CPU runtime provides one.");
         if (f.HashcatCpuWithGpu && !hasCpu)
-            return new(DependencyId.CpuRuntime, name, Light.Yellow,
+            return Need(Light.Yellow,
                 "hashcat is set to use the CPU alongside the GPU, but sees no CPU device; the Intel CPU runtime provides one.",
-                download, CpuRuntime.DownloadBytes, CpuRuntime.LicenseName, CpuRuntime.LicenseUrl,
                 $"cpu-runtime|{CpuRuntime.Version}");
         return new(DependencyId.CpuRuntime, name, Light.Green, "Not needed: a GPU driver is installed.", DependencyAction.None);
     }
