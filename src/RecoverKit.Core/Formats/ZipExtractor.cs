@@ -59,7 +59,7 @@ public static class ZipExtractor
             return;
         }
         var confirmer = BuildConfirmer(s, enc, classic, delta);
-        d.Target = Pkzip(s, classic, delta, d, confirmer is null && classic.Method == 0
+        d.Target = Pkzip(s, classic, delta, d, confirmer, confirmer is null && classic.Method == 0
             ? "The archive has only one encrypted file and it is stored (not compressed): very rarely a wrong password " +
               "passes its check. Open the archive with the recovered password to make sure it is the right one."
             : null);
@@ -208,7 +208,7 @@ public static class ZipExtractor
         };
     }
 
-    private static HashTarget Pkzip(Stream s, ZipEntry e, long delta, Detection d, string? notes)
+    private static HashTarget Pkzip(Stream s, ZipEntry e, long delta, Detection d, ZipPasswordConfirmer? confirmer, string? notes)
     {
         bool partial = e.CompSize > HashcatMaxData;
         long offset = EntryDataOffset(s, e, delta);
@@ -225,7 +225,9 @@ public static class ZipExtractor
             Modes = [mode],
             HashLines = PkzipLine(e, data, partial),
             Speed = SpeedClass.VeryFast,
-            ZipPartial = partial ? new(d.FilePath, offset, e.CompSize, e.UncompSize, e.Crc, e.Method) : null,
+            ZipPartial = partial
+                ? new(d.FilePath, offset, e.CompSize, e.UncompSize, e.Crc, e.Method) { Siblings = confirmer?.HeaderChecks ?? [] }
+                : null,
             Notes = partial
                 ? e.Method == 0
                     ? "Only the beginning of the file fits the GPU check; this uncompressed file uses the CPU to avoid missing the password."
