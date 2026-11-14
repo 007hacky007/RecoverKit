@@ -127,15 +127,15 @@ public sealed class HashcatInstaller
     /// <summary>Stamp file written by macos/build-hashcat.sh: "&lt;hashcat version&gt;-&lt;bundle revision&gt;".</summary>
     public const string BundleStampFile = "RECOVERKIT_BUNDLE";
 
-    private static string ExeName => OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
+    internal static string ExeName => OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
 
     /// <summary>
-    /// The hashcat folder shipped inside the macOS app bundle (RecoverKit.app/Contents/Resources/hashcat,
-    /// next to Contents/MacOS where the apphost runs), or null when there is none or not on macOS.
+    /// The hashcat folder shipped with the app (macOS: RecoverKit.app/Contents/Resources/hashcat, next to
+    /// Contents/MacOS where the apphost runs; Windows: hashcat/ beside the executable), or null when there is none.
     /// It is only a source to copy from: hashcat writes kernel caches and logs into its own folder,
     /// and the signed, possibly read-only app bundle must not change.
     /// </summary>
-    public static string? BundledDirectory => OperatingSystem.IsMacOS() ? FindBundle(AppContext.BaseDirectory) : null;
+    public static string? BundledDirectory => FindBundle(AppContext.BaseDirectory);
 
     /// <summary>The bundled build's stamp, or null when there is no bundle (or no stamp in it).</summary>
     public static string? BundledStamp => BundledDirectory is { } d ? ReadStamp(d) : null;
@@ -145,7 +145,7 @@ public sealed class HashcatInstaller
         foreach (var d in new[] { Path.Combine(baseDir, "..", "Resources", "hashcat"), Path.Combine(baseDir, "hashcat") })
         {
             var full = Path.GetFullPath(d);
-            if (File.Exists(Path.Combine(full, "hashcat")) && File.Exists(Path.Combine(full, BundleStampFile))) return full;
+            if (File.Exists(Path.Combine(full, ExeName)) && File.Exists(Path.Combine(full, BundleStampFile))) return full;
         }
         return null;
     }

@@ -92,17 +92,17 @@ public sealed partial class HashcatTool
 
     internal static HashcatTool? Locate(string? configured, string baseDir, string enginesDir)
     {
-        string exeName = OperatingSystem.IsWindows() ? "hashcat.exe" : "hashcat";
+        string exeName = HashcatInstaller.ExeName;
         var candidates = new List<string>();
         // A configured path to a copy that RecoverKit installed for another release (engines/hashcat-7.1.2)
         // gives way to the pinned version once that is installed too.
         string pinned = Path.Combine(enginesDir, "hashcat-" + HashcatInstaller.Version, exeName);
         if (!string.IsNullOrWhiteSpace(configured) && !(IsUnpinnedManagedCopy(configured, enginesDir) && File.Exists(pinned)))
             candidates.Add(configured);
-        if (OperatingSystem.IsMacOS() || File.Exists(pinned))
+        // hashcat writes into its own folder, so the copy shipped with the app is never run from there.
+        string? bundle = HashcatInstaller.FindBundle(baseDir);
+        if (bundle is not null || OperatingSystem.IsMacOS() || File.Exists(pinned))
             candidates.Add(pinned);
-        // hashcat writes into its own folder, so the read-only copy inside the app bundle is skipped.
-        string? bundle = OperatingSystem.IsMacOS() ? HashcatInstaller.FindBundle(baseDir) : null;
         // Next to the application, and in the per-user engines folder a download installs into.
         foreach (var root in new[] { baseDir, enginesDir })
         {
