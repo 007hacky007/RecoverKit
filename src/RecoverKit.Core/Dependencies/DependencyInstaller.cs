@@ -20,20 +20,31 @@ public sealed class DependencyInstaller(
         {
             ct.ThrowIfCancellationRequested();
             DebugLog.Info($"Installing {item.Name} ({item.Action})");
-            IProgress<InstallProgress>? p = progress is null ? null : new Progress<InstallProgress>(x => progress.Report((item, x)));
+            IProgress<InstallProgress>? p = progress is null ? null : new SyncProgress(item, progress);
             try
             {
                 await _run(item, p, ct);
                 DebugLog.Info($"Installed {item.Name}");
                 results.Add((item, null));
             }
-            catch (Exception ex) when (ex is InstallException or IOException or HttpRequestException)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                var ex = new InstallException("The download timed out.");
+                DebugLog.Error($"Installing {item.Name} failed", ex);
+                results.Add((item, ex));
+            }
+            catch (Exception ex) when (ex is InstallException or IOException or HttpRequestException or UnauthorizedAccessException)
             {
                 DebugLog.Error($"Installing {item.Name} failed", ex);
                 results.Add((item, ex));
             }
         }
         return results;
+    }
+
+    private sealed class SyncProgress(DependencyItem item, IProgress<(DependencyItem Item, InstallProgress Progress)> target) : IProgress<InstallProgress>
+    {
+        public void Report(InstallProgress value) => target.Report((item, value));
     }
 
     /// <summary>Points the settings at the copy in the engines folder (the data folder is fixed per user).</summary>

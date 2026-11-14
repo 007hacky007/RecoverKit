@@ -69,4 +69,56 @@ public class DependencyInstallerTests
         DependencyInstaller.PointAtEnginesCopy(s, "/engines/hashcat-8.0.0/hashcat");
         Assert.Equal("/engines/hashcat-8.0.0/hashcat", s.HashcatPath);
     }
+
+    [Fact]
+    public async Task UnauthorizedAccessIsRecordedAndNextItemRuns()
+    {
+        var calls = new List<DependencyId>();
+        var installer = new DependencyInstaller(new Settings(), (item, _, _) =>
+        {
+            calls.Add(item.Id);
+            if (item.Id == DependencyId.Hashcat) throw new UnauthorizedAccessException("no");
+            return Task.CompletedTask;
+        });
+        var results = await installer.InstallAllAsync([Hashcat, Nvrtc], null, default);
+        Assert.IsType<UnauthorizedAccessException>(results[0].Error);
+        Assert.Null(results[1].Error);
+        Assert.Equal(2, calls.Count);
+    }
+
+    [Fact]
+    public async Task TimeoutStyleCancellationIsRecordedNotThrown()
+    {
+        var calls = new List<DependencyId>();
+        var installer = new DependencyInstaller(new Settings(), (item, _, _) =>
+        {
+            calls.Add(item.Id);
+            if (item.Id == DependencyId.Hashcat) throw new TaskCanceledException("timeout");
+            return Task.CompletedTask;
+        });
+        var results = await installer.InstallAllAsync([Hashcat, Nvrtc], null, CancellationToken.None);
+        Assert.NotNull(results[0].Error);
+        Assert.Null(results[1].Error);
+        Assert.Equal(2, calls.Count);
+    }
+
+    [Fact]
+    public async Task ProgressIsDeliveredSynchronouslyBeforeTheNextItem()
+    {
+        var events = new List<string>();
+        var installer = new DependencyInstaller(new Settings(), (item, p, _) =>
+        {
+            events.Add("start " + item.Id);
+            p?.Report(new InstallProgress { Stage = "x" });
+            return Task.CompletedTask;
+        });
+        var progress = new SyncCollector(events);
+        await installer.InstallAllAsync([Hashcat, Nvrtc], progress, default);
+        Assert.Equal(["start Hashcat", "progress Hashcat", "start Nvrtc", "progress Nvrtc"], events);
+    }
+
+    private sealed class SyncCollector(List<string> events) : IProgress<(DependencyItem Item, InstallProgress Progress)>
+    {
+        public void Report((DependencyItem Item, InstallProgress Progress) v) => events.Add("progress " + v.Item.Id);
+    }
 }

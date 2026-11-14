@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net.Http;
 using RecoverKit.Core.Hashcat;
 
 namespace RecoverKit.Core.Dependencies;
@@ -17,7 +18,7 @@ public sealed record DependencyScan(
     /// </summary>
     public static async Task<DependencyScan> RunAsync(Settings settings, string? bundleCopyError = null, CancellationToken ct = default)
     {
-        var tool = HashcatTool.Locate(settings.HashcatPath);
+        var tool = Probe(() => HashcatTool.Locate(settings.HashcatPath), null);
         string version = "";
         string? error = null;
         List<BackendDevice>? devices = null;
@@ -32,15 +33,15 @@ public sealed record DependencyScan(
                 else
                     devices = await tool.DevicesAsync(ct);
             }
-            catch (Exception ex) when (ex is TimeoutException or Win32Exception or InvalidOperationException)
+            catch (Exception ex) when (ex is TimeoutException or Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
             {
-                error = ex.Message;
+                error = "hashcat could not run: " + ex.Message;
                 devices = null;
             }
         }
 
         bool isWindows = OperatingSystem.IsWindows();
-        bool nvidia = NvidiaSmi.Locate() is not null;
+        bool nvidia = Probe(() => NvidiaSmi.Locate(), null) is not null;
 
         var facts = new MachineFacts
         {
@@ -53,10 +54,10 @@ public sealed record DependencyScan(
             HashcatError = error,
             Devices = devices,
             NvidiaDriverPresent = nvidia,
-            NvidiaDriverCuda = nvidia && isWindows ? NvrtcRuntime.DriverCudaVersion() : null,
-            NvrtcInstalled = NvrtcRuntime.Locate() is not null,
-            CpuRuntimeInstalled = CpuRuntime.Locate() is not null,
-            Elevated = CpuRuntime.IsElevatedProcess,
+            NvidiaDriverCuda = nvidia && isWindows ? Probe(() => NvrtcRuntime.DriverCudaVersion(), null) : null,
+            NvrtcInstalled = Probe(() => NvrtcRuntime.Locate(), null) is not null,
+            CpuRuntimeInstalled = Probe(() => CpuRuntime.Locate(), null) is not null,
+            Elevated = Probe(() => CpuRuntime.IsElevatedProcess, false),
             Strategy = settings.Strategy,
             HashcatCpuWithGpu = settings.HashcatCpuWithGpu,
         };
@@ -65,5 +66,16 @@ public sealed record DependencyScan(
         foreach (var i in items)
             DebugLog.Info($"Dependency {i.Name}: {i.Light}, action {i.Action}, pending {i.Pending}, {i.Reason}");
         return new DependencyScan(facts, tool, version, devices ?? [], items);
+    }
+
+    // An unreadable probe counts as "not present".
+    private static T Probe<T>(Func<T> f, T fallback)
+    {
+        try { return f(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException or TimeoutException)
+        {
+            DebugLog.Warn("Dependency probe failed: " + ex.Message);
+            return fallback;
+        }
     }
 }
