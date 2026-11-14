@@ -11,6 +11,15 @@ internal static class Fmt
     public static string Count(BigInteger n) => n.ToString("N0", Spaced);
     public static string Count(long n) => n.ToString("N0", Spaced);
 
+    /// <summary>A download size: "0.6 MB", "20 MB", "1.2 GB".</summary>
+    public static string Size(long bytes) => bytes switch
+    {
+        < 1_000_000 => $"{bytes / 1e6:0.0} MB",
+        < 10_000_000 => $"{bytes / 1e6:0.#} MB",
+        < 1_000_000_000 => $"{bytes / 1e6:0} MB",
+        _ => $"{bytes / 1e9:0.#} GB",
+    };
+
     public static string Speed(double hps) => hps switch
     {
         <= 0 => "n/a",
