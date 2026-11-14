@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 11;
+    private const int RequiredVersion = 13;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -34,7 +34,7 @@ internal static unsafe partial class RkNative
     [LibraryImport(Lib, EntryPoint = "rk_rar3_executed_paths")]
     public static partial int Rar3ExecutedPaths();
 
-    /// <summary>Clears executed paths for mode 12500 or 13000 before a CPU probe; other modes do nothing.</summary>
+    /// <summary>Clears executed paths for mode 12500, 13000 or 29331 before a CPU probe.</summary>
     [LibraryImport(Lib, EntryPoint = "rk_reset_executed_paths")]
     public static partial void ResetExecutedPaths(int mode);
 
@@ -60,7 +60,42 @@ internal static unsafe partial class RkNative
     public static partial int Pdf6Search(byte* u48, byte* pws, int len, int n, int* hits, int maxHits);
 
     [LibraryImport(Lib, EntryPoint = "rk_whirlpool_pbkdf2")]
-    public static partial int WhirlpoolPbkdf2(byte* salt64, byte* pws, int len, int n, byte* out64);
+    private static partial int WhirlpoolPbkdf2Raw(byte* salt64, byte* pws, int len, int n, byte* out64);
+
+    [LibraryImport(Lib, EntryPoint = "rk_whirlpool_lanes")]
+    public static partial int WhirlpoolLanes();
+
+    [LibraryImport(Lib, EntryPoint = "rk_whirlpool_selftest_state")]
+    public static partial int WhirlpoolSelfTestState();
+
+    [LibraryImport(Lib, EntryPoint = "rk_whirlpool_executed_paths")]
+    public static partial int WhirlpoolExecutedPaths();
+
+    [LibraryImport(Lib, EntryPoint = "rk_whirlpool_set_avx512")]
+    private static partial void WhirlpoolSetAvx512(int enabled);
+
+    private static bool _whirlpoolAvx512Enabled;
+    internal static bool WhirlpoolAvx512Enabled
+    {
+        get => _whirlpoolAvx512Enabled;
+        set
+        {
+            _whirlpoolAvx512Enabled = value;
+            if (Available) WhirlpoolSetAvx512(value ? 1 : 0);
+        }
+    }
+
+    private static int _whirlpoolFailureLogged, _whirlpoolLastPath;
+    public static int WhirlpoolPbkdf2(byte* salt64, byte* pws, int len, int n, byte* out64)
+    {
+        int result = WhirlpoolPbkdf2Raw(salt64, pws, len, n, out64);
+        int observed = WhirlpoolExecutedPaths();
+        if (result > 0 && Interlocked.Exchange(ref _whirlpoolLastPath, observed) != observed)
+            DebugLog.Info("Whirlpool CPU path: " + NativeKernels.CpuPath(29331, actualOnly: true));
+        if (WhirlpoolSelfTestState() == 2 && Interlocked.Exchange(ref _whirlpoolFailureLogged, 1) == 0)
+            DebugLog.Warn("Whirlpool AVX-512 self-test failed; using native scalar fallback.");
+        return result;
+    }
 
     /// <summary>PBKDF2-HMAC-SHA256 of n candidates at pws + i * stride (lengths in lens, or stride each when null).</summary>
     [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256")]
@@ -149,6 +184,7 @@ internal static unsafe partial class RkNative
         {
             int v = Version();
             if (v != RequiredVersion) { DebugLog.Warn($"rknative version {v}, expected {RequiredVersion}; using managed kernels"); return false; }
+            WhirlpoolSetAvx512(_whirlpoolAvx512Enabled ? 1 : 0);
             DebugLog.Info($"rknative loaded, features {(Feature)FeaturesRaw()}");
             return true;
         }

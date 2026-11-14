@@ -59,9 +59,9 @@ public sealed partial class DetailedBenchmarkRunner
             foreach (var d in devices) report.System[$"Device {d.Id}"] = $"{d.Name}; {d.Backend}; driver {d.DriverVersion}; alias {d.AliasOf}; skipped {d.IsSkippedAlias}";
             gpuAllowed = HashcatRunner.ActiveGpus(settings, devices).Count > 0 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
-        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 17200, 17210 } : Array.Empty<int>())
-        foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && v.Name is "avx2" or "avx512"))
-        foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name))
+        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 17200, 17210, 29331 } : Array.Empty<int>())
+        foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && (v.Name is "avx2" or "avx512" || mode == 29331 && v.Name == "scalar")))
+        foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name, mode))
             Add("cpu", $"Wide comparison mode {mode}, {variant.Name}, {count} workers", 12, async token =>
             {
                 var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, count, settings.Priority, 1, token, 1);

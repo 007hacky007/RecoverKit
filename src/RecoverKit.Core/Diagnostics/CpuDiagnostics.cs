@@ -59,10 +59,10 @@ public static class CpuDiagnostics
 
     internal static bool HasWidePaths => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Avx512);
 
-    internal static int[] ThreadCounts(Settings settings, string variant)
+    internal static int[] ThreadCounts(Settings settings, string variant, int mode = 0)
     {
         int limit = settings.MaxCpuThreads > 0 ? Math.Min(settings.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
-        return (variant is "avx2" or "avx512" ? new[] { 1, SystemFacts.PhysicalCores(), Environment.ProcessorCount }
+        return (variant is "avx2" or "avx512" || mode == 29331 && variant == "scalar" ? new[] { 1, SystemFacts.PhysicalCores(), Environment.ProcessorCount }
             : new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }).Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
     }
 
@@ -80,15 +80,16 @@ public static class CpuDiagnostics
         report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
+        report.System["Whirlpool AVX-512 self-test (report process; runs only when turned on in Preferences)"] = NativeKernels.WideSelfTestState(29331);
     }
 
     internal static void WorkerStates(DiagnosticReport report)
     {
-        foreach (int mode in new[] { 12500, 13000 })
+        foreach (int mode in new[] { 12500, 13000, 29331 })
         {
             string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
                 .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
-            report.System[$"{(mode == 12500 ? "RAR3" : "RAR5")} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
+            report.System[$"{(mode == 12500 ? "RAR3" : mode == 13000 ? "RAR5" : "Whirlpool")} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
         }
     }
 
@@ -100,7 +101,7 @@ public static class CpuDiagnostics
         {
             var rows = new List<DiagnosticMeasurement>();
             foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
-            foreach (int threads in ThreadCounts(settings, variant.Name))
+            foreach (int threads in ThreadCounts(settings, variant.Name, mode))
             {
                 var option = variant;
                 async Task Measure(int repeat)
@@ -123,7 +124,7 @@ public static class CpuDiagnostics
                 plan.Add("cpu", label, thorough ? 4 : 3, () => Measure(1), () => !rows.Any(r => r.Variant == option.Name && !r.Correct));
                 // Repeat slots are added after the complete first sweep below.
                 repeats.Add((label, () => Measure(2), () => !rows.Any(r => r.Variant == option.Name && !r.Correct) && (thorough || rows.Count > 1 && DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Variant == option.Name && r.Threads == threads)?.Speed ?? 0, rows.Select(r => r.Speed)))));
-                if (option.Name is "avx2" or "avx512")
+                if (option.Name is "avx2" or "avx512" || mode == 29331 && option.Name == "scalar")
                     repeats.Add((label + ", third sample", () => Measure(3), () => !rows.Any(r => r.Variant == option.Name && !r.Correct)));
             }
             foreach (var repeat in repeats)
@@ -172,7 +173,7 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
-            if (mode is 12500 or 13000 && variant is "avx2" or "avx512")
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331)
             {
                 var wide = WideCpuChecks.Check(mode);
                 return wide with { Cases = wide.Cases + 7 };

@@ -7,6 +7,7 @@ using RecoverKit.App.Ui;
 using RecoverKit.Core;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Diagnostics;
+using RecoverKit.Core.Native;
 
 namespace RecoverKit.App.Views;
 
@@ -37,6 +38,7 @@ public sealed class PreferencesWindow : Window
     private readonly NumericUpDown _maxThreads = L.Number(1, Math.Max(1, Environment.ProcessorCount), Environment.ProcessorCount);
     private readonly CheckBox _optimized = Check("Use optimized kernels for brute-force (faster, limits password length to 27)");
     private readonly CheckBox _native = Check("Use the built-in CPU engine (ZIP, Office 97-2003, PDF, RAR 3.x/5, TrueCrypt Whirlpool)");
+    private readonly CheckBox _whirlpoolAvx512 = Check("Experimental AVX-512 for Whirlpool on the CPU");
     private readonly CheckBox _hybrid = Check("Run it next to the GPUs: share masks and supported file dictionaries between CPU and GPUs");
     private readonly CheckBox _hashcatCpu = Check("For other formats, also give hashcat the CPU next to the GPUs (OpenCL CPU runtime)");
     private readonly TextBox _extra = new();
@@ -176,11 +178,16 @@ public sealed class PreferencesWindow : Window
         hc.Put(_native, 1, 0, 2);
         _hybrid.Margin = new Thickness(28, 0, 0, 0);
         hc.Put(_hybrid, 2, 0, 2);
+        _whirlpoolAvx512.IsEnabled = NativeKernels.WhirlpoolAvx512Supported;
+        ToolTip.SetTip(_whirlpoolAvx512, "Use the experimental AVX-512 path for TrueCrypt volumes with Whirlpool when the processor checks passwords. Off by default until it is measured on more CPUs.");
+        var whirlpoolNote = L.Text(NativeKernels.WhirlpoolAvx512Supported ? "Off by default until measured on more CPUs."
+            : "Unavailable: requires an AVX-512 CPU and the native library.", dim: true, wrap: true);
+        hc.Put(L.Column(4, _whirlpoolAvx512, whirlpoolNote), 3, 0, 2);
         var cpuNote = L.Text(HashcatCpuNote(), dim: true, wrap: true);
         cpuNote.FontSize = 12;
-        hc.Put(L.Column(4, _hashcatCpu, cpuNote), 3, 0, 2);
-        hc.Put(L.Text("Extra hashcat arguments"), 4, 0);
-        hc.Put(_extra, 4, 1);
+        hc.Put(L.Column(4, _hashcatCpu, cpuNote), 4, 0, 2);
+        hc.Put(L.Text("Extra hashcat arguments"), 5, 0);
+        hc.Put(_extra, 5, 1);
         _native.IsCheckedChanged += (_, _) => _hybrid.IsEnabled = _native.IsChecked == true;
 
         return L.Column(16,
@@ -460,6 +467,7 @@ public sealed class PreferencesWindow : Window
         _maxThreads.Value = _s.MaxCpuThreads <= 0 ? _maxThreads.Maximum : Math.Clamp(_s.MaxCpuThreads, 1, (int)_maxThreads.Maximum);
         _optimized.IsChecked = _s.OptimizedKernels;
         _native.IsChecked = _s.UseNativeCpuEngine;
+        _whirlpoolAvx512.IsChecked = _s.WhirlpoolAvx512;
         _hybrid.IsChecked = _s.HybridCpuGpu;
         _hybrid.IsEnabled = _s.UseNativeCpuEngine;
         _hashcatCpu.IsChecked = _s.HashcatCpuWithGpu;
@@ -526,6 +534,7 @@ public sealed class PreferencesWindow : Window
         _s.MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue();
         _s.OptimizedKernels = _optimized.IsChecked == true;
         _s.UseNativeCpuEngine = _native.IsChecked == true;
+        _s.WhirlpoolAvx512 = _whirlpoolAvx512.IsChecked == true;
         _s.HybridCpuGpu = _hybrid.IsChecked == true;
         _s.HashcatCpuWithGpu = _hashcatCpu.IsChecked == true;
         _s.ExtraArguments = (_extra.Text ?? "").Trim();

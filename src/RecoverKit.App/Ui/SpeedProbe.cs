@@ -42,6 +42,17 @@ internal static class SpeedProbe
     /// <summary>What a measurement used: the password length, and for hybrid runs each side's rate.</summary>
     public sealed record Details(int Length, double Cpu, double Gpu);
 
+    public static async Task<string?> MeasureWhirlpoolPathsAsync(HashcatTool hashcat, Settings preferences,
+        IReadOnlyList<BackendDevice> devices, CancellationToken ct)
+    {
+        if (!NativeKernels.WhirlpoolAvx512Supported) return null;
+        var s = ExecutionSettings(preferences, devices, 29331, hashcat);
+        int measured = s.PerformanceChoice?.Engine == "cpu" ? s.PerformanceChoice.Threads : s.CpuPerformanceChoice?.Threads ?? 0;
+        int threads = HybridEligible(s, devices, 29331) ? HybridRunner.CpuThreads(s, devices, hashcatRunning: true)
+            : s.MaxCpuThreads > 0 ? s.MaxCpuThreads : measured > 0 ? measured : Environment.ProcessorCount;
+        return (await WhirlpoolCpuPaths.MeasureAsync(threads, s.Priority, ct)).Summary;
+    }
+
     public static async Task<(double Speed, bool Native)> MeasureAsync(HashcatTool hashcat, Settings preferences,
         IReadOnlyList<BackendDevice> devices, int mode, TimeSpan nativeDuration, CancellationToken ct,
         Action<string>? cpuPathMeasured = null, Action<Details>? measuredWith = null)

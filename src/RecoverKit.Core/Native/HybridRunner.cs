@@ -197,6 +197,7 @@ public sealed class HybridRunner
     internal async Task<RunResult> RunAsync(HybridPlan plan, string hashLine, RunRequest r, IGpuRange gpu, CancellationToken ct)
     {
         var s = r.Settings;
+        if (r.Mode == 29331) { NativeKernels.ConfigureWhirlpool(s); NativeKernels.ResetCpuPath(r.Mode); }
         string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
         HybridResumePoint? resume = null;
         if (r.Restore && File.Exists(restoreFile))
@@ -737,7 +738,7 @@ public sealed class HybridRunner
             {
                 var devices = new List<DeviceSpeed>();
                 if (_hcRunning && DateTime.UtcNow - _gpuStatusAt < TimeSpan.FromSeconds(10)) devices.AddRange(_gpuDevices);
-                devices.Add(new DeviceSpeed { Id = 0, Name = "CPU (built-in engine)", Type = "CPU",
+                devices.Add(new DeviceSpeed { Id = 0, Name = _r.Mode == 29331 ? $"CPU (built-in engine, {NativeKernels.CpuPath(_r.Mode, actualOnly: true)})" : "CPU (built-in engine)", Type = "CPU",
                     Speed = CpuIdle() || _order.Dictionary is not null && !_cpuHashing ? 0 : CpuSpeed });
                 st = new HashcatStatus
                 {

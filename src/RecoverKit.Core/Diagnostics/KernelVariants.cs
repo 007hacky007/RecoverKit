@@ -25,6 +25,10 @@ public static class KernelVariants
         [10510] = NativeAndManaged,
         [12500] = [.. NativeAndManaged, .. WideVariants],
         [13000] = [new("default", () => true, () => null), .. WideVariants],
+        [29331] = [new("default", () => true, () => null),
+            // Compared only where an AVX-512 path exists; elsewhere "scalar" is the default path itself.
+            new("scalar", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
+            new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new WhirlpoolSelection())],
     };
 
     private static Registration[] WideVariants =>
@@ -39,6 +43,13 @@ public static class KernelVariants
         "avx512" => features.HasFlag(RkNative.Feature.Avx512),
         _ => false,
     };
+
+    private sealed class WhirlpoolSelection : IDisposable
+    {
+        private readonly bool _saved = RkNative.WhirlpoolAvx512Enabled;
+        public WhirlpoolSelection() => RkNative.WhirlpoolAvx512Enabled = true;
+        public void Dispose() => RkNative.WhirlpoolAvx512Enabled = _saved;
+    }
 
     private sealed class FeatureSelection : IDisposable
     {

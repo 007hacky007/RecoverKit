@@ -48,22 +48,22 @@ public static partial class DiagnosticHtml
             string threadLabel = threads is null ? "All threads (count unknown)"
                 : report.System.GetValueOrDefault("Logical threads") == threads.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     ? $"All {threads} logical threads" : $"{threads} threads (budget cap)";
-            html.Append("<table><tr><th>Kernel</th><th>1 thread AVX2</th><th>1 thread AVX-512</th><th>Ratio</th><th>")
-                .Append(H(threadLabel)).Append(" AVX2</th><th>").Append(H(threadLabel))
+            html.Append("<table><tr><th>Kernel</th><th>1 thread AVX2 / scalar</th><th>1 thread AVX-512</th><th>Ratio</th><th>")
+                .Append(H(threadLabel)).Append(" AVX2 / scalar</th><th>").Append(H(threadLabel))
                 .Append(" AVX-512</th><th>Ratio</th><th>Correctness</th><th>Self-test state</th></tr>");
             foreach (var row in wide.Rows)
             {
                 html.Append("<tr><td>").Append(H($"{row.Kernel} ({row.Mode})"))
-                    .Append("</td><td>").Append(H(WideRate(row.SingleThread.Avx2)))
+                    .Append("</td><td>").Append(H(WideRate(row.SingleThread.Scalar ?? row.SingleThread.Avx2)))
                     .Append("</td><td>").Append(H(WideRate(row.SingleThread.Avx512)))
                     .Append("</td><td>").Append(WideRatio(row.SingleThread.Ratio))
-                    .Append("</td><td>").Append(H(WideRate(row.AllThreads.Avx2)))
+                    .Append("</td><td>").Append(H(WideRate(row.AllThreads.Scalar ?? row.AllThreads.Avx2)))
                     .Append("</td><td>").Append(H(WideRate(row.AllThreads.Avx512)))
                     .Append("</td><td>").Append(WideRatio(row.AllThreads.Ratio))
                     .Append("</td><td>").Append(H(row.Correctness))
                     .Append("</td><td>").Append(H(row.SelfTestState)).Append("</td></tr>");
             }
-            html.Append("</table><p><small>Rates are median candidates/s for matching targets and lengths. Ratios are AVX-512 / AVX2. Repeated samples include their range and count.</small></p>");
+            html.Append("</table><p><small>Rates are median candidates/s for matching targets and lengths. Baseline is scalar for TrueCrypt Whirlpool and AVX2 for other kernels. Ratios are AVX-512 / baseline. Repeated samples include their range and count.</small></p>");
         }
         if (report.Decisions.Count > 0)
         {

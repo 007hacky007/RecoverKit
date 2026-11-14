@@ -97,7 +97,7 @@ public static class ProfileSettings
             : hybrid ? HybridRunner.CpuThreads(settings, devices, true) : 0;
         var detail = new List<string>();
         if (workers > 0) detail.Add($"{workers} CPU workers");
-        if ((cpuOnly || hybrid) && settings.CpuPerformanceChoice is { } cpu) detail.Add($"CPU path {cpu.Variant} ({cpu.Reason})");
+        if ((cpuOnly || hybrid) && settings.CpuPerformanceChoice is { } cpu && cpu.Mode != 29331) detail.Add($"CPU path {cpu.Variant} ({cpu.Reason})");
         if (settings.PerformanceChoice is { } choice) detail.Add(choice.Reason);
         if (!cpuOnly && settings.GpuPerformanceChoice is { } gpu) detail.Add(gpu.Reason);
         if (!cpuOnly && settings.ZipGpuPerformanceChoice is { } zip) detail.Add($"ZIP GPU kernel {zip.Variant} ({zip.Reason})");
@@ -121,6 +121,11 @@ public static class ProfileSettings
 
     public static IDisposable? CpuSelection(Settings s, int mode)
     {
+        if (Math.Abs(mode) == 29331)
+        {
+            NativeKernels.ConfigureWhirlpool(s);
+            return null; // Measured variants must not turn the experimental path on for recovery.
+        }
         if (s.CpuPerformanceChoice is not { Variant: var variant } || !KernelVariants.Supported(mode, variant)) return null;
         if (mode is 17200 or 17210 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_ZIP_PATH"))) return null;
         return KernelVariants.Select(mode, variant);

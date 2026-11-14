@@ -48,6 +48,7 @@ public sealed class NativeRunner
     public async Task<RunResult> RunAsync(NativeKernel kernel, MaskSpace space, string hashLine, RunRequest r, CancellationToken ct)
     {
         var s = r.Settings;
+        if (r.Mode == 29331) { NativeKernels.ConfigureWhirlpool(s); NativeKernels.ResetCpuPath(r.Mode); }
         string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
         NativeResumePoint? resume = null;
         if (r.Restore && File.Exists(restoreFile))
@@ -77,7 +78,7 @@ public sealed class NativeRunner
                 ProgressTotal = p.Total,
                 TimeStart = new DateTimeOffset(p.Started).ToUnixTimeSeconds(),   // per length, as progress is per length
                 TotalHashes = 1,
-                Devices = [new DeviceSpeed { Id = 0, Name = "CPU (built-in engine)", Type = "CPU", Speed = p.Speed }],
+                Devices = [new DeviceSpeed { Id = 0, Name = r.Mode == 29331 ? $"CPU (built-in engine, {NativeKernels.CpuPath(r.Mode, actualOnly: true)})" : "CPU (built-in engine)", Type = "CPU", Speed = p.Speed }],
             };
             StatusReceived?.Invoke(last);
         };
@@ -98,6 +99,7 @@ public sealed class NativeRunner
             if (previous is { } pc)
                 try { proc.PriorityClass = pc; } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         }
+        if (r.Mode == 29331) OutputLine?.Invoke($"Built-in CPU engine Whirlpool path: {NativeKernels.CpuPath(r.Mode, actualOnly: true)}");
         DebugLog.Info($"Native engine finished: {result.Outcome}, {result.Tested:N0} candidates in {sw.Elapsed.TotalSeconds:F1} s");
 
         switch (result.Outcome)

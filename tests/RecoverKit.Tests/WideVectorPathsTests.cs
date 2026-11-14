@@ -7,6 +7,22 @@ namespace RecoverKit.Tests;
 public sealed class WideVectorPathsTests
 {
     [Fact]
+    public void WhirlpoolWidePathUsesScalarBaselineAndRequiresItsGuard()
+    {
+        var report = Report();
+        var baseline = Row("scalar", 1, 100, 29331);
+        baseline.Details["actual path"] = "native scalar";
+        report.Measurements = [baseline, Row("avx512", 1, 200, 29331)];
+        var row = report.WideVectorPaths.Rows.Single(r => r.Mode == 29331);
+        Assert.Equal(100d, row.SingleThread.Scalar!.Median);
+        Assert.Null(row.SingleThread.Avx2.Median);
+        Assert.Equal(2d, row.SingleThread.Ratio);
+        Assert.Contains("scalar", WideSection(DiagnosticHtml.Render(report)));
+        report.Measurements[1].Details["self-test state"] = "not run";
+        Assert.Equal("FAIL", report.WideVectorPaths.Rows.Single(r => r.Mode == 29331).Correctness);
+    }
+
+    [Fact]
     public void MatchingSamplesUseMedianAndSeparateSingleAndAllThreadRatios()
     {
         var report = Report();
