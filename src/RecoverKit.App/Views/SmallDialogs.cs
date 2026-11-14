@@ -139,9 +139,11 @@ public sealed class UpdateWindow : ProgressDialog
     private readonly InstallKind _kind;
     public PreparedUpdate? Prepared { get; private set; }
 
-    public static async Task<PreparedUpdate?> RunAsync(Window owner, ReleaseInfo release, InstallKind kind, ReleaseAsset asset)
+    /// <param name="start">Start the download as soon as the dialog opens (the toolbar's one-click Update).</param>
+    public static async Task<PreparedUpdate?> RunAsync(Window owner, ReleaseInfo release, InstallKind kind, ReleaseAsset asset, bool start = false)
     {
         var w = new UpdateWindow(release, kind, asset);
+        if (start) w.Opened += (_, _) => _ = w.RunAsync();
         return await w.ShowDialog<bool>(owner) ? w.Prepared : null;
     }
 

@@ -89,4 +89,15 @@ public class AppUpdaterTests
 
         Assert.Throws<InvalidOperationException>(() => AppUpdater.ApplyScript(new PreparedUpdate(InstallKind.Unknown, "v1", "f", null), 1, "/a", "/a/b"));
     }
+
+    [Fact]
+    public void AutomaticCheckRunsAtMostOnceAnHour()
+    {
+        var now = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc);
+        Assert.True(AppUpdater.AutomaticCheckDue(null, now));
+        Assert.False(AppUpdater.AutomaticCheckDue(now.AddMinutes(-59), now));
+        Assert.True(AppUpdater.AutomaticCheckDue(now.AddHours(-1), now));
+        Assert.True(AppUpdater.AutomaticCheckDue(now.AddDays(-3), now));
+        Assert.True(AppUpdater.AutomaticCheckDue(now.AddHours(5), now));   // clock set back
+    }
 }

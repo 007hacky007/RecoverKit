@@ -66,6 +66,8 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _cts;
     private DateTime _stepStarted;
     private BigInteger _stepKeyspace;
+    private Button _tbUpdate = null!;
+    private ReleaseInfo? _availableUpdate;   // a newer release found by a check; shows the toolbar's Update button
     private bool _busyDialog;      // a modal flow (wizard, preferences, ...) is open
     private bool _closeConfirmed;
     private bool _opened;
@@ -137,6 +139,7 @@ public sealed partial class MainWindow : Window
             if (WindowStartupLocation == WindowStartupLocation.Manual && Screens.ScreenFromPoint(Position) is null)
                 Position = new PixelPoint(100, 100);   // the saved position is on a monitor that is gone
             _opened = true;
+            _ = AutoCheckForUpdatesAsync();
             await InitHashcatAsync();
 #if DEBUG
             if (Environment.GetEnvironmentVariable("RECOVERKIT_DETAILED_TEST") is { Length: > 0 } reportDirectory)
@@ -270,8 +273,12 @@ public sealed partial class MainWindow : Window
                 B(Icons.Bench(), "Benchmark", "Measure the recovery speed of each format on this computer", () => _ = ShowBenchmarkAsync()),
                 B(Icons.Gear(), "Settings", Platform.IsMac ? "Settings (Cmd+,)" : "Preferences", () => ShowPreferences(0)),
                 B(Icons.Help(), "Help", "Help", () => _ = ShowHelpAsync()),
+                (_tbUpdate = B(Icons.Download(), "Update", "Install the new version", () => _ = InstallUpdateAsync())),
             },
         };
+        _tbUpdate.Classes.Add("accent");
+        _tbUpdate.Margin = new Thickness(8, 0, 0, 0);
+        _tbUpdate.IsVisible = false;
         _pill = new Border
         {
             CornerRadius = new CornerRadius(999), Padding = new Thickness(9, 4), Background = Palette.ChipBrush,
@@ -607,9 +614,9 @@ public sealed partial class MainWindow : Window
             if (NvrtcRuntime.IsSupportedPlatform && !_devices.Any(d => d.Backend == "CUDA")
                 && usable.Any(d => d.Backend == "OpenCL" && (d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))))
                 Line("The NVIDIA GPU runs through OpenCL. hashcat's CUDA backend needs NVIDIA's NVRTC compiler: Tools > Download NVIDIA CUDA compiler (NVRTC).", Palette.DimBrush);
-            if (_hashcat.IsOutdatedManagedCopy)
+            if (HashcatTool.IsOlderThanPinned(_hashcatVersion))
             {
-                Notice($"This is an older hashcat. Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
+                Notice($"This is an older hashcat ({_hashcatVersion.TrimStart('v')}). Tools > {(Platform.IsMac ? "Install" : "Download")} hashcat installs hashcat {HashcatInstaller.Version}, which RecoverKit's faster ZIP kernels need.", Palette.WarningBrush);
                 Dispatcher.UIThread.Post(() => _ = OfferHashcatUpgradeAsync());
             }
         }
@@ -688,18 +695,36 @@ public sealed partial class MainWindow : Window
     private bool _offeredUpgrade;
 
     /// <summary>
-    /// An earlier RecoverKit installed an older hashcat (engines/hashcat-7.1.2) and the upgrade kept using
-    /// it, which leaves ZIP archives on the CPU: offer the download once per start. Macs copy the bundled
-    /// hashcat by themselves (<see cref="PrepareBundledHashcatAsync"/>).
+    /// The hashcat in use reports an older version than <see cref="HashcatInstaller.Version"/>, which leaves
+    /// ZIP archives on the CPU: offer to install the pinned version next to it, wherever the old one came
+    /// from (an earlier RecoverKit, a path set in Preferences, Homebrew, PATH). For a copy RecoverKit
+    /// installed the offer comes once per start; for the user's own copy a "No" is remembered for that
+    /// copy and version (<see cref="Settings.DeclinedHashcatUpgrade"/>). The user's copy is not touched.
     /// </summary>
     private async Task OfferHashcatUpgradeAsync()
     {
-        if (_offeredUpgrade || Platform.IsMac || _busyDialog || _hashcat is not { IsOutdatedManagedCopy: true }) return;
+        if (_offeredUpgrade || _busyDialog || _hashcat is not { } tool || !HashcatTool.IsOlderThanPinned(_hashcatVersion)) return;
+        if (Platform.IsMac && HashcatInstaller.BundledDirectory is null) return;   // nothing to install from (a development build)
+        bool managed = tool.IsManaged;
+        string declineKey = tool.Exe + "|" + _hashcatVersion;
+        if (!managed && _settings.DeclinedHashcatUpgrade == declineKey) return;
         _offeredUpgrade = true;
-        if (await Msg.Ask(this, $"RecoverKit {AppVersion} works with hashcat {HashcatInstaller.Version}, but this computer still has hashcat {_hashcatVersion.TrimStart('v')} from an earlier RecoverKit.\n\n" +
-                                "Without it, ZIP archives are searched on the processor instead of the graphics card, many times slower.\n\n" +
-                                $"Download hashcat {HashcatInstaller.Version} now (about 20 MB)?"))
+        string source = managed ? " from an earlier RecoverKit" : $" ({tool.Exe})";
+        string action = Platform.IsMac
+            ? $"Install hashcat {HashcatInstaller.Version} now? It comes with RecoverKit and is copied into your user folder."
+            : $"Download hashcat {HashcatInstaller.Version} now (about 20 MB)?";
+        string keep = managed ? "" : " Your own hashcat stays where it is; RecoverKit uses the new copy.";
+        if (await Msg.Ask(this, $"RecoverKit {AppVersion} works with hashcat {HashcatInstaller.Version}, but it found hashcat {_hashcatVersion.TrimStart('v')}{source}.\n\n" +
+                                "Without it, ZIP archives are searched on the processor instead of the graphics card, many times slower." + keep + "\n\n" + action))
+        {
             await DownloadHashcatAsync();
+            return;
+        }
+        if (!managed)
+        {
+            _settings.DeclinedHashcatUpgrade = declineKey;
+            try { _settings.Save(); } catch (IOException ex) { DebugLog.Warn("Settings not saved: " + ex.Message); }
+        }
     }
 
     private async Task DownloadHashcatAsync()
@@ -1437,9 +1462,38 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Help &gt; Check for updates: asks the project's GitHub releases (only when clicked). A newer
-    /// release is downloaded, verified and installed from here (<see cref="AppUpdater"/>); when that
-    /// is not possible for this installation, the download page opens instead.
+    /// At start, unless turned off in Preferences, asks GitHub for a newer release at most once an hour
+    /// (<see cref="AppUpdater.AutomaticCheckDue"/>). Failures only go to the debug log; a newer release
+    /// shows the toolbar's Update button and a line in the log.
+    /// </summary>
+    private async Task AutoCheckForUpdatesAsync()
+    {
+        if (!_settings.CheckForUpdatesAtStart || !AppUpdater.AutomaticCheckDue(_settings.LastUpdateCheckUtc, DateTime.UtcNow)) return;
+        _settings.LastUpdateCheckUtc = DateTime.UtcNow;
+        try { _settings.Save(); } catch (IOException ex) { DebugLog.Warn("Settings not saved: " + ex.Message); }
+        ReleaseInfo? release;
+        try { release = await AppUpdater.FetchLatestAsync(); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
+        {
+            DebugLog.Warn("Automatic update check failed: " + ex.Message);
+            return;
+        }
+        if (release is null || !AppUpdater.IsNewer(release, AppVersion)) return;
+        DebugLog.Info($"Update available: {release.Tag}");
+        ShowUpdateAvailable(release);
+        Line($"{AppName} {release.Tag} is available (you have {AppVersion}). Click Update in the toolbar to install it.", Palette.AccentBrush);
+    }
+
+    private void ShowUpdateAvailable(ReleaseInfo release)
+    {
+        _availableUpdate = release;
+        _tbUpdate.IsVisible = true;
+        ToolTip.SetTip(_tbUpdate, $"Install {AppName} {release.Tag} (you have {AppVersion})");
+    }
+
+    /// <summary>
+    /// Help &gt; Check for updates: asks the project's GitHub releases. A newer release is downloaded,
+    /// verified and installed from here (<see cref="InstallUpdateAsync"/>).
     /// </summary>
     internal async Task CheckForUpdatesAsync()
     {
@@ -1462,9 +1516,23 @@ public sealed partial class MainWindow : Window
             await Msg.Info(this, $"You are using the latest version ({AppVersion}).", title);
             return;
         }
+        ShowUpdateAvailable(release);
+        await InstallUpdateAsync(start: false);
+    }
+
+    /// <summary>
+    /// Downloads, verifies and installs <see cref="_availableUpdate"/> (<see cref="AppUpdater"/>), then
+    /// closes so the update script can replace this copy. With <paramref name="start"/> (the toolbar
+    /// button) the download begins without a second click. When this installation cannot be updated
+    /// in place, or an attack runs, the download page is offered instead.
+    /// </summary>
+    private async Task InstallUpdateAsync(bool start = true)
+    {
+        const string title = "Update";
+        if (_availableUpdate is not { } release || _busyDialog) return;
         var kind = AppUpdater.DetectInstallKind();
         var asset = AppUpdater.ChooseAsset(release, kind);
-        bool busy = _cts is not null || _busyDialog;
+        bool busy = _cts is not null;
         if (asset is null || busy)
         {
             string hint = asset is not null && busy ? "Stop the running attack to install it from here, or open the download page now." : "Open the download page?";
@@ -1475,7 +1543,7 @@ public sealed partial class MainWindow : Window
         }
         _busyDialog = true;
         PreparedUpdate? update;
-        try { update = await UpdateWindow.RunAsync(this, release, kind, asset); }
+        try { update = await UpdateWindow.RunAsync(this, release, kind, asset, start); }
         finally { _busyDialog = false; }
         if (update is null) return;
         try { AppUpdater.Apply(update); }

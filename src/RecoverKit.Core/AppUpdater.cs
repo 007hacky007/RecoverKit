@@ -41,6 +41,16 @@ public static class AppUpdater
         return c;
     }
 
+    /// <summary>The automatic check at start runs at most this often.</summary>
+    public static readonly TimeSpan AutomaticCheckInterval = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// True when the automatic check at start should ask GitHub again: never checked, an hour has
+    /// passed, or the clock was set back past the last check.
+    /// </summary>
+    public static bool AutomaticCheckDue(DateTime? lastCheckUtc, DateTime nowUtc)
+        => lastCheckUtc is not { } last || nowUtc < last || nowUtc - last >= AutomaticCheckInterval;
+
     /// <summary>Folder for downloaded release files and staged copies; cleared before each download.</summary>
     public static string UpdatesDir => Path.Combine(Settings.AppDataDir, "updates");
 

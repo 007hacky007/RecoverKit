@@ -259,10 +259,14 @@ microseconds). A single large stored entry has no cheap check; it stays a CPU-on
 `ConfirmPassword` also runs the existing other-entry checks. Partial GPU runs always use outfile
 confirmation and keep guessing.
 
-The GPU kernels need hashcat 8.0.0's kernel files (`HashcatKernels.Originals`). A hashcat left by an
-earlier RecoverKit (`engines/hashcat-7.1.2`) makes `Inspect` return `Unsupported`, which used to send
-ZIP attacks to the CPU without a word; `HashcatKernels.UnavailableReason` now names the cause in the
-log and the main window offers the download once per start (`OfferHashcatUpgradeAsync`).
+The GPU kernels need hashcat 8.0.0's kernel files (`HashcatKernels.Originals`). An older hashcat (one
+left by an earlier RecoverKit in `engines/hashcat-7.1.2`, or the user's own) makes `Inspect` return
+`Unsupported`, which used to send ZIP attacks to the CPU without a word; `HashcatKernels.UnavailableReason`
+now names the cause in the log. At start the main window compares the version hashcat reports with
+`HashcatInstaller.Version` (`HashcatTool.IsOlderThanPinned`, not the folder name) and offers the pinned
+version (`OfferHashcatUpgradeAsync`): once per start for a copy RecoverKit installed, and for the user's
+own copy until they decline it (`Settings.DeclinedHashcatUpgrade`, keyed by path and version). `Locate`
+prefers the pinned copy over any other `engines/hashcat-*` (`IsUnpinnedManagedCopy`).
 
 Stored partials have only the header check (1 in 128 or 256 candidates), which overwhelms
 hashcat's one-hit-per-launch result buffer and can hide the real password. Recovery therefore

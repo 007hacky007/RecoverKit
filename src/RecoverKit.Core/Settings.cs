@@ -89,6 +89,15 @@ public sealed class Settings
     public Dictionary<int, double> CpuSpeedByMode { get; set; } = new();
     /// <summary>Seconds hashcat needs to start a hybrid run of this mode (until its first speed report).</summary>
     public Dictionary<int, double> GpuStartupByMode { get; set; } = new();
+    /// <summary>
+    /// "path|version" of a hashcat the user installed (not RecoverKit) whose upgrade offer was declined,
+    /// so the offer is not repeated at every start for that copy.
+    /// </summary>
+    public string? DeclinedHashcatUpgrade { get; set; }
+    /// <summary>Ask GitHub for a newer release when RecoverKit starts (at most once an hour).</summary>
+    public bool CheckForUpdatesAtStart { get; set; } = true;
+    /// <summary>When the last automatic update check ran (UTC).</summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
     public string? LastOpenedDirectory { get; set; }
     public string? LastDictionaryDirectory { get; set; }
     public int[]? WindowBounds { get; set; }

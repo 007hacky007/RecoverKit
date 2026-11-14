@@ -200,6 +200,29 @@ public class ZipGpuKernelTests
     public void MajorVersionIsReadFromVersionOutput(string output, int major)
         => Assert.Equal(major, HashcatTool.ParseMajorVersion(output));
 
+    [Theory]
+    [InlineData("v7.1.2\n", "7.1.2", true)]
+    [InlineData("v6.2.6-851-g6716447df", "6.2.6", true)]
+    [InlineData("7.1", "7.1.0", true)]
+    [InlineData("v8.0.0", "8.0.0", false)]
+    [InlineData("v8.1.0", "8.1.0", false)]
+    [InlineData("v9.0.0-12-gabcdef", "9.0.0", false)]
+    public void HashcatVersionIsComparedWithThePinnedOne(string output, string version, bool older)
+    {
+        Assert.Equal(Version.Parse(version), HashcatTool.ParseVersion(output));
+        Assert.Equal(older, HashcatTool.IsOlderThanPinned(output));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("unknown")]
+    [InlineData("hashcat (devel)")]
+    public void AnUnreadableHashcatVersionIsNotOlder(string output)
+    {
+        Assert.Null(HashcatTool.ParseVersion(output));
+        Assert.False(HashcatTool.IsOlderThanPinned(output));
+    }
+
     [Fact]
     public void AnOlderManagedCopyGivesWayToThePinnedVersion()
     {
@@ -208,8 +231,10 @@ public class ZipGpuKernelTests
         var engines = Directory.CreateDirectory(Path.Combine(t.Path, "engines")).FullName;
         var old = Path.Combine(Directory.CreateDirectory(Path.Combine(engines, "hashcat-7.1.2")).FullName, name);
         File.WriteAllText(old, "");
-        Assert.True(HashcatTool.IsOlderManagedCopy(old, engines));
-        Assert.False(HashcatTool.IsOlderManagedCopy(Path.Combine(t.Path, "elsewhere", name), engines));
+        Assert.True(HashcatTool.IsUnpinnedManagedCopy(old, engines));
+        Assert.True(HashcatTool.IsManagedCopy(old, engines));
+        Assert.False(HashcatTool.IsUnpinnedManagedCopy(Path.Combine(t.Path, "elsewhere", name), engines));
+        Assert.False(HashcatTool.IsManagedCopy(Path.Combine(t.Path, "elsewhere", name), engines));
 
         // Only the old copy: it is still used (hashcat works, it is just older).
         var app = Directory.CreateDirectory(Path.Combine(t.Path, "app")).FullName;
@@ -217,7 +242,7 @@ public class ZipGpuKernelTests
 
         var pinned = Path.Combine(Directory.CreateDirectory(Path.Combine(engines, "hashcat-" + HashcatInstaller.Version)).FullName, name);
         File.WriteAllText(pinned, "");
-        Assert.False(HashcatTool.IsOlderManagedCopy(pinned, engines));
+        Assert.False(HashcatTool.IsUnpinnedManagedCopy(pinned, engines));
         Assert.Equal(pinned, HashcatTool.Locate(old, app, engines)!.Exe);
     }
 
