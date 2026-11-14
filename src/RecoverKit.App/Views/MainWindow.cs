@@ -890,11 +890,16 @@ public sealed partial class MainWindow : Window
     private async void OpenAsDialog()
     {
         if (_cts is not null || _busyDialog) return;
+        if (_depsPage is { Installing: false } idle) idle.Skip();
         _busyDialog = true;
         Detection? det;
         try { det = await OpenAsWindow.RunAsync(this, _settings); }
         finally { _busyDialog = false; }
-        if (det is not null) await ShowDetectionAsync(det);
+        if (det is null) return;
+        // Like OpenFileAsync: an idle page is skipped, an install is never cancelled and the file waits for it.
+        if (_depsPage is { Installing: false } page) page.Skip();
+        if (_depsRun is { IsCompleted: false } run) await run;
+        await ShowDetectionAsync(det);
     }
 
     private async Task OpenFileAsync(string path)
@@ -1405,7 +1410,13 @@ public sealed partial class MainWindow : Window
         DebugLog.Info("Preferences changed");
         DebugLog.LogSettings(_settings);
         if (_hashcat is not null) _hashcat.MaxCpuThreads = _settings.MaxCpuThreads;
-        if (f.HashcatChanged) await InitHashcatAsync();
+        if (f.HashcatChanged)
+        {
+            // Not the start page: a page shown from here does not remember skips.
+            await InitHashcatAsync(showPage: false);
+            if (DependencyCheck.ShouldShowAtStart(_depsItems, []))
+                await ShowDependenciesAsync(DepsTrigger.User, _depsItems);
+        }
         bool cpuTurnedOn = (!cpuOnlyBefore && _settings.Strategy == DeviceStrategy.CpuOnly) || (!cpuWithGpuBefore && _settings.HashcatCpuWithGpu);
         if (OperatingSystem.IsWindows() && cpuTurnedOn && CpuRuntime.Locate() is null)
             await ShowDependenciesAsync(DepsTrigger.NeedCpu);
