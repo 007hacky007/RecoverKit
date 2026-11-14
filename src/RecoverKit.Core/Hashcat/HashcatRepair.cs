@@ -85,12 +85,11 @@ public static class HashcatRepair
     internal static IReadOnlyList<string> DefaultAlternatives()
     {
         if (!OperatingSystem.IsWindows()) return [];
-        var list = new List<string>();
-        // Outside AppData and Downloads, where antivirus software holds unknown programs most often.
-        if (Path.GetPathRoot(System.Environment.SystemDirectory) is { Length: > 0 } drive) list.Add(Path.Combine(drive, "RecoverKit"));
+        // Outside AppData and Downloads, where antivirus software holds unknown programs most often, and
+        // inside the user's profile: a folder at the drive root (C:\RecoverKit) is writable by every user
+        // of the PC, so another account could replace hashcat.exe there.
         var profile = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
-        if (profile.Length > 0) list.Add(Path.Combine(profile, "RecoverKit"));
-        return list;
+        return profile.Length > 0 ? [Path.Combine(profile, "RecoverKit")] : [];
     }
 
     private static async Task<bool> StartsAsync(string exe, CancellationToken ct)
