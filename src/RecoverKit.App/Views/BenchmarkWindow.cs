@@ -71,6 +71,7 @@ public sealed class BenchmarkWindow : Window
     private readonly Button _abandon;
     private readonly List<(Entry Entry, double Speed)> _results = new();
     private readonly Dictionary<int, string> _engines = new();
+    private readonly Dictionary<int, List<string>> _details = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly string _cpu = Platform.CpuName();
     private DateTime _started, _finished;
@@ -123,6 +124,16 @@ public sealed class BenchmarkWindow : Window
         Closing += (_, _) => { if (_running) _cts.Cancel(); };
     }
 
+    /// <summary>The test password length and, for hashcat + built-in engine rows, what each side measured.</summary>
+    internal static List<string> DetailLines(SpeedProbe.Details? d, double speed)
+    {
+        var lines = new List<string>();
+        if (d is null) return lines;
+        if (d.Length > 0) lines.Add($"Test passwords: {d.Length} characters");
+        if (speed > 0 && d.Cpu > 0 && d.Gpu > 0) lines.Add($"Measured separately: GPU {d.Gpu:N0}, CPU {d.Cpu:N0}");
+        return lines;
+    }
+
     private IEnumerable<string> GpuNames() => _devices.Where(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))
         .Select(d => HashcatRunner.RunningBackend(d, _devices) is var running && running != d.Backend
             ? $"#{d.Id} {d.Name} ({running}; CUDA could not build hashcat's kernels on this PC)"
@@ -169,7 +180,8 @@ public sealed class BenchmarkWindow : Window
                 bool native = SpeedProbe.UseNative(_settings, _devices, e.Mode);
                 double speed;
                 string? cpuPath = null;
-                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token, path => cpuPath = path); }
+                SpeedProbe.Details? details = null;
+                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token, path => cpuPath = path, d => details = d); }
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
                 string cpuEngine = cpuPath is null ? "built-in CPU engine" : $"built-in CPU engine, {cpuPath}";
@@ -178,12 +190,14 @@ public sealed class BenchmarkWindow : Window
                 _engines[e.Mode] = native ? cpuEngine
                     : cpuPath is not null || SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? $"hashcat on the {gpu} + {cpuEngine}"
                     : GpuNames().Any() ? $"hashcat, {gpu}" : "hashcat, CPU (OpenCL)";
+                _details[e.Mode] = DetailLines(details, speed);
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;
 
                 Add($"Type: {e.Type}");
                 Add($"Protection: {e.Protection}");
                 Add($"Engine: {_engines[e.Mode]}");
+                foreach (var line in _details[e.Mode]) Add(line);
                 Add(speed > 0 ? $"Password recovery rate: {speed:N0}" : "Password recovery rate: not supported on this device", bold: true);
                 Add("");
                 DebugLog.Info($"Benchmark mode {e.Mode} ({e.Type}, {e.Protection}): {speed:N0} p/s");
@@ -225,6 +239,7 @@ public sealed class BenchmarkWindow : Window
         foreach (var (e, s) in _results)
             sb.Append("<p>Type: ").Append(H(e.Type)).Append("<br>Protection: ").Append(H(e.Protection))
               .Append("<br>Engine: ").Append(H(_engines.GetValueOrDefault(e.Mode, "")))
+              .Append(string.Concat(_details.GetValueOrDefault(e.Mode, []).Select(l => "<br>" + H(l))))
               .Append("<br><b>Password recovery rate: ").Append(s > 0 ? s.ToString("N0") : "not supported on this device").Append("</b></p>");
         sb.Append("<p>Raw results: ").Append(string.Join(", ", _results.Select(r => ((long)r.Speed).ToString()))).Append("<br>");
         if (_finished != default) sb.Append(H($"Benchmark finished: {_finished:F}"));

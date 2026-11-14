@@ -151,7 +151,7 @@ public static class FiniteDiagnosticWorker
 
     private static async Task<Result> RunJobAsync(WorkerRequest value, string directory)
     {
-        if (value.Mode is not (13000 or 17210) || value.Length is < 1 or > 10 || value.Count < -1
+        if (value.Mode is not (13000 or 17210 or 12500) || value.Length is < 1 or > 10 || value.Count < -1
             || value.Count > Environment.ProcessorCount || value.Limit < 1 || value.Limit > Environment.ProcessorCount
             || value.Count > value.Limit || value.Limits is null || value.Devices is null)
             return Failed("Finite diagnostic request is invalid.");

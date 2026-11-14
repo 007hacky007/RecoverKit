@@ -294,7 +294,8 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         var allGroups = HybridBenchmarkDevices.Groups(settings, devices, 0, []);
         // Reserve current and preferred backends, each with/without integrated GPUs. Choices resolve after GPU timings.
         int groupSlots = allGroups.Count * 2;
-        foreach (int mode in new[] { 13000, 17210 })
+        // RAR 3 shows how the GPU and the processor share its work (the GPU alone, the CPU alone, both).
+        foreach (int mode in new[] { 13000, 17210, 12500 })
         {
             List<List<BackendDevice>>? groups = null;
             string[]? mask = null;
@@ -312,7 +313,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 if (mode == 17210) gpu = report.Measurements.Where(r => r.Section == "zip" && r.Mode == mode && r.Target.Contains("17 bytes") && r.Correct).Select(r => r.Speed).DefaultIfEmpty(gpu).Max();
                 if (cpu <= 0) cpu = NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode])?.SpeedHint * limit ?? 1000;
                 if (gpu <= 0) gpu = cpu * 2;
-                mask = Thorough ? ["-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", mode == 13000 ? 5 : 9))]
+                mask = Thorough ? ["-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", mode is 13000 or 12500 ? 5 : 9))]
                     : FiniteDiagnosticWorker.SizedMask(cpu + gpu, 12);
             });
             int workerSlots = Thorough ? 4 : 2;

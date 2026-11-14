@@ -15,17 +15,18 @@ public class MatchedSpeedProbeTests
     }
 
     [Theory]
-    [InlineData(12500)]
-    [InlineData(17210)]
-    [InlineData(10700)]
-    public void CpuAndGpuUseSameSyntheticFixtureAndSevenCharacterMask(int mode)
+    [InlineData(12500, 4)]   // RAR 3's cost grows with the length: measured like the commercial product's figure
+    [InlineData(17210, 7)]
+    [InlineData(10700, 7)]
+    public void CpuAndGpuUseSameSyntheticFixtureAndMaskLength(int mode, int length)
     {
         var request = MatchedSpeedProbe.CreateRequest(mode, new Settings(), [], "probe", TimeSpan.FromSeconds(8), true);
         Assert.Equal(NativeKernels.BenchmarkHashes[mode], MatchedSpeedProbe.HashLine(mode));
         var space = MaskSpace.FromHashcatArgs(request.Attack.Args.Take(5).ToArray());
         Assert.NotNull(space);
-        Assert.Equal(7, space.MinLength);
-        Assert.Equal(7, space.MaxLength);
+        Assert.Equal(length, MatchedSpeedProbe.LengthFor(mode));
+        Assert.Equal(length, space.MinLength);
+        Assert.Equal(length, space.MaxLength);
         Assert.Equal("?u?d?s", request.Attack.Args[3]);
         Assert.DoesNotContain("-b", request.Attack.Args);
     }

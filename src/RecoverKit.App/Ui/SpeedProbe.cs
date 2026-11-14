@@ -16,7 +16,7 @@ internal static class SpeedProbe
         var profile = PerformanceProfiles.Load();
         PerformanceProfiles.Invalidate(profile, PerformanceProfiles.CpuFingerprint,
             PerformanceProfiles.GpuFingerprint(tool ?? HashcatTool.Locate(preferences.HashcatPath), devices));
-        return ProfileSettings.ForAttack(preferences, profile, devices, mode, MatchedSpeedProbe.Length,
+        return ProfileSettings.ForAttack(preferences, profile, devices, mode, MatchedSpeedProbe.LengthFor(mode),
             NativeKernels.BenchmarkHashes.GetValueOrDefault(mode, ""));
     }
 
@@ -39,10 +39,14 @@ internal static class SpeedProbe
         && (s.PerformanceChoice?.Engine == "hybrid" || !HybridRunner.CpuAddsTooLittle(s, devices, mode))
         && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
 
+    /// <summary>What a measurement used: the password length, and for hybrid runs each side's rate.</summary>
+    public sealed record Details(int Length, double Cpu, double Gpu);
+
     public static async Task<(double Speed, bool Native)> MeasureAsync(HashcatTool hashcat, Settings preferences,
         IReadOnlyList<BackendDevice> devices, int mode, TimeSpan nativeDuration, CancellationToken ct,
-        Action<string>? cpuPathMeasured = null)
+        Action<string>? cpuPathMeasured = null, Action<Details>? measuredWith = null)
     {
+        int length = MatchedSpeedProbe.LengthFor(mode);
         var s = ExecutionSettings(preferences, devices, mode, hashcat);
         using var selection = ProfileSettings.CpuSelection(s, mode);
         if (NativeEligible(s, devices, mode))
@@ -50,8 +54,9 @@ internal static class SpeedProbe
             int measured = s.PerformanceChoice?.Engine == "cpu" ? s.PerformanceChoice.Threads : s.CpuPerformanceChoice?.Threads ?? 0;
             int threads = s.MaxCpuThreads > 0 ? s.MaxCpuThreads : measured > 0 ? measured : Environment.ProcessorCount;
             NativeKernels.ResetCpuPath(mode);
-            double speed = await Task.Run(() => NativeKernels.Benchmark(mode, threads, nativeDuration, ct, MatchedSpeedProbe.Length), ct);
+            double speed = await Task.Run(() => NativeKernels.Benchmark(mode, threads, nativeDuration, ct, length), ct);
             if (speed > 0) cpuPathMeasured?.Invoke(NativeKernels.CpuPath(mode, actualOnly: true));
+            measuredWith?.Invoke(new Details(length, 0, 0));
             return (speed, true);
         }
         bool hybrid = HybridEligible(s, devices, mode);
@@ -65,7 +70,8 @@ internal static class SpeedProbe
             if (hybrid) cpuPathMeasured?.Invoke(NativeKernels.CpuPath(mode, actualOnly: true));
             preferences.GpuSpeedByMode[mode] = gpu;
             if (hybrid) preferences.CpuSpeedByMode[mode] = cpu;
-            DebugLog.Info($"Matched speed probe, mode {mode}, synthetic native fixture, length {MatchedSpeedProbe.Length}: GPU {gpu:N0}/s, CPU {cpu:N0}/s ({threads} threads)");
+            DebugLog.Info($"Matched speed probe, mode {mode}, synthetic native fixture, length {length}: GPU {gpu:N0}/s, CPU {cpu:N0}/s ({threads} threads)");
+            measuredWith?.Invoke(new Details(length, hybrid ? cpu : 0, gpu));
             return (hybrid ? MatchedSpeedProbe.CombinedRate(cpu, gpu) : gpu, false);
         }
 
@@ -74,6 +80,9 @@ internal static class SpeedProbe
         var args = HashcatRunner.MustAvoidAppleOpenCl(mode, OperatingSystem.IsMacOS())
             ? HashcatRunner.MetalOnlyArguments(s, devices) : HashcatRunner.DeviceArguments(s, devices);
         args.AddRange(["-w", s.Workload.ToString()]);
-        return (await hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false), false);
+        double rate = await hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false);
+        // hashcat's own benchmark mask decides the length (seven characters unless the mode sets another).
+        measuredWith?.Invoke(new Details((await hashcat.ModeInfoAsync(mode))?.BenchmarkLength ?? 0, 0, 0));
+        return (rate, false);
     }
 }

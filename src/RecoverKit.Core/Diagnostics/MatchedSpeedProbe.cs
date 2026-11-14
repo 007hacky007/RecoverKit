@@ -11,6 +11,15 @@ public static class MatchedSpeedProbe
 {
     public const int Length = 7;
 
+    /// <summary>
+    /// The password length a format is measured at. RAR 3 hashes the password again in every one of its
+    /// 262,144 rounds, so its cost grows with the length (4096 x (2L + 11) SHA-1 blocks: 1.32x more at 7
+    /// characters than at 4). It is measured at 4 characters, the length the commercial product's RAR 3
+    /// figure matches (live attacks at fixed lengths, docs/benchmarks.md). Formats whose key derivation
+    /// hashes the password once cost the same at any of these lengths and use <see cref="Length"/>.
+    /// </summary>
+    public static int LengthFor(int mode) => mode == 12500 ? 4 : Length;
+
     internal static string HashLine(int mode) => NativeKernels.BenchmarkHashes[mode];
 
     internal static RunRequest CreateRequest(int mode, Settings settings, IReadOnlyList<BackendDevice> devices,
@@ -24,7 +33,7 @@ public static class MatchedSpeedProbe
         copy.DontUsePasswordCache = true;
         copy.SessionsDir = directory;
         var attack = new PreparedAttack { Description = "Synthetic matched speed measurement" };
-        attack.Args.AddRange(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", Length)),
+        attack.Args.AddRange(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", LengthFor(mode))),
             "--runtime", Math.Max(3, (int)Math.Ceiling(duration.TotalSeconds)).ToString(), "--restore-disable", "--logfile-disable", "--keep-guessing"]);
         return new RunRequest
         {
@@ -71,8 +80,9 @@ public static class MatchedSpeedProbe
                     double last = 0;
                     while (!done.IsCancellationRequested)
                     {
-                        double speed = NativeKernels.Benchmark(mode, threads, duration, done.Token, Length);
-                        if (speed > 0) last = speed;
+                        double speed = NativeKernels.Benchmark(mode, threads, duration, done.Token, LengthFor(mode));
+                        // A window cut short when hashcat exits counts only when no full one completed.
+                        if (speed > 0 && (!done.IsCancellationRequested || last == 0)) last = speed;
                     }
                     return last;
                 }, CancellationToken.None);

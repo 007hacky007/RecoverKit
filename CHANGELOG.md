@@ -25,6 +25,14 @@ All notable changes to RecoverKit. Downloads are on the
 
 ### Changed
 - The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
+- The Benchmark measures RAR 3 with 4-character passwords instead of 7. RAR 3 hashes the
+  password again in each of its 262,144 rounds, so it gets slower as passwords get longer
+  (1.32x from 4 to 7 characters); 4 characters is the length other recovery tools' RAR 3 figures
+  match. Other formats hash the password once and cost the same at any test length.
+- Each Benchmark result names the test password length, and for formats where the GPU and the
+  processor work together, what each side measured.
+- The detailed performance test measures RAR 3 on the GPU alone, the processor alone and both
+  together, as it does for RAR 5 and ZIP.
 - Benchmark results name the GPU backend that ran, CUDA, OpenCL or Metal: "Engine: hashcat, GPU
   (CUDA)". An NVIDIA GPU running through OpenCL after a failed CUDA kernel build is listed as
   OpenCL with the reason.
