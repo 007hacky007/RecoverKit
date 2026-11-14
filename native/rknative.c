@@ -38,7 +38,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 8
+#define RK_API_VERSION 9
 
 enum
 {
@@ -481,6 +481,8 @@ VECFN static inline void rar3_block2(V256* st0, V256* st1, const uint32_t* Sb, u
     st1[0] = VADD(st1[0], a1); st1[1] = VADD(st1[1], b1); st1[2] = VADD(st1[2], c1); st1[3] = VADD(st1[3], d1); st1[4] = VADD(st1[4], e1);
 }
 
+#define RAR3_VEC_LANES (2 * sizeof(V256) / sizeof(uint32_t))
+
 VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint8_t* out)
 {
     int nb = L->nb, nbp = L->nbp, p = L->p;
@@ -493,7 +495,7 @@ VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint
     uint32_t lanes[8];
     V256 pb[RAR3_MAXLEN];
 
-    for (int i = 0; i < n; i += 16)
+    for (int i = 0; i < n; i += RAR3_VEC_LANES)
     {
         /* Per-group schedule of the lane bytes, per block. */
         for (int g = 0; g < 2; g++)
@@ -524,7 +526,7 @@ VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint
         V256 st[2][5];
         for (int g = 0; g < 2; g++)
             for (int q = 0; q < 5; q++) st[g][q] = VSET1(SHA1_IV[q]);
-        uint8_t iv[16][16];
+        uint8_t iv[RAR3_VEC_LANES][16];
         memset(iv, 0, sizeof iv);
 
         rar3_template_words(L, S);
@@ -591,6 +593,20 @@ VECFN static void rar3_vec(const rar3_layout* L, const uint8_t* pws, int n, uint
 }
 #endif
 
+typedef void (*rar3_hash_fn)(const rar3_layout*, const uint8_t*, int, uint8_t*);
+
+/* Keep the lane count and hash dispatch together for batch sizing. */
+static rar3_hash_fn rar3_path(int* lanes)
+{
+#if RK_VEC
+    if (features() & RK_FEAT_VEC) { *lanes = RAR3_VEC_LANES; return rar3_vec; }
+#endif
+    *lanes = 1;
+    return rar3_scalar;
+}
+
+RK_EXPORT int rk_rar3_lanes(void) { int lanes; rar3_path(&lanes); return lanes; }
+
 /*
  * n candidates of length len, packed in pws (n * len bytes). For each: the 20-byte SHA-1 digest
  * (big-endian words) followed by the 16-byte IV, at out + 36 * i. Returns 0, or -1 when the request
@@ -602,15 +618,8 @@ RK_EXPORT int rk_rar3_hash(const uint8_t* salt, const uint8_t* pws, int len, int
     rar3_layout* L = (rar3_layout*)malloc(sizeof(rar3_layout));
     if (!L) return -1;
     rar3_layout_init(L, salt, pws, len, n);
-#if RK_X64
-    if (features() & RK_FEAT_AVX2) rar3_vec(L, pws, n, out);
-    else
-#elif RK_ARM64
-    /* NEON, 16 lanes: on the M1 the SHA-1 instructions (one sha1c per 4 cycles) are ~30 % slower. */
-    if (features() & RK_FEAT_NEON) rar3_vec(L, pws, n, out);
-    else
-#endif
-        rar3_scalar(L, pws, n, out);
+    int lanes;
+    rar3_path(&lanes)(L, pws, n, out);
     free(L);
     return 0;
 }

@@ -109,19 +109,18 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     }
 
     /// <summary>
-    /// The native path tests 16 candidates per call group: take enough prefixes per call that the last
-    /// group is (almost) full. With ?a (95) one prefix fills 6 groups of 16 to 99 %; with 69 characters
-    /// three prefixes (207 candidates) fill 13 groups to 99.5 %.
+    /// Take enough prefixes to (almost) fill the native path's last lane group.
     /// </summary>
     public override int PrefixBatch(int lastCount)
     {
         if (!NativeFast) return 1;
-        for (int c = 1; c <= 8; c++)
+        int lanes = RkNative.Rar3Lanes();
+        for (int c = 1; c <= lanes; c++)
         {
-            int n = c * lastCount, groups = (n + 15) / 16;
-            if (n >= 0.98 * 16 * groups) return c;
+            int n = c * lastCount, groups = (n + lanes - 1) / lanes;
+            if (n >= 0.98 * lanes * groups) return c;
         }
-        return 8;
+        return lanes;
     }
 
     private sealed class Worker(Rar3Kernel k) : KernelWorker

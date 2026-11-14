@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 8;
+    private const int RequiredVersion = 9;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -21,6 +21,10 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_rar3_hash")]
     public static partial int Rar3Hash(byte* salt, byte* passwords, int len, int n, byte* out36);
+
+    /// <summary>Candidates per group of the RAR 3 path in use.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_lanes")]
+    public static partial int Rar3Lanes();
 
     [LibraryImport(Lib, EntryPoint = "rk_office97_search")]
     public static partial int Office97Search(byte* salt16, byte* enc32, byte* pws, int len, int n, int* hits, int maxHits);
