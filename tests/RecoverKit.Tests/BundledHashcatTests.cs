@@ -71,6 +71,15 @@ public class BundledHashcatTests
         Assert.Equal(System.IO.Path.Combine(engines, "hashcat-8.0.0", HashcatInstaller.ExeName), tool!.Exe);
     }
 
+    [Fact]
+    public async Task InstallWithoutBundleExplainsWhatToDo()
+    {
+        using var t = new TempDir();
+        var inst = new HashcatInstaller(System.IO.Path.Combine(t.Path, "engines"));
+        var ex = await Assert.ThrowsAsync<InstallException>(() => inst.InstallAsync());
+        Assert.Equal(HashcatInstaller.NoBundleMessage, ex.Message);
+    }
+
     private sealed class TempDir : IDisposable
     {
         public string Path { get; } = Directory.CreateTempSubdirectory("rk-bundle").FullName;
