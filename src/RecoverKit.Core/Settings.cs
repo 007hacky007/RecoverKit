@@ -94,6 +94,8 @@ public sealed class Settings
     /// so the offer is not repeated at every start for that copy.
     /// </summary>
     public string? DeclinedHashcatUpgrade { get; set; }
+    /// <summary>Skip keys of dependency offers the user chose to skip (see DependencyItem.SkipKey).</summary>
+    public List<string> SkippedDependencies { get; set; } = new();
     /// <summary>Ask GitHub for a newer release when RecoverKit starts (at most once an hour).</summary>
     public bool CheckForUpdatesAtStart { get; set; } = true;
     /// <summary>When the last automatic update check ran (UTC).</summary>
