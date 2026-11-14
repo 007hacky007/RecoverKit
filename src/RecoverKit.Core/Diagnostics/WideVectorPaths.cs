@@ -5,7 +5,8 @@ namespace RecoverKit.Core.Diagnostics;
 public sealed record WideVectorPathsSummary(bool? Avx512Available, string? Note, IReadOnlyList<WideVectorKernel> Rows);
 public sealed record WideVectorKernel(int Mode, string Kernel, string Target, int Length,
     WideVectorComparison SingleThread, WideVectorComparison AllThreads, string Correctness, string SelfTestState);
-public sealed record WideVectorComparison(int? Threads, WideVectorPathResult Avx2, WideVectorPathResult Avx512, double? Ratio);
+public sealed record WideVectorComparison(int? Threads, WideVectorPathResult Avx2, WideVectorPathResult Avx512, double? Ratio,
+    WideVectorPathResult? Scalar = null);
 public sealed record WideVectorPathResult(string Status, string? Reason, double? Median, double? Minimum,
     double? Maximum, int SampleCount, string SelfTestState);
 
@@ -21,19 +22,19 @@ public static class WideVectorPaths
         if (allThreads is { } logical && PositiveInt(report.System.GetValueOrDefault("CPU thread budget")) is { } budget)
             allThreads = Math.Min(logical, budget);
         var rows = new List<WideVectorKernel>();
-        foreach (var (mode, name) in new[] { (12500, "RAR3"), (13000, "RAR5"), (17200, "ZIP deflated"), (17210, "ZIP stored") })
+        foreach (var (mode, name) in new[] { (12500, "RAR3"), (13000, "RAR5"), (17200, "ZIP deflated"), (17210, "ZIP stored"), (29331, "TrueCrypt Whirlpool") })
         {
             var measurements = report.Measurements.Where(r => r.Section == "cpu" && r.Mode == mode
-                && r.Variant is "avx2" or "avx512"
+                && (r.Variant is "avx2" or "avx512" || mode == 29331 && r.Variant == "scalar")
                 && !(mode == 17210 && r.Target == "published ZIP stored 453-byte fixture")).ToArray();
             // Keep every cell on one workload, including when only one requested path was timed.
             var workload = measurements.Where(r => r.Threads > 0).GroupBy(r => (r.Target, r.Length))
                 .OrderByDescending(g => g.Where(r => Failure(r) is null).Select(r => r.Variant).Distinct().Count())
-                .ThenByDescending(g => g.Count(r => r.Variant == "avx2"))
+                .ThenByDescending(g => g.Count(r => r.Variant == (mode == 29331 ? "scalar" : "avx2")))
                 .Select(g => g.Key).FirstOrDefault();
             var single = Compare(measurements, 1, workload, mode);
             var all = allThreads == 1 ? single : Compare(measurements, allThreads, workload, mode);
-            var paths = new[] { single.Avx2, single.Avx512, all.Avx2, all.Avx512 };
+            var paths = new[] { single.Scalar ?? single.Avx2, single.Avx512, all.Scalar ?? all.Avx2, all.Avx512 };
             string correctness = measurements.Any(r => Failure(r, requireRate: r.Threads > 0) is not null) ? "FAIL"
                 : paths.All(p => p.Status == "PASS") ? "PASS"
                 : paths.Any(p => p.Status == "PASS") ? "PASS (measured paths); incomplete" : "not measured";
@@ -48,10 +49,11 @@ public static class WideVectorPaths
     private static WideVectorComparison Compare(DiagnosticMeasurement[] rows, int? threads, (string Target, int Length) workload, int mode)
     {
         var avx2 = Path(rows, "avx2", threads, workload, mode);
+        var scalar = mode == 29331 ? Path(rows, "scalar", threads, workload, mode) : null;
         var avx512 = Path(rows, "avx512", threads, workload, mode);
-        double? ratio = avx2.Median is { } baseline && avx512.Median is { } wide && double.IsFinite(wide / baseline)
+        double? ratio = (scalar ?? avx2).Median is { } baseline && avx512.Median is { } wide && double.IsFinite(wide / baseline)
             ? wide / baseline : null;
-        return new(threads, avx2, avx512, ratio);
+        return new(threads, avx2, avx512, ratio, scalar);
     }
 
     private static WideVectorPathResult Path(DiagnosticMeasurement[] rows, string variant, int? threads, (string Target, int Length) workload, int mode)
@@ -76,7 +78,7 @@ public static class WideVectorPaths
         if (!row.Correct) return "Diagnostic correctness check failed.";
         string? state = row.Details.GetValueOrDefault("self-test state");
         if (row.Variant == "avx512" && state is ("failed" or "switched off")) return "Native self-test state: " + state + ".";
-        if (row.Variant == "avx512" && row.Mode is 12500 or 13000 && state != "passed")
+        if (row.Variant == "avx512" && row.Mode is 12500 or 13000 or 29331 && state != "passed")
             return "Native wide self-test did not pass: " + (state ?? "not reported") + ".";
         string actual = row.Details.GetValueOrDefault("actual path") ?? "";
         string normalized = actual.Replace("-", "").Replace(" ", "").ToLowerInvariant();

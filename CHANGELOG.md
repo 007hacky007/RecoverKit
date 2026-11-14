@@ -5,6 +5,11 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- An experimental AVX-512 processor option for Whirlpool password recovery, off by default until
+  measured on more CPUs. The previous processor path remains the default. On supported CPUs the
+  quick benchmark and detailed CPU report compare both paths and report any self-test failure.
+
 ### Fixed
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB

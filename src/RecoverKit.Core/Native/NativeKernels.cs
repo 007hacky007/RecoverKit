@@ -51,16 +51,21 @@ public static class NativeKernels
         {
             12500 => RkNative.Rar3ExecutedPaths(),
             13000 => RkNative.Pbkdf2Sha256ExecutedPaths(),
+            29331 => RkNative.WhirlpoolExecutedPaths(),
             _ => 0,
         };
         if (observed != 0)
         {
+            if (Math.Abs(mode) == 29331)
+                return observed == 4 ? "native AVX-512" : observed == 1 ? "native scalar" : "native AVX-512 + native scalar";
             var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256") }
                 .Where(p => (observed & p.Item1) != 0).Select(p => p.Item2);
             return string.Join(" + ", names);
         }
-        if (actualOnly && Math.Abs(mode) is 12500 or 13000) return "not run";
+        if (actualOnly && Math.Abs(mode) is 12500 or 13000 or 29331) return "not run";
         var f = RkNative.Features;
+        if (Math.Abs(mode) == 29331)
+            return RkNative.WhirlpoolLanes() == 8 ? "native AVX-512" : "native scalar";
         if (Math.Abs(mode) == 12500)
             return RkNative.Rar3Lanes() == 32 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
         if (Math.Abs(mode) == 13000)
@@ -69,6 +74,10 @@ public static class NativeKernels
             return RkNative.HasVectorPath ? f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "native AVX2" : "managed scalar";
         return Math.Abs(mode) == 10700 ? "native AES / SHA" : "native CPU";
     }
+
+    public static bool WhirlpoolAvx512Supported => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Avx512);
+
+    public static void ConfigureWhirlpool(Settings settings) => RkNative.WhirlpoolAvx512Enabled = settings.WhirlpoolAvx512;
 
     public static void ResetCpuPath(int mode)
     {
@@ -80,6 +89,7 @@ public static class NativeKernels
         {
             12500 => RkNative.Rar3SelfTestState(),
             13000 => RkNative.Pbkdf2Sha256SelfTestState(),
+            29331 => RkNative.WhirlpoolSelfTestState(),
             _ => -1,
         }) switch { 0 => "not run", 1 => "passed", 2 => "failed", 3 => "switched off", _ => "not applicable" };
 

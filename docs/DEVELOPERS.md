@@ -619,6 +619,67 @@ The report distinguishes the report process's state from the isolated workers' s
 section lists .NET and native AVX2/AVX-512 F separately, native SHA-NI, OS ZMM support and API version.
 ZIP has no native startup guard; its isolated diagnostic check is the correctness evidence.
 
+TrueCrypt Whirlpool (`TrueCryptWhirlpoolKernel`, mode 29331): API version 13 adds eight-candidate
+AVX-512F table gathers for the 999 repeated HMAC iterations. Scalar setup computes U1 and cached
+inner/outer round keys; vector state uses one 64-bit lane per candidate. Partial groups write only
+real candidates. Prefix batches fill the eight lanes even when a mask ends in a literal.
+The previous scalar implementation is the default on every CPU. `Settings.WhirlpoolAvx512`
+(JSON key `WhirlpoolAvx512`, default false) opts into the experimental path. Preferences >
+Performance > Recovery engines exposes it; the checkbox is disabled without native AVX-512 support.
+`rk_whirlpool_set_avx512(int)` receives the preference before CPU recovery or a quick speed probe.
+Measured performance profiles cannot override it. ARM and x86 CPUs without AVX-512 stay scalar.
+This kernel currently handles TrueCrypt single-cipher password-only mode 29331; it does not add
+built-in VeraCrypt recovery.
+An AVX2 gather path is deferred until x86 measurements can establish a benefit over scalar.
+Byte-permute S-box alternatives are also unmeasured; gathers reuse the existing 16 KB tables
+and require only AVX-512F.
+
+First use checks every lane against independent PBKDF2-Whirlpool answers at lengths 0, 1, 7 and 64
+with all 1,000 iterations. A failed guard selects scalar for the process and logs the fallback.
+`RECOVERKIT_WHIRLPOOL_AVX512=0` forces it off, `1` forces it on subject to CPU support and the
+guard, and unset follows the preference. Native executed-path flags drive the engine label and log.
+
+On an AVX-512 CPU, Tools > Benchmark > Quick benchmark leaves the normal Whirlpool row on the
+configured path and adds `Whirlpool CPU paths: previous ..., AVX-512 ...`. The extra line is also
+saved in its HTML report. It measures three back-to-back CPU-only pairs with identical threads,
+length seven and synthetic target, independently of the preference, and prints medians, ranges and
+the ratio. A failed self-test, native worker failure or fallback is shown instead of a wide rate.
+The detailed CPU section's `Wide vector paths` table compares scalar with AVX-512 at one and all
+threads, including the guard state and three-sample median/range in Thorough mode. Clear the
+environment override before either GUI comparison; `0` intentionally blocks wide measurements.
+
+For a repeatable CPU-only comparison on Windows, use the rebuilt API-13 native library and a
+Release build. No GPU work is started by these commands:
+
+```powershell
+$env:RECOVERKIT_HOME = Join-Path $PWD 'whirlpool-benchmark-home'
+$cli = 'src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.dll'
+dotnet build src\RecoverKit.Cli -c Release
+foreach ($pair in 1..3) {
+    $env:RECOVERKIT_WHIRLPOOL_AVX512 = '0'
+    dotnet $cli bench-native --mode 29331 --threads 16 --seconds 10 --length 7
+    $env:RECOVERKIT_WHIRLPOOL_AVX512 = '1'
+    dotnet $cli bench-native --mode 29331 --threads 16 --seconds 10 --length 7
+}
+Remove-Item Env:RECOVERKIT_WHIRLPOOL_AVX512
+dotnet $cli bench-full --sections cpu --thorough --out whirlpool-cpu.html
+```
+
+Send all six `mode 29331` lines (previous must say `native scalar`; enabled must say
+`native AVX-512; guard: passed`), the feature line showing API 13, and the HTML report's
+`TrueCrypt Whirlpool (29331)` row under `Wide vector paths`. For the GUI, keep the preference off,
+run Quick benchmark and send its `Whirlpool CPU paths:` line and saved HTML. The main row is the
+configured CPU/GPU result; only the extra line is a CPU-path comparison. Re-run with the checkbox
+on to confirm the main engine label follows the selected path. AVX-512 has only been
+cross-compiled on the ARM development host; no AVX-512 throughput claim is made.
+`TrueCryptWhirlpoolTests` checks independent derivation, scalar equivalence, partial batches and
+all three single-cipher fixtures. Its slow tests sweep batch sizes and planted prefix positions.
+`native/tests/whirlpool.c` checks the guard answers and rejects a corrupt final lane; run it again
+with the switch set to `0` and `1` to check forced scalar dispatch and guarded opt-in.
+For example, build with `cc -O2 -std=c11 -fno-strict-aliasing native/tests/whirlpool.c -o whirlpool-test`
+and run the executable with each environment value. On x86-64 the opt-in test also verifies that
+a failed guard falls back to scalar. On ARM it prints that AVX-512 was not executed.
+
 ZipCrypto (`ZipCryptoKernel`, modes 17200/17210): API version 11 adds `rk_zip_search_batch`
 alongside `rk_zip_search` and `rk_zip_path`. The managed worker keeps its prefix-key cache and
 passes the three keys after the prefix plus the final-position charset. The C filter returns all header survivors in candidate

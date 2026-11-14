@@ -40,7 +40,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 11
+#define RK_API_VERSION 13
 
 enum
 {
@@ -415,6 +415,7 @@ typedef uint32_t rar3_v16 __attribute__((vector_size(64)));
 /* Guard states are internal: 0 untested, 1 testing, 2 passed, 3 failed. */
 static atomic_int g_rar3_paths = 0, g_pbkdf2_paths = 0;
 static atomic_int g_rar3_wide_test = 0, g_pbkdf2_wide_test = 0;
+static atomic_int g_whirl_paths = 0, g_whirl_wide_test = 0, g_whirl_avx512 = 0;
 
 enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16 };
 
@@ -440,6 +441,7 @@ RK_EXPORT void rk_reset_executed_paths(int mode)
 {
     if (mode == 12500) atomic_store(&g_rar3_paths, 0);
     else if (mode == 13000) atomic_store(&g_pbkdf2_paths, 0);
+    else if (mode == 29331) atomic_store(&g_whirl_paths, 0);
 }
 
 #if RK_X64

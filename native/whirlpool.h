@@ -96,7 +96,7 @@ static void whirl_hmac64(uint64_t* out, const uint64_t* msg, const uint64_t* ip,
 }
 
 /* Salt is exactly 64 bytes; TrueCrypt uses 1,000 iterations and a 64-byte XTS key. */
-RK_EXPORT int rk_whirlpool_pbkdf2(const uint8_t* salt, const uint8_t* pws, int len, int n, uint8_t* out)
+static int whirl_scalar(const uint8_t* salt, const uint8_t* pws, int len, int n, uint8_t* out)
 {
     if (len < 0 || len > 64 || n < 0) return -1;
     uint64_t t[8][256] __attribute__((aligned(64)));
@@ -125,4 +125,64 @@ RK_EXPORT int rk_whirlpool_pbkdf2(const uint8_t* salt, const uint8_t* pws, int l
         for (int i = 0; i < 8; i++) whirl_store(out+(size_t)c*64+8*i, dk[i]);
     }
     return n;
+}
+
+typedef int (*whirl_derive_fn)(const uint8_t*, const uint8_t*, int, int, uint8_t*);
+#include "whirlpool_selftest.h"
+
+RK_EXPORT void rk_whirlpool_set_avx512(int enabled) { atomic_store(&g_whirl_avx512, enabled != 0); }
+
+static int whirl_wide_enabled(void)
+{
+    const char* value = getenv("RECOVERKIT_WHIRLPOOL_AVX512");
+    if (value && strcmp(value, "0") == 0) return 0;
+    if (value && strcmp(value, "1") == 0) return 1;
+    return atomic_load(&g_whirl_avx512);
+}
+
+#if RK_X64
+#include "whirlpool_avx512.h"
+
+static int whirl_wide_ok(void)
+{
+    if (!whirl_wide_enabled()) return 0;
+    int state = atomic_load(&g_whirl_wide_test);
+    if (state == 0 && atomic_compare_exchange_strong(&g_whirl_wide_test, &state, 1))
+    {
+        state = whirl_selftest(whirl_avx512) ? 2 : 3;
+        atomic_store(&g_whirl_wide_test, state);
+    }
+    return state == 2;
+}
+#endif
+
+RK_EXPORT int rk_whirlpool_lanes(void)
+{
+#if RK_X64
+    if ((features() & RK_FEAT_AVX512) && whirl_wide_ok()) return 8;
+#endif
+    return 1;
+}
+
+RK_EXPORT int rk_whirlpool_selftest_state(void)
+{
+    if (!whirl_wide_enabled()) return 3;
+    return wide_selftest_state("RECOVERKIT_WHIRLPOOL_AVX512", &g_whirl_wide_test);
+}
+
+RK_EXPORT int rk_whirlpool_executed_paths(void) { return atomic_load(&g_whirl_paths); }
+
+RK_EXPORT int rk_whirlpool_pbkdf2(const uint8_t* salt, const uint8_t* pws, int len, int n, uint8_t* out)
+{
+    if (len < 0 || len > 64 || n < 0) return -1;
+    if (n == 0) return 0;
+#if RK_X64
+    if (rk_whirlpool_lanes() == 8)
+    {
+        atomic_fetch_or(&g_whirl_paths, RK_PATH_AVX512);
+        return whirl_avx512(salt, pws, len, n, out);
+    }
+#endif
+    atomic_fetch_or(&g_whirl_paths, RK_PATH_SCALAR);
+    return whirl_scalar(salt, pws, len, n, out);
 }

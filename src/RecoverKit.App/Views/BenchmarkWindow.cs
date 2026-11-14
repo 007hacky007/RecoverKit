@@ -71,6 +71,7 @@ public sealed class BenchmarkWindow : Window
     private readonly Button _abandon;
     private readonly List<(Entry Entry, double Speed)> _results = new();
     private readonly Dictionary<int, string> _engines = new();
+    private string? _whirlpoolPaths;
     private readonly CancellationTokenSource _cts = new();
     private readonly string _cpu = Platform.CpuName();
     private DateTime _started, _finished;
@@ -181,8 +182,13 @@ public sealed class BenchmarkWindow : Window
                 Add($"Protection: {e.Protection}");
                 Add($"Engine: {_engines[e.Mode]}");
                 Add(speed > 0 ? $"Password recovery rate: {speed:N0}" : "Password recovery rate: not supported on this device", bold: true);
+                if (e.Mode == 29331)
+                {
+                    _whirlpoolPaths = await SpeedProbe.MeasureWhirlpoolPathsAsync(_hashcat, _settings, _devices, _cts.Token);
+                    if (_whirlpoolPaths is not null) { Add(_whirlpoolPaths); DebugLog.Info(_whirlpoolPaths); }
+                }
                 Add("");
-                DebugLog.Info($"Benchmark mode {e.Mode} ({e.Type}, {e.Protection}): {speed:N0} p/s");
+                DebugLog.Info($"Benchmark mode {e.Mode} ({e.Type}, {e.Protection}): {speed:N0} p/s, engine {_engines[e.Mode]}");
             }
             _finished = DateTime.Now;
             Add($"Raw results: {string.Join(", ", _results.Select(r => ((long)r.Speed).ToString()))}");
@@ -219,9 +225,13 @@ public sealed class BenchmarkWindow : Window
         var gpus = GpuNames().ToList();
         sb.Append(H(gpus.Count == 0 ? "GPU devices not detected." : "GPU devices: " + string.Join(", ", gpus))).Append("</p>");
         foreach (var (e, s) in _results)
+        {
             sb.Append("<p>Type: ").Append(H(e.Type)).Append("<br>Protection: ").Append(H(e.Protection))
               .Append("<br>Engine: ").Append(H(_engines.GetValueOrDefault(e.Mode, "")))
-              .Append("<br><b>Password recovery rate: ").Append(s > 0 ? s.ToString("N0") : "not supported on this device").Append("</b></p>");
+              .Append("<br><b>Password recovery rate: ").Append(s > 0 ? s.ToString("N0") : "not supported on this device").Append("</b>");
+            if (e.Mode == 29331 && _whirlpoolPaths is not null) sb.Append("<br>").Append(H(_whirlpoolPaths));
+            sb.Append("</p>");
+        }
         sb.Append("<p>Raw results: ").Append(string.Join(", ", _results.Select(r => ((long)r.Speed).ToString()))).Append("<br>");
         if (_finished != default) sb.Append(H($"Benchmark finished: {_finished:F}"));
         sb.Append("</p></body></html>");

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using RecoverKit.Core.Native;
+using RecoverKit.Core.Native.Kernels;
 
 namespace RecoverKit.Core.Diagnostics;
 
@@ -8,6 +9,7 @@ internal static unsafe class WideCpuChecks
 {
     internal static CpuDiagnostics.CorrectnessResult Check(int mode)
     {
+        if (mode == 29331) return CheckWhirlpool();
         int cases = 0;
         int width = mode == 12500 ? RkNative.Rar3Lanes() : RkNative.Pbkdf2Sha256Lanes();
         int n = width + 3;
@@ -45,6 +47,30 @@ internal static unsafe class WideCpuChecks
                 if (RkNative.Rar5Search(s, 15, c, p, 7, n, h, n) != n || !hits.SequenceEqual(Enumerable.Range(0, n)))
                     return new(false, cases, "RAR 5 filter lost or reordered matching batch positions.");
             cases += n;
+        }
+        return new(true, cases);
+    }
+
+    private static CpuDiagnostics.CorrectnessResult CheckWhirlpool()
+    {
+        const int n = 11; // One complete AVX-512 group and a partial second group.
+        int cases = 0;
+        byte[] salt = Enumerable.Range(0, 64).Select(q => (byte)q).ToArray();
+        foreach (int length in new[] { 0, 1, 7, 64 })
+        {
+            var passwords = new byte[n * length];
+            for (int i = 0; i < n; i++)
+                for (int q = 0; q < length; q++) passwords[i * length + q] = (byte)(33 + i * 17 + q * 7);
+            var actual = new byte[n * 64];
+            fixed (byte* p = passwords, s = salt, o = actual)
+                if (RkNative.WhirlpoolPbkdf2(s, p, length, n, o) != n)
+                    return new(false, cases, "Native Whirlpool rejected the request.");
+            for (int i = 0; i < n; i++)
+            {
+                cases++;
+                if (!TrueCryptWhirlpoolKernel.Derive(passwords.AsSpan(i * length, length), salt).AsSpan().SequenceEqual(actual.AsSpan(i * 64, 64)))
+                    return new(false, cases, $"Whirlpool key differs from the reference at length {length}, batch position {i}.");
+            }
         }
         return new(true, cases);
     }

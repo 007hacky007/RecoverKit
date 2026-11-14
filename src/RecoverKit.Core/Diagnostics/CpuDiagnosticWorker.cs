@@ -30,6 +30,8 @@ public static class CpuDiagnosticWorker
                 if (NativeRunner.LowersProcessPriority)
                     try { Process.GetCurrentProcess().PriorityClass = NativeRunner.ProcessClassFor(priority); }
                     catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException) { }
+                if (Math.Abs(mode) == 29331) NativeKernels.ConfigureWhirlpool(Settings.Load());
+                NativeKernels.ResetCpuPath(mode);
                 using var selection = KernelVariants.Select(mode, variant);
                 var selected = EnforcePath(new(new(true, 0), 0, 0, NativeKernels.CpuPath(mode), SelfTestState: NativeKernels.WideSelfTestState(mode)), variant);
                 var check = !selected.Check.Passed ? selected.Check : Math.Abs(mode) is 17200 or 17210
@@ -73,7 +75,7 @@ public static class CpuDiagnosticWorker
 
     internal static WorkerResult EnforcePath(WorkerResult result, string variant)
     {
-        if (variant is not ("avx2" or "avx512")) return result;
+        if (variant is not ("scalar" or "avx2" or "avx512")) return result;
         string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").ToLowerInvariant();
         if (actual == variant && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
         string reason = result.SelfTestState switch

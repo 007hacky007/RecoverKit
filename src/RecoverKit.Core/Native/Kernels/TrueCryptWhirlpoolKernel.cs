@@ -36,21 +36,33 @@ public sealed unsafe class TrueCryptWhirlpoolKernel : NativeKernel
 
     public override KernelWorker CreateWorker() => new Worker(this);
 
+    public override int PrefixBatch(int lastCount)
+    {
+        int lanes = RkNative.Available ? RkNative.WhirlpoolLanes() : 1;
+        for (int count = 1; count < lanes; count++)
+            if (count * lastCount % lanes == 0) return count;
+        return lanes;
+    }
+
     private sealed class Worker(TrueCryptWhirlpoolKernel kernel) : KernelWorker
     {
         private readonly HeaderCheck _check = new(kernel._encrypted);
         private byte[] _passwords = [], _keys = [];
 
-        public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last)
+        public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last) => SearchBatch(prefix, 1, last);
+
+        public override int SearchBatch(ReadOnlySpan<byte> prefixes, int count, ReadOnlySpan<byte> last)
         {
-            int len = prefix.Length + 1, n = last.Length;
+            if (count <= 0) return -1;
+            int plen = prefixes.Length / count, len = plen + 1, n = count * last.Length;
             if (len > kernel.MaxPasswordLength || n == 0) return -1;
             if (_passwords.Length < n * len) _passwords = new byte[n * len];
             if (_keys.Length < n * 64) _keys = new byte[n * 64];
-            for (int i = 0; i < n; i++)
+            for (int k = 0, i = 0; k < count; k++)
+            for (int j = 0; j < last.Length; j++, i++)
             {
-                prefix.CopyTo(_passwords.AsSpan(i * len));
-                _passwords[i * len + len - 1] = last[i];
+                prefixes.Slice(k * plen, plen).CopyTo(_passwords.AsSpan(i * len));
+                _passwords[i * len + len - 1] = last[j];
             }
             return SearchPasswords(_passwords.AsSpan(0, n * len), len, n);
         }
@@ -61,7 +73,8 @@ public sealed unsafe class TrueCryptWhirlpoolKernel : NativeKernel
             if (RkNative.Available)
             {
                 fixed (byte* salt = kernel._salt, pws = passwords, keys = _keys)
-                    RkNative.WhirlpoolPbkdf2(salt, pws, len, n, keys);
+                    if (RkNative.WhirlpoolPbkdf2(salt, pws, len, n, keys) != n)
+                        throw new InvalidOperationException("rknative rejected the Whirlpool request");
             }
             else
                 for (int i = 0; i < n; i++)

@@ -35,6 +35,8 @@ public sealed class Settings
     public bool PreventScreensaver { get; set; } = true;
     public bool OptimizedKernels { get; set; } = true;
     public bool UseNativeCpuEngine { get; set; } = true;      // built-in CPU kernels when no GPU is used
+    /// <summary>Experimental processor Whirlpool path; needs AVX-512 and its native self-test.</summary>
+    public bool WhirlpoolAvx512 { get; set; }
     /// <summary>
     /// With a GPU, run the built-in CPU engine at the same time as hashcat on another part of the
     /// keyspace (masks and supported file dictionaries on formats with a built-in kernel).
