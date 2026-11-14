@@ -119,12 +119,12 @@ public sealed unsafe class Rar3Kernel : NativeKernel
     {
         if (!NativeFast) return 1;
         int lanes = RkNative.Rar3Lanes();
-        for (int c = 1; c <= 8; c++)
+        for (int c = 1; c <= lanes; c++)
         {
             int n = c * lastCount, groups = (n + lanes - 1) / lanes;
             if (n >= 0.98 * lanes * groups) return c;
         }
-        return 8;
+        return lanes;
     }
 
     private sealed class Worker(Rar3Kernel k) : KernelWorker
