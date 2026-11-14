@@ -17,6 +17,14 @@ internal static class HashcatOutput
         "WSL2", "Linux CUDA Toolkit", "hashcat.net/faq/wrongdriver", "developer.nvidia.com/cuda-downloads",
         "docs.nvidia.com/cuda/wsl-user-guide");
 
+    /// <summary>
+    /// hashcat looks for AMD's HIP runtime at start and says so when it is missing (as on most PCs with an AMD
+    /// integrated GPU). Such GPUs run through OpenCL, so the note only goes to the debug log.
+    /// </summary>
+    internal static bool IsHipRuntimeAdvice(string line) => Has(line,
+        "AMD main driver HIP runtime library", "AMD HIP RTC library", "Please install the AMD HIP SDK",
+        "Install the AMD HIP SDK", "Could not open libamdhip", "Could not open libhiprtc", "amdhip64", "libgalaxyhip");
+
     internal static bool NeedsCudaCompilerHint(string line)
         => Has(line, "CUDA SDK Toolkit not installed", "Failed to initialize NVIDIA RTC library");
 

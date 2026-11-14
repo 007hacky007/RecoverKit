@@ -14,6 +14,9 @@ All notable changes to RecoverKit. Downloads are on the
 - Attacks that RecoverKit feeds to hashcat itself (dictionaries converted on the fly, word
   combinations, national characters) showed "0s" left and a full progress bar. They now show the
   progress and time left from the number of candidates RecoverKit sends.
+- On PCs with an AMD integrated GPU, the details log no longer shows hashcat's notes that the AMD HIP
+  runtime is missing. They were harmless: such GPUs run through OpenCL. The notes stay in the debug
+  log.
 
 ### Changed
 - The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".

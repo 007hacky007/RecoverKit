@@ -377,7 +377,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         int cudaHintShown = 0;
         void Output(string line)
         {
-            if (!HashcatOutput.IsCudaCompilerAdvice(line)) OutputLine?.Invoke(line);
+            if (!HashcatOutput.IsCudaCompilerAdvice(line) && !HashcatOutput.IsHipRuntimeAdvice(line)) OutputLine?.Invoke(line);
             if (HashcatOutput.NeedsCudaCompilerHint(line) && Interlocked.Exchange(ref cudaHintShown, 1) == 0)
                 OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Dependencies to enable CUDA.");
         }

@@ -63,9 +63,26 @@ public sealed class HashcatFailureTests : IDisposable
         Assert.Contains("hash", result.Error!, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("HIP", result.Error!);
         Assert.DoesNotContain("CUDA SDK", result.Error!);
-        Assert.Contains(output, l => l.Contains("HIP RTC"));
+        Assert.DoesNotContain(output, l => l.Contains("HIP"));        // AMD GPUs without HIP run through OpenCL
         Assert.Single(Attempts());
     }
+
+    [Theory]
+    [InlineData("Failed to initialize the AMD main driver HIP runtime library.")]
+    [InlineData("Could not open libamdhip64.so, nor any libamdhip64.so.N beside it, nor Hygon DTK's libgalaxyhip.so. Install the AMD HIP SDK or Hygon DTK, or on a distribution that splits its packages, the runtime package providing the soname.")]
+    [InlineData("Failed to initialize AMD HIP RTC library.")]
+    [InlineData("Could not open libhiprtc.so, nor any libhiprtc.so.N beside it. Install the AMD HIP SDK, or on a distribution that splits its packages, the runtime package providing the soname.")]
+    public void MissingHipRuntimeNotesStayOutOfTheLog(string line)
+    {
+        Assert.True(HashcatOutput.IsHipRuntimeAdvice(line));
+        Assert.True(HashcatOutput.IsStartupAdvice(line));
+    }
+
+    [Theory]
+    [InlineData("hipLaunchKernel(): hipErrorLaunchFailure")]
+    [InlineData("Device #3: AMD Radeon(TM) Graphics, skipped")]
+    [InlineData("No hashes loaded.")]
+    public void RealHipErrorsStillReachTheLog(string line) => Assert.False(HashcatOutput.IsHipRuntimeAdvice(line));
 
     [Theory]
     [InlineData(MetalFailure)]
