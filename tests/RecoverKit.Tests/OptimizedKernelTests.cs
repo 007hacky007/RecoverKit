@@ -289,10 +289,13 @@ public class OptimizedKernelTests
         if (OperatingSystem.IsWindows()) return;
         using var t = new TempDir();
         var tool = FakeTool(t.Path);
-        await tool.BenchmarkAsync(12500, [], default, enabled);
+        // hashcat 8 refuses -B (pure) together with -O, also when the caller passes -O itself.
+        await tool.BenchmarkAsync(12500, ["-O", "-d", "1"], default, enabled);
         var args = File.ReadAllLines(Path.Combine(t.Path, "run.args"));
-        Assert.Contains("-B", args);
-        Assert.Equal(enabled, args.Contains("-O"));
+        Assert.Equal(enabled, args.Contains("-b"));
+        Assert.Equal(!enabled, args.Contains("-B"));
+        Assert.Equal(enabled ? 1 : 0, args.Count(a => a == "-O"));
+        Assert.Contains("-d", args);
     }
 
     [Fact]

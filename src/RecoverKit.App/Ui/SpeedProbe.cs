@@ -73,8 +73,6 @@ internal static class SpeedProbe
         if (HashcatRunner.GuardFor(s, devices) is { Active: true } || !await MatchedSpeedProbe.PowerLimitAllowsAsync(s)) return (0, false);
         var args = HashcatRunner.DeviceArguments(s, devices);
         args.AddRange(["-w", s.Workload.ToString()]);
-        if (s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false
-            && (await hashcat.ModeInfoAsync(mode))?.HasOptimizedKernel == true) args.Add("-O");
-        return (await hashcat.BenchmarkAsync(mode, args, ct), false);
+        return (await hashcat.BenchmarkAsync(mode, args, ct, s.OptimizedKernels && s.GpuPerformanceChoice?.Optimized != false), false);
     }
 }

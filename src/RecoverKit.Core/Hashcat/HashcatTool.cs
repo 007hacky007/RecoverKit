@@ -480,10 +480,12 @@ public sealed partial class HashcatTool
     public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct, bool optimizedKernels = true)
     {
         HashcatKernels.EnsureFor(this, mode);
-        // hashcat 8's -b forces -O; -B lets the shared decision select the kernel.
-        var args = new List<string> { MajorVersion >= 8 ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
-        if (await RecoverySession.SelectOptimizedKernelAsync(this, mode, null, optimizedKernels)) args.Add("-O");
-        args.AddRange(deviceArgs);
+        // hashcat 8: -b benchmarks the optimized kernel where a mode has one, -B the pure one, and it
+        // refuses -B together with -O. The shared decision picks the kernel, not the caller's arguments.
+        bool optimized = await RecoverySession.SelectOptimizedKernelAsync(this, mode, null, optimizedKernels);
+        var args = new List<string> { MajorVersion >= 8 && !optimized ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
+        if (optimized) args.Add("-O");
+        args.AddRange(deviceArgs.Where(a => a is not ("-O" or "--optimized-kernel-enable")));
         var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct);
         double total = 0;
         foreach (var line in o.Split('\n'))
