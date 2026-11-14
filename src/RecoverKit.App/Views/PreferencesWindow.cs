@@ -179,7 +179,7 @@ public sealed class PreferencesWindow : Window
         _hybrid.Margin = new Thickness(28, 0, 0, 0);
         hc.Put(_hybrid, 2, 0, 2);
         _whirlpoolAvx512.IsEnabled = NativeKernels.WhirlpoolAvx512Supported;
-        ToolTip.SetTip(_whirlpoolAvx512, "Use the experimental AVX-512 path for TrueCrypt and VeraCrypt Whirlpool on the processor. Off by default until it is measured on more CPUs.");
+        ToolTip.SetTip(_whirlpoolAvx512, "Use the experimental AVX-512 path for TrueCrypt volumes with Whirlpool when the processor checks passwords. Off by default until it is measured on more CPUs.");
         var whirlpoolNote = L.Text(NativeKernels.WhirlpoolAvx512Supported ? "Off by default until measured on more CPUs."
             : "Unavailable: requires an AVX-512 CPU and the native library.", dim: true, wrap: true);
         hc.Put(L.Column(4, _whirlpoolAvx512, whirlpoolNote), 3, 0, 2);

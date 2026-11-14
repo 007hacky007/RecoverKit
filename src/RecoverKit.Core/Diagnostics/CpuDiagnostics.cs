@@ -80,7 +80,7 @@ public static class CpuDiagnostics
         report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
-        report.System["Whirlpool AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(29331);
+        report.System["Whirlpool AVX-512 self-test (report process; runs only when turned on in Preferences)"] = NativeKernels.WideSelfTestState(29331);
     }
 
     internal static void WorkerStates(DiagnosticReport report)

@@ -19,7 +19,7 @@ public class WhirlpoolCpuPathsTests
         Assert.Contains("2.50x", result.Summary);
         Assert.Contains("3 pairs", result.Summary);
         Assert.Contains("8 threads, length 7", result.Summary);
-        Assert.Contains("AVX-512 off by default", result.Summary);
+        Assert.Contains("only when it is turned on in Preferences", result.Summary);
     }
 
     [Theory]

@@ -26,7 +26,8 @@ public static class KernelVariants
         [12500] = [.. NativeAndManaged, .. WideVariants],
         [13000] = [new("default", () => true, () => null), .. WideVariants],
         [29331] = [new("default", () => true, () => null),
-            new("scalar", () => RkNative.Available, () => new FeatureSelection()),
+            // Compared only where an AVX-512 path exists; elsewhere "scalar" is the default path itself.
+            new("scalar", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
             new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new WhirlpoolSelection())],
     };
 

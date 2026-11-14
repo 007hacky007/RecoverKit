@@ -28,7 +28,7 @@ public sealed record WhirlpoolCpuPaths(IReadOnlyList<CpuDiagnosticWorker.WorkerR
             var wide = Valid(Avx512, "avx512");
             string ratio = previous.Length > 0 && wide.Length > 0 ? $" ({Median(wide) / Median(previous):F2}x)" : "";
             return $"Whirlpool CPU paths: previous {Rate(Previous, previous, "scalar")}, AVX-512 {Rate(Avx512, wide, "avx512")}{ratio}; " +
-                $"{Threads} threads, length 7, {Math.Min(Previous.Count, Avx512.Count)} pairs; AVX-512 off by default";
+                $"{Threads} threads, length 7, {Math.Min(Previous.Count, Avx512.Count)} pairs; attacks use the AVX-512 path only when it is turned on in Preferences";
         }
     }
 
