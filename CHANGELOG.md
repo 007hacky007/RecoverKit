@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-14
+
 ### Added
 - One dependencies page (Tools > Dependencies) shows hashcat, NVIDIA's CUDA compiler and Intel's CPU
   runtime as green, yellow or red lights and installs what is missing with one "Install all" button
@@ -207,6 +209,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.5.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.5.0
 [1.4.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.1
 [1.4.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.4.0
 [1.3.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.3.0
