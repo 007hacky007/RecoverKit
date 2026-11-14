@@ -56,12 +56,73 @@ public static class NvrtcRuntime
         return null;
     }
 
-    /// <summary>Puts the installed NVRTC on the PATH of a hashcat process (not in elevated processes, as with the CPU runtime).</summary>
+    /// <summary>
+    /// Chooses the NVRTC a hashcat process sees. hashcat 8 loads the newest nvrtc64_*.dll from CUDA_PATH and
+    /// every PATH folder, and the driver rejects code from an NVRTC newer than itself ("Unsupported .version
+    /// 9.5; current version is '9.3'" with CUDA Toolkit 13.5 on a CUDA 13.3 driver), which fails every CUDA
+    /// kernel build. So copies newer than the driver are hidden, and when RecoverKit's own NVRTC is
+    /// installed (not in elevated processes, as with the CPU runtime) it is the only one hashcat sees.
+    /// </summary>
     public static void ApplyTo(ProcessStartInfo psi)
     {
-        if (!IsSupportedPlatform || CpuRuntime.IsElevatedProcess || Locate() is not { } dir) return;
-        psi.Environment.TryGetValue("PATH", out var path);
-        psi.Environment["PATH"] = dir + Path.PathSeparator + path;
+        if (IsSupportedPlatform) ApplyTo(psi.Environment, Driver.Value, CpuRuntime.IsElevatedProcess ? null : Locate());
+    }
+
+    internal static void ApplyTo(IDictionary<string, string?> env, (int Major, int Minor)? driver, string? own)
+    {
+        if (own is not null && driver is { } d && DirectoryVersion(own) is { } ownVersion && !Fits(ownVersion, d)) own = null;
+        // Without a known driver nothing can be judged: leave the system's copies alone.
+        bool Keep(string dir) => DirectoryVersion(dir) is not { } v || (own is null && (driver is not { } dv || Fits(v, dv)));
+        env.TryGetValue("PATH", out var path);
+        var kept = (path ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Where(Keep);
+        env["PATH"] = string.Join(Path.PathSeparator, (own is null ? kept : kept.Prepend(own)));
+        if (env.TryGetValue("CUDA_PATH", out var cudaPath) && !string.IsNullOrEmpty(cudaPath)
+            && !(Keep(Path.Combine(cudaPath, "bin", "x64")) && Keep(Path.Combine(cudaPath, "bin"))))
+            env.Remove("CUDA_PATH");
+    }
+
+    /// <summary>The CUDA version of the NVIDIA driver, read once per run of RecoverKit.</summary>
+    internal static readonly Lazy<(int Major, int Minor)?> Driver = new(() => IsSupportedPlatform ? DriverCudaVersion() : null);
+
+    private static bool Fits((int Major, int Minor) nvrtc, (int Major, int Minor) driver)
+        => nvrtc.Major < driver.Major || (nvrtc.Major == driver.Major && nvrtc.Minor <= driver.Minor);
+
+    /// <summary>
+    /// The CUDA version of the NVRTC in <paramref name="dir"/> from its builtins file
+    /// (nvrtc-builtins64_135.dll is 13.5), or null when the folder holds no NVRTC.
+    /// </summary>
+    internal static (int Major, int Minor)? DirectoryVersion(string dir)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(dir) || System.IO.Directory.GetFiles(dir, "nvrtc64_*.dll").Length == 0) return null;
+            (int, int)? best = null;
+            foreach (var f in System.IO.Directory.GetFiles(dir, "nvrtc-builtins64_*.dll"))
+            {
+                var m = Regex.Match(Path.GetFileName(f), @"^nvrtc-builtins64_(\d+)(\d)\.dll$", RegexOptions.IgnoreCase);
+                if (!m.Success) continue;
+                (int, int) v = (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value));
+                if (best is not { } b || v.CompareTo(b) > 0) best = v;
+            }
+            // nvrtc64_130_0.dll alone names only the major version: count it as x.9 so a newer major is still caught.
+            if (best is null && System.IO.Directory.GetFiles(dir, "nvrtc64_*.dll").Select(f => Regex.Match(Path.GetFileName(f), @"^nvrtc64_(\d+)0_")).FirstOrDefault(m => m.Success) is { } name)
+                best = (int.Parse(name.Groups[1].Value), 9);
+            return best;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+    }
+
+    /// <summary>NVRTC copies on PATH or under CUDA_PATH that the driver cannot use, for the dependencies page.</summary>
+    public static IReadOnlyList<(string Directory, (int Major, int Minor) Version)> TooNewForDriver((int Major, int Minor)? driver)
+    {
+        if (driver is not { } d) return [];
+        var dirs = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (Environment.GetEnvironmentVariable("CUDA_PATH") is { Length: > 0 } cuda)
+            dirs.AddRange([Path.Combine(cuda, "bin", "x64"), Path.Combine(cuda, "bin")]);
+        return dirs.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(dir => (Directory: dir, Version: DirectoryVersion(dir)))
+            .Where(x => x.Version is { } v && !Fits(v, d))
+            .Select(x => (x.Directory, x.Version!.Value)).ToList();
     }
 
     /// <summary>The CUDA version of the NVIDIA driver from nvidia-smi's banner ("CUDA Version: 12.8"), or null.</summary>

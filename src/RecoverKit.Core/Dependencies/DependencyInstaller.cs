@@ -97,6 +97,8 @@ public sealed class DependencyInstaller(
                 }
                 case DependencyAction.DownloadNvrtc:
                     await NvrtcRuntime.InstallAsync(item.NvrtcPackage!, progress, ct);
+                    // A compiler the driver accepts is in place now: try CUDA again.
+                    CudaFallback.Clear();
                     break;
                 case DependencyAction.DownloadCpuRuntime:
                     await CpuRuntime.InstallAsync(progress, ct);

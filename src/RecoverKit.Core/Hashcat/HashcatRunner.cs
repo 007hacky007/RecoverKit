@@ -165,6 +165,11 @@ public sealed class HashcatRunner(HashcatTool tool)
         IReadOnlyCollection<int>? exclude = null, bool preferMetal = false)
     {
         var a = new List<string>();
+        // After a CUDA kernel build failed on this PC, NVIDIA GPUs run through their OpenCL device.
+        bool avoidCuda = CudaFallback.IsActive(known);
+        IEnumerable<int> Ids(IEnumerable<BackendDevice> devices) => devices
+            .Select(d => avoidCuda && d.Backend == "CUDA" ? CudaFallback.OpenClTwin(d, known!) : d)
+            .Where(d => d is not null && exclude?.Contains(d.Id) != true).Select(d => d!.Id).Distinct();
         // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
         // instead of failing with "no devices found".
         bool noGpu = known is { Count: > 0 } && !known.Any(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true);
@@ -188,7 +193,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (measuredKeys is { Count: > 0 } && known is not null)
         {
             var selected = known.Where(d => d.IsGpu && measuredKeys.Contains(d.Key) && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
-            if (selected.Count > 0) { a.AddRange(["-d", string.Join(',', selected.Select(d => d.Id))]); AddBackendIgnores(); return a; }
+            if (selected.Count > 0) { a.AddRange(["-d", string.Join(',', Ids(selected))]); AddBackendIgnores(); return a; }
         }
         bool anyOff = s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0 || exclude is { Count: > 0 };
         if (preferMetal && known is not null && known.Any(d => d.IsMetal && d.IsSkippedAlias && d.AliasOf is int))
@@ -210,7 +215,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         }
         if (anyOff && known is not null)
         {
-            var enabled = known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).Select(d => d.Id).ToList();
+            var enabled = Ids(known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true)).ToList();
             if (enabled.Count > 0) a.AddRange(["-d", string.Join(',', enabled)]);
         }
         AddBackendIgnores();
@@ -228,7 +233,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             bool unknown = enabled.Any(d => !WithAliases(d).Any(device => device.Backend is "CUDA" or "HIP" or "Metal" ||
                     HasVendor(device, "NVIDIA") || HasVendor(device, "AMD") || HasVendor(device, "Advanced Micro Devices") ||
                     HasVendor(device, "Intel") || HasVendor(device, "Apple")));
-            bool ignoreCuda = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
+            bool ignoreCuda = cpuOnly || avoidCuda || !unknown && !enabledWithAliases.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
             bool ignoreHip = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "HIP" || HasVendor(d, "AMD") || HasVendor(d, "Advanced Micro Devices"));
             if (ignoreCuda && !a.Contains("--backend-ignore-cuda")) a.Add("--backend-ignore-cuda");
             if (ignoreHip && !a.Contains("--backend-ignore-hip")) a.Add("--backend-ignore-hip");
@@ -376,10 +381,22 @@ public sealed class HashcatRunner(HashcatTool tool)
             if (HashcatOutput.NeedsCudaCompilerHint(line) && Interlocked.Exchange(ref cudaHintShown, 1) == 0)
                 OutputLine?.Invoke("NVIDIA OpenCL fallback: use Tools > Dependencies to enable CUDA.");
         }
+        bool cudaSwitched = false;
         while (true)
         {
             if (ct.IsCancellationRequested) return new RunResult { Outcome = RunOutcome.Aborted };
             var result = await RunAttemptAsync(r, confirm, Output, ct);
+            if (result.Outcome == RunOutcome.Error && !ct.IsCancellationRequested && !cudaSwitched
+                && FailedCudaDevice(r, result.Error) is { } cuda)
+            {
+                // The GPU itself works through OpenCL: switch it there instead of failing the attack.
+                cudaSwitched = true;
+                string said = HashcatOutput.Details(result.Error);
+                CudaFallback.Activate(KnownDevices, $"{cuda.Name}: {said}");
+                GuardMessage?.Invoke(CudaSwitchMessage(cuda.Name, said));
+                if (r.Restore) r = r with { Restore = false };
+                continue;
+            }
             if (result.Outcome != RunOutcome.Error || ct.IsCancellationRequested || !HashcatOutput.IsTransientFailure(result.Error)) return result;
             long nextProgress = result.LastStatus?.ProgressDone ?? 0;
             long nextCheckpoint = Native.HybridRunner.ReadRestorePoint(RestoreFile(r.SessionDir, r.SessionName)) ?? 0;
@@ -397,6 +414,30 @@ public sealed class HashcatRunner(HashcatTool tool)
             catch (OperationCanceledException) { return new RunResult { Outcome = RunOutcome.Aborted, LastStatus = result.LastStatus }; }
             r = r with { Restore = restore };
         }
+    }
+
+    internal static string CudaSwitchMessage(string gpu, string said)
+        => $"The {gpu} could not build hashcat's attack kernel through CUDA, so RecoverKit switched it to OpenCL and is starting this step again; " +
+           "no password is skipped. CUDA stays off on this computer until the NVIDIA driver or RecoverKit changes. To use CUDA again, update the " +
+           "NVIDIA driver or install RecoverKit's CUDA compiler in Tools > Dependencies." + (said.Length > 0 ? " hashcat said: " + said : "");
+
+    /// <summary>
+    /// The CUDA device whose kernel build failed in this run ("Device #1: Kernel ... build failed"), or null
+    /// when the failure is not a CUDA build failure or CUDA is already off.
+    /// </summary>
+    internal BackendDevice? FailedCudaDevice(RunRequest r, string? error)
+    {
+        if (error is null || KnownDevices is not { } known || !HashcatOutput.IsBuildFailure(error) || CudaFallback.IsActive(known)) return null;
+        var args = BuildArguments(r with { Restore = false });
+        if (args.Contains("--backend-ignore-cuda")) return null;
+        var original = OriginalDeviceIds(args);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(error, @"Device #(\d+):[^\r\n]*(?:build|link|compil)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            int id = int.Parse(m.Groups[1].Value);
+            if (original.TryGetValue(id, out var o)) id = o;
+            if (known.FirstOrDefault(d => d.Id == id) is { Backend: "CUDA" } device && CudaFallback.OpenClTwin(device, known) is not null) return device;
+        }
+        return null;
     }
 
     public static string ZipFilterStateFile(string directory, string session) => Path.Combine(directory, session + ".zip-filter.json");

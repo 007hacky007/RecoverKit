@@ -23,7 +23,7 @@ internal static class HashcatOutput
     private static bool IsTargetFailure(string text)
         => Has(text, "No hashes loaded", "Token length exception", "Separator unmatched", "Signature unmatched", "could not read the hash");
     private static bool IsSelfTestFailure(string text) => Has(text, "self-test", "self test");
-    private static bool IsBuildFailure(string text)
+    internal static bool IsBuildFailure(string text)
         => Has(text, "build failed", "build failure", "CL_BUILD_PROGRAM_FAILURE", "clBuildProgram()", "nvrtcCompileProgram()",
             "hiprtcCompileProgram()", "failed to create metal library", "kernel build", "kernel compile", "could not compile");
     private static bool IsMemoryFailure(string text)
@@ -45,7 +45,7 @@ internal static class HashcatOutput
     internal static string FailureMessage(IEnumerable<string> output, int exitCode)
     {
         var lines = output.Where(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith('{') && !IsStartupAdvice(l)).ToList();
-        var errors = lines.Where(l => Has(l, "error", "failed", "failure", "cannot", "no devices", "no hashes", "not enough", "not found",
+        var errors = lines.Where(l => Has(l, "error", "failed", "failure", "cannot", "unsupported", "fatal", "no devices", "no hashes", "not enough", "not found",
             "Skipping (hash-mode", "CL_OUT_OF", "CL_DEVICE_NOT_AVAILABLE", "hipError", "exception", "unmatched")).ToList();
         string all = string.Join(Environment.NewLine, lines);
         string reason = IsTargetFailure(all) ? "hashcat could not read the hash for this file." :
@@ -62,6 +62,15 @@ internal static class HashcatOutput
         if (primary is not null && !detailsLines.Contains(primary)) detailsLines.Insert(0, primary);
         string details = string.Join(Environment.NewLine, detailsLines);
         return details.Length > 0 ? reason + Environment.NewLine + details : reason;
+    }
+
+    /// <summary>The detail lines of a <see cref="FailureMessage"/> (without its first, explaining line), joined for one log line.</summary>
+    internal static string Details(string? failure)
+    {
+        if (failure is null) return "";
+        var lines = failure.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Skip(1).Select(l => l.Trim().TrimStart('*', ' ')).Where(l => l.Length > 0);
+        string joined = string.Join(" / ", lines.Take(4));
+        return joined.Length > 400 ? joined[..400] + "..." : joined;
     }
 
     private static bool Has(string text, params string[] parts)

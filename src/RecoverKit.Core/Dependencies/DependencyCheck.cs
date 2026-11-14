@@ -22,6 +22,10 @@ public sealed record MachineFacts
     public (int Major, int Minor)? NvidiaDriverCuda { get; init; }
     public bool NvidiaDriverPresent { get; init; }
     public bool NvrtcInstalled { get; init; }
+    /// <summary>NVRTC copies on this PC (CUDA Toolkits) newer than the driver supports; hashcat does not see them.</summary>
+    public IReadOnlyList<(string Directory, (int Major, int Minor) Version)> NvrtcTooNew { get; init; } = [];
+    /// <summary>Why NVIDIA GPUs run through OpenCL after a CUDA kernel build failed, or null.</summary>
+    public string? CudaFallbackReason { get; init; }
     public bool CpuRuntimeInstalled { get; init; }
     public bool Elevated { get; init; }
     public DeviceStrategy Strategy { get; init; }
@@ -113,22 +117,35 @@ public static class DependencyCheck
         const string name = "NVIDIA CUDA compiler (NVRTC)";
         if (f.Devices is not { } devices) return Pending(DependencyId.Nvrtc, name);
 
-        if (!devices.Any(IsNvidia) || devices.Any(d => d.Backend == "CUDA"))
+        string switched = f.CudaFallbackReason is { Length: > 0 } why
+            ? $"CUDA could not build hashcat's kernel ({why}), so NVIDIA GPUs run through OpenCL. "
+            : "";
+        if (switched.Length == 0 && (!devices.Any(IsNvidia) || devices.Any(d => d.Backend == "CUDA")))
             return new(DependencyId.Nvrtc, name, Light.Green, "Not needed.", DependencyAction.None);
+        if (f.NvrtcInstalled && switched.Length > 0)
+            return new(DependencyId.Nvrtc, name, Light.Yellow,
+                switched + "RecoverKit's CUDA compiler is installed but did not help: update the NVIDIA driver. CUDA is tried again after a driver or RecoverKit update.",
+                DependencyAction.None);
         if (f.NvrtcInstalled)
             return new(DependencyId.Nvrtc, name, Light.Green, "The NVIDIA runtime is installed.", DependencyAction.None);
+        // A CUDA Toolkit newer than the driver: its compiler produces code the driver rejects, so RecoverKit
+        // keeps it away from hashcat, which then runs the NVIDIA GPU through OpenCL.
+        string tooNew = f.NvrtcTooNew is [var first, ..] && f.NvidiaDriverCuda is { } drv
+            ? $"The CUDA compiler of the CUDA Toolkit {first.Version.Major}.{first.Version.Minor} on this PC ({first.Directory}) is newer than the NVIDIA driver supports " +
+              $"(CUDA {drv.Major}.{drv.Minor}), so hashcat cannot use it and runs the NVIDIA GPU through OpenCL. Update the NVIDIA driver, or: "
+            : "";
         var pkg = NvrtcRuntime.Choose(f.NvidiaDriverCuda);
         var versioned = pkg is null ? name : $"NVIDIA CUDA compiler (NVRTC {pkg.Version})";
         if (f.Elevated)
             return new(DependencyId.Nvrtc, versioned, Light.Yellow,
-                "NVIDIA GPUs would run faster with the CUDA runtime, but it cannot be installed while RecoverKit runs as administrator.",
+                switched + "NVIDIA GPUs would run faster with the CUDA runtime, but it cannot be installed while RecoverKit runs as administrator.",
                 DependencyAction.None);
         if (pkg is null)
             return new(DependencyId.Nvrtc, name, Light.Yellow,
-                "NVIDIA GPUs would run faster with the CUDA runtime, but the installed driver is too old or unknown; update the NVIDIA driver.",
+                switched + "NVIDIA GPUs would run faster with the CUDA runtime, but the installed driver is too old or unknown; update the NVIDIA driver.",
                 DependencyAction.None);
         return new(DependencyId.Nvrtc, versioned, Light.Yellow,
-            "NVIDIA GPUs run faster with the CUDA runtime, which RecoverKit can download.",
+            switched + tooNew + "NVIDIA GPUs run faster with the CUDA runtime, which RecoverKit can download.",
             DependencyAction.DownloadNvrtc, pkg.Size, NvrtcRuntime.LicenseName, NvrtcRuntime.LicenseUrl,
             $"nvrtc|{pkg.Version}", NvrtcPackage: pkg);
     }

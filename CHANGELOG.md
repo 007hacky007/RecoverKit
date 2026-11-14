@@ -16,6 +16,16 @@ All notable changes to RecoverKit. Downloads are on the
   is holding that folder, and Repair moves hashcat to a RecoverKit folder in your user folder
   (`C:\Users\<you>\RecoverKit`) and uses it from there. If hashcat starts nowhere, it says where to allow it.
 
+### Fixed
+- NVIDIA GPUs: with a CUDA Toolkit newer than the graphics driver installed (for example toolkit 13.5
+  with a driver for CUDA 13.3), every attack stopped with "hashcat could not compile the attack
+  kernel": hashcat used the toolkit's compiler, whose code the driver rejects. hashcat no longer sees
+  compilers newer than the driver, and uses RecoverKit's own CUDA compiler when it is installed. The
+  dependencies page names such a toolkit and offers RecoverKit's compiler.
+- If a CUDA kernel still fails to build, the attack no longer stops: RecoverKit switches that GPU to
+  OpenCL, says so in the log with hashcat's reason, and starts the step again. CUDA stays off on that
+  PC until the NVIDIA driver or RecoverKit changes, or RecoverKit's CUDA compiler is installed.
+
 ## [1.6.0] - 2026-11-14
 
 ### Changed

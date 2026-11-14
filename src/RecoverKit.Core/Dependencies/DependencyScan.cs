@@ -59,6 +59,8 @@ public sealed record DependencyScan(
             Devices = devices,
             NvidiaDriverPresent = nvidia,
             NvidiaDriverCuda = nvidia && isWindows ? Probe(() => NvrtcRuntime.DriverCudaVersion(), null) : null,
+            CudaFallbackReason = CudaFallback.Reason(devices),
+            NvrtcTooNew = Probe(() => NvrtcRuntime.TooNewForDriver(NvrtcRuntime.Driver.Value), (IReadOnlyList<(string, (int, int))>)[]),
             NvrtcInstalled = Probe(() => NvrtcRuntime.Locate(), null) is not null,
             CpuRuntimeInstalled = Probe(() => CpuRuntime.Locate(), null) is not null,
             Elevated = Probe(() => CpuRuntime.IsElevatedProcess, false),
