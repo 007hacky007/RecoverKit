@@ -54,6 +54,42 @@ public sealed unsafe class Rar3DecoderTests
     }
 
     [Fact]
+    public void ConcurrentPpmChecksWithEveryModelSizeKeepIndependentState()
+    {
+        if (!RkNative.Available) return;
+        using var resource = typeof(Rar3DecoderTests).Assembly.GetManifestResourceStream(
+            "RecoverKit.Tests.Fixtures.Rar3.small-ppm-defaultesc.packed.gz")!;
+        using var gzip = new GZipStream(resource, CompressionMode.Decompress);
+        using var stream = new MemoryStream();
+        gzip.CopyTo(stream);
+        byte[] packed = stream.ToArray();
+        byte[] salt = Convert.FromHexString("ad56eb40219c9da2");
+        var kdf = Rar3Kernel.TryParse("$RAR3$*0*ad56eb40219c9da2*00000000000000000000000000000000")!;
+        var (digest, iv) = kdf.ReferenceHash("kit3"u8);
+        var key = new byte[16];
+        for (int i = 0; i < key.Length; i++) key[i] = digest[(i & ~3) + 3 - (i & 3)];
+        string directory = Path.Combine(RecoverKit.Core.Settings.AppDataDir, "rar3-ppm-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            Parallel.For(0, 256, new ParallelOptions { MaxDegreeOfParallelism = 10 }, model =>
+            {
+                byte[] data = (byte[])packed.Clone();
+                // This short stream never exhausts even the smallest PPM model.
+                data[1] = (byte)model;
+                using var aes = Aes.Create();
+                aes.Key = key;
+                string path = Path.Combine(directory, model + ".bin");
+                File.WriteAllBytes(path, aes.EncryptCbc(data, iv, PaddingMode.None));
+                var target = new Rar3FileTarget(path, 0, data.Length, 33, 0x35, 65536, salt, 0x46755231);
+                Assert.True(Rar3FileDecoder.Check(target, digest, iv).Match, $"PPM model {model + 1} MiB rejected.");
+                Assert.False(Rar3FileDecoder.Check(target with { Crc = 0x46755230 }, digest, iv).Match);
+            });
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public void LzToPpmTableTransitionKeepsDecoding()
     {
         if (!RkNative.Available) return;

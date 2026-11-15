@@ -1059,12 +1059,20 @@ notes are taken from it, and the release job fails if the section is missing.
   `rar3_decode.c` port through bounded reads: header/table rejection, a first 4 KiB input trial, then
   streaming CRC32 confirmation. The raw dictionary wraps at the entry's declared size (64 KiB to
   4 MiB); standard filters use a separate bounded block, and input/output positions are 64-bit.
-  Consumed filter records are reused. The PPM model is bounded by its header (at most 256 MiB).
+  Consumed filter records are reused. Compressed checks share one process-wide PPM arena, grown
+  to the largest requested header size (at most 256 MiB) and retained until exit. A semaphore is
+  acquired only when a PPM model is requested and held until that decode returns. KDF and LZ
+  checks stay parallel. Model resets use their exact declared size even when the backing arena
+  is larger. Growth frees the old arena first, so two large arenas never coexist. At ten threads,
+  allow about 320 MiB for decoder working memory plus the application's usual memory. Native or
+  managed allocation failures retry the same key from the beginning under the PPM semaphore,
+  with a cancellation-aware 100 ms delay. Persistent memory pressure waits for memory or Stop;
+  progress/checkpoints never pass that unfinished candidate. Cancellation also interrupts gate waits.
   The PPM wrapper handles optional/default escape characters, model reuse, transitions to/from
-  LZ tables, PPM-coded VM records, and literal escape commands as unrar does. Incomplete Huffman
+  LZ tables, PPM-coded VM records, and literal escape commands. Incomplete Huffman
   codes are accepted; oversubscribed tables are rejected. New LZ tables reset low-distance state.
-  VM programs must match a standard filter's XOR checksum, length and CRC, matching unrar 5+;
-  other programs cannot be extracted by unrar 5+ either and reject the key. Chained standard filters
+  VM programs must match a standard filter's XOR checksum, length and CRC;
+  other programs reject the key. Chained standard filters
   run before CRC output. Filter resets clear pending records before output; later resets remain possible.
   Noncanonical deferred-window/overlapping layouts, unusual filter registers
   and queues/blocks beyond the bounded decoder remain unconfirmed, with a specific reason.
@@ -1084,7 +1092,7 @@ notes are taken from it, and the release job fails if the section is missing.
   one lock. Earlier reason-only sessions explicitly require starting over because they did not
   retain candidate passwords. Candidates over 128 UTF-16 characters are skipped and counted as
   tested; empty dictionary lines are skipped in both enumeration and keyspace counting.
-  Compressed CPU targets need native API 13; missing/stale libraries give an explicit error.
+  Compressed CPU targets need native API 14; missing/stale libraries give an explicit error.
   Solid dependencies, split entries, unsupported methods and inconsistent sizes retain specific refusal messages.
 
   Verification includes 128 generated encrypted valid streams, compact real LZ/PPM/filter fixtures,
@@ -1114,6 +1122,21 @@ notes are taken from it, and the release job fails if the section is missing.
   new PPM transition/VM/reset streams, with no sanitizer failures. CLI uncertainty and resume smoke
   checks retained the candidate as possible and never returned Found. The solution builds;
   NuGet's unavailable vulnerability endpoint produced NU1900 warnings. No GPU was run.
+  The second review's memory fix (native API 14) adds concurrent encrypted checks for all 256 PPM
+  model sizes, reuse across resets and candidates, and allocation-failure retry regressions. The
+  default Release run passes 1,506 tests; all 13 CPU RAR slow tests pass. All 24 real WinRAR review
+  archives recover through the CPU-only CLI, and all 16 damaged copies avoid a verified match.
+  ASan/UBSan fuzzing of the pooled decoder ran 96,283 mutations over 609 seconds without faults.
+  Fault injection checks retry, cancellation while waiting, and a ten-thread dictionary stop/resume.
+  On the same M1 Pro, three repeats gave 495-497 passwords/s with one thread and 2,565-2,734/s
+  with ten for the compressed target (median 2,574/s, versus 2,741/s before, about 6% lower).
+  KDF share was 96.8%. The stored target gave 250-251/s with one thread and 1,609-1,650/s with
+  ten, with a 49.6% KDF share. Native NEON execution mask 8 and ten active workers were confirmed.
+  The benchmark process peaked at 84.2 MiB resident memory on macOS; its demand-paged allocation
+  does not measure Windows commit. The ten-decoder native allocation bound is 305.6 MiB, including
+  the single shared 256 MiB arena; Notes allow about 320 MiB plus normal application memory.
+  The same 12,288 wrong compressed candidates retain the 99.943% early-rejection rate above.
+  Longer-password handling remains unchanged: universal WinRAR truncation was not established.
   Only the selected file's password is recovered; other entries can have different passwords.
 - The Intel CPU runtime (OpenCL) is a download on the dependencies page, not bundled: it is red when
   hashcat has no usable device and yellow when Preferences ask for the processor next to the GPU

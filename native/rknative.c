@@ -40,7 +40,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 13
+#define RK_API_VERSION 14
 
 enum
 {

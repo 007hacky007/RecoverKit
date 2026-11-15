@@ -3,8 +3,8 @@
  * License.....: MIT
  */
 
-// Reference bytecode for the six standard RAR 3 filters. Identification uses length, CRC and XOR,
-// matching unrar 5+; these samples also support decoder regression tests.
+// Reference bytecode for the six standard RAR 3 filters, identified by length, CRC and XOR checksum.
+// These samples also support decoder regression tests.
 
 // x86, 53 bytes, crc32 ad576887
 static const u8 RAR3_PROGRAM_X86[53] =

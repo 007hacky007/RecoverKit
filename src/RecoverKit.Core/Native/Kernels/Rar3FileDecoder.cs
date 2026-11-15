@@ -9,11 +9,31 @@ namespace RecoverKit.Core.Native.Kernels;
 internal static unsafe class Rar3FileDecoder
 {
     private static readonly uint[] CrcTable = MakeCrcTable();
+    // One process-wide PPM model, at most 256 MiB, instead of one per attack thread.
+    private static readonly SemaphoreSlim PpmGate = new(1, 1);
+    private static void* PpmArena;
+    private static nuint PpmCapacity;
 
     internal static (bool Match, int Stage) Check(Rar3FileTarget target, ReadOnlySpan<byte> digest,
         ReadOnlySpan<byte> iv, CancellationToken ct = default)
     {
-        ct.ThrowIfCancellationRequested();
+        bool retry = false;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            bool serial = retry;
+            if (serial) PpmGate.Wait(ct);
+            try { return CheckAttempt(target, digest, iv, ct, serial); }
+            catch (OutOfMemoryException) { retry = true; }
+            finally { if (serial) PpmGate.Release(); }
+            // Retry the same key from the start. Neither progress nor checkpoints may pass it.
+            if (ct.WaitHandle.WaitOne(100)) ct.ThrowIfCancellationRequested();
+        }
+    }
+
+    private static (bool Match, int Stage) CheckAttempt(Rar3FileTarget target, ReadOnlySpan<byte> digest,
+        ReadOnlySpan<byte> iv, CancellationToken ct, bool gateHeld)
+    {
         if (target.Method != 0x30 && !RkNative.Available)
             throw new NotSupportedException("Compressed RAR 3 files larger than hashcat's limit need the native RAR decoder. Rebuild or reinstall RecoverKit's native library.");
         using var file = new FileStream(target.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -50,13 +70,13 @@ internal static unsafe class Rar3FileDecoder
             bool match = (crc ^ uint.MaxValue) == target.Crc;
             return (match, match ? 3 : 2);
         }
-        var reader = new Reader(plain, ct);
+        var reader = new Reader(plain, ct) { HasArena = gateHeld };
         var handle = GCHandle.Alloc(reader);
         try
         {
             int stage = 0;
-            int result = RkNative.Rar3DecodeStream(&Read, GCHandle.ToIntPtr(handle), (ulong)target.PackedLength,
-                (ulong)target.UnpackedLength, (uint)target.DictionarySize, target.Crc, &stage);
+            int result = RkNative.Rar3DecodeStreamAlloc(&Read, GCHandle.ToIntPtr(handle), (ulong)target.PackedLength,
+                (ulong)target.UnpackedLength, (uint)target.DictionarySize, target.Crc, &stage, &AllocatePpm);
             if (reader.Error is { } error) ExceptionDispatchInfo.Capture(error).Throw();
             return result switch
             {
@@ -67,11 +87,42 @@ internal static unsafe class Rar3FileDecoder
                 -5 => throw new NotSupportedException("The RAR 3 entry has overlapping filter blocks with different positions or lengths the streaming CPU decoder cannot combine."),
                 -6 => throw new NotSupportedException("The RAR 3 entry uses nonstandard filter register values or an RGB row width not aligned to its three channels."),
                 -7 => throw new NotSupportedException("The RAR 3 entry resets its compression filters after output has started; the CPU decoder cannot verify that filter layout."),
-                -3 => throw new InvalidOperationException("The CPU could not allocate the RAR 3 decoder's bounded dictionary or PPM model."),
+                -3 => throw new OutOfMemoryException("The CPU is waiting for memory to check this RAR 3 candidate."),
                 _ => throw new InvalidDataException("The CPU could not read the encrypted RAR 3 entry."),
             };
         }
-        finally { handle.Free(); }
+        finally
+        {
+            handle.Free();
+            if (reader.HasArena && !gateHeld) PpmGate.Release();
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void* AllocatePpm(nint opaque, nuint size)
+    {
+        var reader = (Reader)GCHandle.FromIntPtr(opaque).Target!;
+        try
+        {
+            if (!reader.HasArena)
+            {
+                PpmGate.Wait(reader.Token);
+                reader.HasArena = true;
+            }
+            reader.Token.ThrowIfCancellationRequested();
+            if (size > PpmCapacity)
+            {
+                // A PPM reset discards the old model; never hold both allocations while growing.
+                NativeMemory.Free(PpmArena);
+                PpmArena = null;
+                PpmCapacity = 0;
+                PpmArena = NativeMemory.Alloc(size);
+                PpmCapacity = size;
+            }
+            return PpmArena;
+        }
+        catch (OutOfMemoryException) { return null; }
+        catch (Exception ex) { reader.Error = ex; return null; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -92,6 +143,7 @@ internal static unsafe class Rar3FileDecoder
         internal Stream Stream { get; } = stream;
         internal CancellationToken Token { get; } = token;
         internal Exception? Error { get; set; }
+        internal bool HasArena { get; set; }
     }
 
     private sealed class EntryStream(Stream source, long remaining) : Stream

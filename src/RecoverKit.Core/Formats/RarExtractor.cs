@@ -250,6 +250,9 @@ public static class RarExtractor
                 "and 655,360 unpacked bytes. This archive's complete, supported encrypted files are all larger. " +
                 "RecoverKit therefore checks passwords on the processor without the graphics card. " +
                 speed +
+                (large.Method == 0x30 ? "" : "Compressed checks share up to 256 MiB of working memory, retained until RecoverKit closes, " +
+                    "plus about 6 MiB per processor thread. With 10 threads, allow about 320 MiB plus the application's usual memory. " +
+                    "If memory runs short, the same password is retried until memory is available or recovery is stopped. ") +
                 "Recovers the password for one encrypted file. Other files may use different passwords.";
             var entry = new Rar3FileTarget(d.FilePath, large.Offset, large.Packed, large.Unpacked,
                 large.Method, large.DictionarySize, large.Salt, Bin.U32(large.Crc, 0));

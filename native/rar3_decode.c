@@ -11,6 +11,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int (*rar3_read_fn)(void *opaque, u8 *buffer, int count);
+typedef void *(*rar3_alloc_fn)(void *opaque, size_t size);
 
 #include "rar3/rar3_status.h"
 
@@ -155,6 +156,16 @@ typedef struct rar3_huff
 
 } rar3_huff_t;
 
+// A caller-supplied arena must remain exclusively owned until the decode returns.
+typedef struct rar3_arena
+{
+  ISzAlloc vt;
+  void *base;
+  size_t capacity;
+  rar3_alloc_fn alloc;
+  void *opaque;
+} rar3_arena_t;
+
 typedef struct rar3_ctx rar3_ctx_t;
 typedef struct rar3_byte_in
 {
@@ -201,7 +212,7 @@ struct rar3_ctx
 
   rar3_huff_t huff[4];
 
-  void *ppm_arena;
+  rar3_arena_t ppm_arena;
   CPpmd7 ppm;
   rar3_byte_in_t ppm_reader;
   int ppm_mode;
@@ -887,7 +898,7 @@ static rar3_filter_t rar3_filter_of (const u8 *program, const u32 size)
   for (u32 i = 1; i < size; i++) checksum ^= program[i];
   if (checksum != program[0]) return RAR3_FILTER_NONE;
   const u32 crc = rar3_crc32 (0xffffffffu, program, size) ^ 0xffffffffu;
-  // Standard filter signatures, identified by length and CRC as in unrar 5+.
+  // Standard filter signatures, identified by code length and CRC.
   const u32 sizes[] = { 53, 57, 120, 29, 149, 216 };
   const u32 crcs[] = { 0xad576887u, 0x3cd7e57eu, 0x3769893fu, 0x0e06077du, 0x1c2c5dc8u, 0xbc85e701u };
   const rar3_filter_t filters[] = { RAR3_FILTER_X86, RAR3_FILTER_E8E9, RAR3_FILTER_ITANIUM,
@@ -1084,7 +1095,7 @@ static int rar3_read_record (rar3_ctx_t *ctx, rar3_slots_t *slots)
     program_size = rar3_body_number (&b);
     if (b.over || program_size == 0 || program_size > (b.len * 8 - b.pos) / 8)
       return RAR3_RECORD_MALFORMED;
-    // No other VM program can be extracted by unrar 5+ either.
+    // Only standard filter programs are supported by this decoder.
     if (program_size > sizeof (program)) return RAR3_RECORD_MALFORMED;
     for (u32 i = 0; i < program_size; i++) program[i] = (u8) rar3_body_bits (&b, 8);
     filter = rar3_filter_of (program, program_size);
@@ -1097,7 +1108,7 @@ static int rar3_read_record (rar3_ctx_t *ctx, rar3_slots_t *slots)
   if (b.over) return RAR3_RECORD_MALFORMED;
   if (reset_filters)
   {
-    // A reset also discards pending filters. After output, unrar's window flush timing matters.
+    // A reset also discards pending filters. After output, dictionary flush timing matters.
     if (ctx->produced > 0)
     {
       ctx->status = -7;
@@ -1123,7 +1134,7 @@ static int rar3_read_record (rar3_ctx_t *ctx, rar3_slots_t *slots)
 
   const u64 at = ctx->produced + (u64) start + (((first & RAR3_REC_FAR_START) != 0) ? 258 : 0);
 
-  // Noncanonical offsets can wrap the dictionary or refer to a deferred window in unrar.
+  // Noncanonical offsets can wrap the dictionary or refer to a deferred window.
   // Preserve the candidate when this forward-only queue cannot place its filter safely.
   if ((u64) start + (((first & RAR3_REC_FAR_START) != 0) ? 258u : 0u) >= ctx->window_size ||
       at < ctx->produced || at > ctx->dest_size)
@@ -1157,7 +1168,7 @@ static int rar3_read_record (rar3_ctx_t *ctx, rar3_slots_t *slots)
     if ((filter != RAR3_FILTER_RGB && (param[0] == 0 || param[0] > 128)) ||
         (filter == RAR3_FILTER_RGB && (length < 3 || param[0] - 3 > length || param[1] > 2)))
     {
-      // Unrar may pass the raw block through for these parameters; do not guess its VM state.
+      // These nonstandard register values do not define a supported standard-filter layout.
       ctx->status = -6;
       return RAR3_RECORD_UNSUPPORTED;
     }
@@ -1531,16 +1542,17 @@ static Byte rar3_byte_in_read (IByteInPtr pp)
   return (Byte) rar3_bits (p->ctx, 8);
 }
 
-typedef struct rar3_arena
-{
-  ISzAlloc vt;
-  void *base;
-} rar3_arena_t;
-
 static void *rar3_arena_alloc (ISzAllocPtr pp, size_t size)
 {
   rar3_arena_t *p = (rar3_arena_t *) pp;
-  p->base = malloc (size);
+  if (p->alloc) return p->base = p->alloc (p->opaque, size);
+  if (size > p->capacity)
+  {
+    // A reset no longer needs the previous model. Free before growing to bound peak memory.
+    free (p->base);
+    p->base = malloc (size);
+    p->capacity = p->base ? size : 0;
+  }
   return p->base;
 }
 
@@ -1561,22 +1573,17 @@ static int rar3_init_ppm (rar3_ctx_t *ctx)
     const u32 n = (flags & 31) + 1;
     const u32 order = n > 16 ? 16 + 3 * (n - 16) : n;
     if (order == 1) return -1;
-    free (ctx->ppm_arena);
-    ctx->ppm_arena = NULL;
     Ppmd7_Construct (&ctx->ppm);
-    rar3_arena_t arena;
-    arena.vt.Alloc = rar3_arena_alloc;
-    arena.vt.Free = rar3_arena_free;
-    arena.base = NULL;
-    if (!Ppmd7_Alloc (&ctx->ppm, memory << 20, &arena.vt))
+    ctx->ppm_arena.vt.Alloc = rar3_arena_alloc;
+    ctx->ppm_arena.vt.Free = rar3_arena_free;
+    if (!Ppmd7_Alloc (&ctx->ppm, memory << 20, &ctx->ppm_arena.vt))
     {
       ctx->status = -3;
       return -1;
     }
-    ctx->ppm_arena = arena.base;
     Ppmd7_Init (&ctx->ppm, order);
   }
-  else if (!ctx->ppm_arena) return -1;
+  else if (!ctx->ppm.Base) return -1;
   ctx->ppm_reader.vt.Read = rar3_byte_in_read;
   ctx->ppm_reader.ctx = ctx;
   ctx->ppm.rc.dec.Stream = &ctx->ppm_reader.vt;
@@ -1624,7 +1631,7 @@ static int rar3_ppm_step (rar3_ctx_t *ctx, rar3_slots_t *slots, u8 *scratch)
     rar3_copy_match (ctx, distance, (u32) n + (cmd == 4 ? 32 : 4), 0, scratch);
     return 0;
   }
-  // All remaining escape commands write the escape byte, as unrar does.
+  // All remaining escape commands write the escape byte.
   rar3_emit (ctx, ctx->ppm_escape, scratch);
   return 0;
 }
@@ -1632,8 +1639,8 @@ static int rar3_ppm_step (rar3_ctx_t *ctx, rar3_slots_t *slots, u8 *scratch)
 /* read returns decrypted bytes, 0 at EOF or -1 on error/cancellation. A zero-count call polls
  * cancellation without consuming input. A successful check
  * requires the expected output length and CRC, never just the first-chunk trial. */
-RK_EXPORT int rk_rar3_decode_stream (rar3_read_fn read, void *opaque, u64 packed, u64 unpacked,
-    u32 window_size, u32 expected_crc, int *stage)
+RK_EXPORT int rk_rar3_decode_stream_alloc (rar3_read_fn read, void *opaque, u64 packed, u64 unpacked,
+    u32 window_size, u32 expected_crc, int *stage, rar3_alloc_fn alloc)
 {
   if (stage) *stage = 0;
   if (!read || !stage || packed == 0 || packed > UINT64_MAX / 8 || unpacked == 0 ||
@@ -1642,6 +1649,8 @@ RK_EXPORT int rk_rar3_decode_stream (rar3_read_fn read, void *opaque, u64 packed
   if (!ctx) return -3;
   ctx->read = read;
   ctx->opaque = opaque;
+  ctx->ppm_arena.alloc = alloc;
+  ctx->ppm_arena.opaque = opaque;
   ctx->in_bits = packed * 8;
   ctx->dest_size = unpacked;
   ctx->window_size = window_size;
@@ -1669,11 +1678,18 @@ RK_EXPORT int rk_rar3_decode_stream (rar3_read_fn read, void *opaque, u64 packed
       *stage = 3;
     }
   }
-  free (ctx->ppm_arena);
+  if (!alloc) free (ctx->ppm_arena.base);
   free (ctx->win);
   free (ctx->filter_buf);
   free (ctx->blocks);
   free (scratch);
   free (ctx);
   return result;
+}
+
+// Standalone callers can use a decode-local arena instead of the shared managed pool.
+RK_EXPORT int rk_rar3_decode_stream (rar3_read_fn read, void *opaque, u64 packed, u64 unpacked,
+    u32 window_size, u32 expected_crc, int *stage)
+{
+  return rk_rar3_decode_stream_alloc (read, opaque, packed, unpacked, window_size, expected_crc, stage, NULL);
 }
