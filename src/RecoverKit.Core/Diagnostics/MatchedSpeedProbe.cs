@@ -16,9 +16,10 @@ public static class MatchedSpeedProbe
     /// 262,144 rounds, so its cost grows with the length (4096 x (2L + 11) SHA-1 blocks: 1.32x more at 7
     /// characters than at 4). It is measured at 4 characters, the length the commercial product's RAR 3
     /// figure matches (live attacks at fixed lengths, docs/benchmarks.md). Formats whose key derivation
-    /// hashes the password once cost the same at any of these lengths and use <see cref="Length"/>.
+    /// hashes the password once cost the same at any of these lengths and use <see cref="Length"/>,
+    /// except WPA, whose minimum password length is eight bytes.
     /// </summary>
-    public static int LengthFor(int mode) => mode == 12500 ? 4 : Length;
+    public static int LengthFor(int mode) => mode == 12500 ? 4 : CpuDiagnostics.CandidateLength(mode);
 
     internal static string HashLine(int mode) => NativeKernels.BenchmarkHashes[mode];
 

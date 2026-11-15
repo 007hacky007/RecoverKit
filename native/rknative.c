@@ -40,7 +40,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 15
+#define RK_API_VERSION 16
 
 enum
 {
@@ -413,11 +413,11 @@ typedef uint32_t rar3_v16 __attribute__((vector_size(64)));
 #endif
 
 /* Guard states are internal: 0 untested, 1 testing, 2 passed, 3 failed. */
-static atomic_int g_rar3_paths = 0, g_pbkdf2_paths = 0;
-static atomic_int g_rar3_wide_test = 0, g_pbkdf2_wide_test = 0;
+static atomic_int g_rar3_paths = 0, g_pbkdf2_paths = 0, g_pbkdf2_sha1_paths = 0;
+static atomic_int g_rar3_wide_test = 0, g_pbkdf2_wide_test = 0, g_pbkdf2_sha1_wide_test = 0;
 static atomic_int g_whirl_paths = 0, g_whirl_wide_test = 0, g_whirl_avx512 = 0;
 
-enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16 };
+enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16, RK_PATH_ARM_SHA1 = 32 };
 
 static int wide_switched_off(const char* name)
 {
@@ -435,13 +435,16 @@ static int wide_selftest_state(const char* name, atomic_int* guard)
 
 RK_EXPORT int rk_rar3_selftest_state(void) { return wide_selftest_state("RECOVERKIT_RAR3_AVX512", &g_rar3_wide_test); }
 RK_EXPORT int rk_pbkdf2_sha256_selftest_state(void) { return wide_selftest_state("RECOVERKIT_RAR5_AVX512", &g_pbkdf2_wide_test); }
+RK_EXPORT int rk_pbkdf2_sha1_selftest_state(void) { return wide_selftest_state("RECOVERKIT_PBKDF2_SHA1_AVX512", &g_pbkdf2_sha1_wide_test); }
 RK_EXPORT int rk_rar3_executed_paths(void) { return atomic_load(&g_rar3_paths); }
 RK_EXPORT int rk_pbkdf2_sha256_executed_paths(void) { return atomic_load(&g_pbkdf2_paths); }
+RK_EXPORT int rk_pbkdf2_sha1_executed_paths(void) { return atomic_load(&g_pbkdf2_sha1_paths); }
 RK_EXPORT void rk_reset_executed_paths(int mode)
 {
     if (mode == 12500) atomic_store(&g_rar3_paths, 0);
     else if (mode == 13000) atomic_store(&g_pbkdf2_paths, 0);
     else if (mode == 29331) atomic_store(&g_whirl_paths, 0);
+    else if (mode == 13600 || mode == 22000) atomic_store(&g_pbkdf2_sha1_paths, 0);
 }
 
 #if RK_X64
@@ -3430,6 +3433,8 @@ RK_EXPORT int rk_pbkdf2_sha256(const uint8_t* pws, int stride, const int* lens, 
     pbkdf2_sha256(pws, stride, lens, n, salt, slen, iter, dk, dklen);
     return 0;
 }
+
+#include "pbkdf2_sha1.h"
 
 /*
  * RAR 5 password check (hashcat 13000). The archive's KDF runs PBKDF2-HMAC-SHA256 with 2^lg2

@@ -593,6 +593,32 @@ arm64 with the SHA-256 instructions, 8 interleaved streams of SHA256H/H2 are use
 `rk_pbkdf2_sha256` export takes candidates of different lengths and any salt, iteration count
 and output length; `Pbkdf2Sha256Tests` checks it against .NET on every path the CPU has.
 
+PBKDF2-HMAC-SHA1 (native API 16, `native/pbkdf2_sha1.h`) shares the same 16-lane batch
+bound. It reuses scalar SHA-1 for HMAC setup and U1, then runs the fixed 20-byte HMAC loop
+on AVX-512 (16 lanes), AVX2 (8), NEON (8), interleaved ARM SHA-1 instructions (8), or scalar.
+`rk_pbkdf2_sha1` derives a full key; `rk_pbkdf2_sha1_block` derives only the requested
+one-based 20-byte block. First AVX-512 use checks independent answers in every lane at HMAC
+key boundaries and blocks 1 and 4. Failure falls back to AVX2, or scalar if unavailable.
+`RECOVERKIT_PBKDF2_SHA1_AVX512=0` disables the wide path. For comparison, launch fresh
+processes with `RECOVERKIT_PBKDF2_SHA1_PATH=scalar|neon|arm-sha1|avx2|avx512`; unsupported
+selectors fall back safely, and diagnostics reject a requested path that did not execute.
+Both modes appear in the detailed benchmark's Wide vector paths table on AVX-512 systems.
+
+WinZip AES (`WinZipAesKernel`, 13600) supports strengths 128/192/256 and passwords up to
+256 bytes. Its filter derives only block 2/3/4 containing the two-byte verifier. Every survivor
+must pass the complete ciphertext HMAC-SHA1 authentication code through the managed reference.
+WPA (`WpaKernel`, 22000) accepts 8-63 password bytes, SHA1 PMKID, and EAPOL MIC versions
+1 (HMAC-MD5), 2 (HMAC-SHA1), and 3 (AES-CMAC). All supplied networks are checked; matching
+ESSIDs share PMK derivation. CPU hits use hashcat's PMK/ESSID potfile key for the verified network.
+PSK-SHA256 PMKID and unsupported records keep the entire target on hashcat. EAPOL records
+requiring nonce correction (message-pair bit 7 without AP-less bit 4) also stay on hashcat;
+the CPU does not attempt nonce correction. Extra hashcat arguments disable CPU planning.
+`Pbkdf2Sha1Tests`, `WinZipAesCpuTests`, `WpaCpuTests`, and `Pbkdf2Sha1HybridTests` check
+independent answers, every available native path, partial batches, verifier collisions and
+partition coverage. `Pbkdf2Sha1HashcatTests` is the opt-in GPU/cache integration suite.
+Measured rates, finite-job limits and Windows verification commands are in
+[PBKDF2-SHA1 measurements](benchmarks/pbkdf2-sha1.txt).
+
 RAR 5 (`Rar5Kernel`, mode 13000): the hash line is `$rar5$16$salt$lg2$iv$8$check`. WinRAR's key
 is PBKDF2 with 2^lg2 iterations; the password check value continues to 2^lg2 + 32 iterations and
 folds the 32 bytes to 8 (byte i xored into byte i % 8), exactly as hashcat's m13000 kernel. The
@@ -717,7 +743,8 @@ builds; its first comment gives build commands.
 ## Hybrid CPU + GPU
 
 File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for RAR 5
-(13000), encrypted-header RAR 3 (12500), PDF R6 (10700) and TrueCrypt Whirlpool (29331).
+(13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600), WPA (22000),
+and TrueCrypt Whirlpool (29331).
 `DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
 through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
 `$HEX[...]` output. Binary recovered passwords retain `$HEX[...]` when UTF-8 text would lose bytes.

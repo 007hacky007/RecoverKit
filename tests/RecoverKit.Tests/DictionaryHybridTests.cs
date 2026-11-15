@@ -421,13 +421,25 @@ public class DictionaryHybridTests
     }
 
     [Theory]
-    [InlineData("ff80", false)]
-    [InlineData("ff80", true)]
-    [InlineData("244845585b34315d", false)]
-    [InlineData("244845585b34315d", true)]
-    [InlineData("efbbbf61", false)]
-    [InlineData("efbbbf61", true)]
-    public async Task CachedDictionaryPasswordsRetainBytes(string hex, bool confirm)
+    [InlineData(13000, "ff80", false)]
+    [InlineData(13000, "ff80", true)]
+    [InlineData(13000, "244845585b34315d", false)]
+    [InlineData(13000, "244845585b34315d", true)]
+    [InlineData(13000, "efbbbf61", false)]
+    [InlineData(13000, "efbbbf61", true)]
+    [InlineData(13600, "ff80", false)]
+    [InlineData(13600, "ff80", true)]
+    [InlineData(13600, "244845585b34315d", false)]
+    [InlineData(13600, "244845585b34315d", true)]
+    [InlineData(13600, "efbbbf61", false)]
+    [InlineData(13600, "efbbbf61", true)]
+    [InlineData(22000, "ff80616263646566", false)]
+    [InlineData(22000, "ff80616263646566", true)]
+    [InlineData(22000, "244845585b34315d", false)]
+    [InlineData(22000, "244845585b34315d", true)]
+    [InlineData(22000, "efbbbf6162636465", false)]
+    [InlineData(22000, "efbbbf6162636465", true)]
+    public async Task CachedDictionaryPasswordsRetainBytes(int mode, string hex, bool confirm)
     {
         if (OperatingSystem.IsWindows()) return;
         string dir = Directory.CreateTempSubdirectory("rk-dict-cache").FullName;
@@ -435,7 +447,8 @@ public class DictionaryHybridTests
         {
             var tool = OutputTool(dir, hex);
             var settings = new Settings { SessionsDir = dir };
-            var target = new HashTarget { FormatId = "RAR5", FormatName = "test", Protection = "test", Modes = [13000], HashLines = NativeKernels.BenchmarkHashes[13000] };
+            string format = mode switch { 13600 => "WZAE", 22000 => "WPAH", _ => "RAR5" };
+            var target = new HashTarget { FormatId = format, FormatName = "test", Protection = "test", Modes = [mode], HashLines = NativeKernels.BenchmarkHashes[mode] };
             byte[] password = Convert.FromHexString(hex);
             if (confirm) target.ConfirmPassword = bytes => bytes.AsSpan().SequenceEqual(password);
             var result = await new RecoverySession(tool, settings).RunAsync(target, "fixture", [new AttackSpec { Kind = AttackKind.Dictionary }], null, CancellationToken.None);
@@ -476,8 +489,8 @@ public class DictionaryHybridTests
     private static HashcatTool OutputTool(string dir, string showHex)
     {
         string exe = Path.Combine(dir, "hashcat");
-        File.WriteAllBytes(Path.Combine(dir, "show.raw"), showHex == "efbbbf61"
-            ? new byte[] { 239, 187, 191, 97, 10 } : Encoding.UTF8.GetBytes("$HEX[" + showHex + "]\n"));
+        File.WriteAllBytes(Path.Combine(dir, "show.raw"), showHex.StartsWith("efbbbf", StringComparison.Ordinal)
+            ? [.. Convert.FromHexString(showHex), 10] : Encoding.UTF8.GetBytes("$HEX[" + showHex + "]\n"));
         File.WriteAllText(exe, """
             #!/bin/sh
             case " $* " in

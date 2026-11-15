@@ -128,6 +128,7 @@ public static class ProfileSettings
         }
         if (s.CpuPerformanceChoice is not { Variant: var variant } || !KernelVariants.Supported(mode, variant)) return null;
         if (mode is 17200 or 17210 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_ZIP_PATH"))) return null;
+        if (mode is 13600 or 22000 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_PBKDF2_SHA1_PATH"))) return null;
         return KernelVariants.Select(mode, variant);
     }
 }

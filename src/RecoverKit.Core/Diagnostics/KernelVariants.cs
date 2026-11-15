@@ -25,6 +25,8 @@ public static class KernelVariants
         [10510] = NativeAndManaged,
         [12500] = [.. NativeAndManaged, .. WideVariants],
         [13000] = [new("default", () => true, () => null), .. WideVariants],
+        [13600] = Pbkdf2Sha1Variants,
+        [22000] = Pbkdf2Sha1Variants,
         [29331] = [new("default", () => true, () => null),
             // Compared only where an AVX-512 path exists; elsewhere "scalar" is the default path itself.
             new("scalar", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
@@ -36,6 +38,27 @@ public static class KernelVariants
         new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
         new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => null),
     ];
+
+    private static Registration[] Pbkdf2Sha1Variants =>
+    [
+        new("default", () => true, () => null),
+        new("scalar", () => RkNative.Available, () => new Sha1Selection(0)),
+        new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new Sha1Selection(RkNative.Feature.Avx2)),
+        new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new Sha1Selection(RkNative.Feature.Avx512 | RkNative.Feature.Avx2)),
+        new("neon", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Neon), () => new Sha1Selection(RkNative.Feature.Neon)),
+        new("arm-sha1", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.ArmSha1), () => new Sha1Selection(RkNative.Feature.ArmSha1 | RkNative.Feature.Neon)),
+    ];
+
+    private sealed class Sha1Selection : IDisposable
+    {
+        private readonly RkNative.Feature _saved = RkNative.Features;
+        public Sha1Selection(RkNative.Feature selected)
+        {
+            const RkNative.Feature paths = RkNative.Feature.Avx2 | RkNative.Feature.Avx512 | RkNative.Feature.Neon | RkNative.Feature.ArmSha1;
+            RkNative.LimitFeatures(_saved & (~paths | selected));
+        }
+        public void Dispose() => RkNative.LimitFeatures(_saved);
+    }
 
     internal static bool WideSupported(string variant, bool available, RkNative.Feature features) => available && variant switch
     {

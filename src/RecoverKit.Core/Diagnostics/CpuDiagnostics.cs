@@ -59,6 +59,8 @@ public static class CpuDiagnostics
 
     internal static bool HasWidePaths => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Avx512);
 
+    internal static int CandidateLength(int mode) => Math.Abs(mode) == 22000 ? 8 : 7;
+
     internal static int[] ThreadCounts(Settings settings, string variant, int mode = 0)
     {
         int limit = settings.MaxCpuThreads > 0 ? Math.Min(settings.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
@@ -80,16 +82,18 @@ public static class CpuDiagnostics
         report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
+        report.System["PBKDF2 SHA-1 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(22000);
         report.System["Whirlpool AVX-512 self-test (report process; runs only when turned on in Preferences)"] = NativeKernels.WideSelfTestState(29331);
     }
 
     internal static void WorkerStates(DiagnosticReport report)
     {
-        foreach (int mode in new[] { 12500, 13000, 29331 })
+        foreach (int mode in new[] { 12500, 13000, 13600, 22000, 29331 })
         {
             string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
                 .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
-            report.System[$"{(mode == 12500 ? "RAR3" : mode == 13000 ? "RAR5" : "Whirlpool")} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
+            string name = mode switch { 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", _ => "Whirlpool" };
+            report.System[$"{name} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
         }
     }
 
@@ -112,7 +116,7 @@ public static class CpuDiagnostics
                         Section = "cpu", Step = result.Check.Passed ? "Correctness PASS; timed" : "Worker failed; variant skipped", Mode = Math.Abs(mode),
                         Engine = "cpu", Variant = option.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed,
                         Error = result.Error ?? result.Check.Error ?? (result.Speed <= 0 ? "No CPU benchmark rate was reported." : null),
-                        ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = 7,
+                        ElapsedSeconds = result.ElapsedSeconds, Target = Target(mode), Length = CandidateLength(mode),
                         Details = new() { ["correctness cases"] = result.Check.Cases.ToString(), ["mask charset"] = "upper-case, digits, special characters", ["actual path"] = result.ActualPath,
                             ["self-test state"] = result.SelfTestState, ["Adaptive sampling"] = (!thorough).ToString(), ["Isolation"] = "Separate process for each correctness check and timing sample." },
                     };
@@ -154,7 +158,7 @@ public static class CpuDiagnostics
         {
             var kernel = NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]);
             if (kernel is null) return new(false, 0, "Kernel is not supported by this CPU or native library.");
-            byte[] known = mode == 10700 ? "Qz7#Kp2"u8.ToArray() : "hashcat"u8.ToArray();
+            byte[] known = mode == 10700 ? "Qz7#Kp2"u8.ToArray() : mode == 22000 ? "hashcat!"u8.ToArray() : "hashcat"u8.ToArray();
             // The 40-bit PDF password-search fixture is deliberately artificial, so validate its
             // candidate filter against the scalar verifier rather than claiming a known password.
             if (mode != 10510 && !kernel.Verify(known)) return new(false, 1, "Known vector was rejected by the reference verifier.");
@@ -173,7 +177,7 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
-            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331)
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || mode is 13600 or 22000 && RkNative.Available)
             {
                 var wide = WideCpuChecks.Check(mode);
                 return wide with { Cases = wide.Cases + 7 };

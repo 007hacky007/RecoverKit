@@ -16,6 +16,8 @@ public static class NativeKernels
         12500 when Rar3Kernel.NativeFast => Rar3Kernel.TryParse(hashLine),
         10700 => PdfR6Kernel.NativeFast ? PdfR6Kernel.TryParse(hashLine) : null,
         13000 => Rar5Kernel.NativeFast ? Rar5Kernel.TryParse(hashLine) : null,
+        13600 => WinZipAesKernel.NativeFast ? WinZipAesKernel.TryParse(hashLine) : null,
+        22000 => WpaKernel.NativeFast ? WpaKernel.TryParse(hashLine) : null,
         9700 when RkNative.HasVectorPath => Office97Kernel.TryParse(hashLine),
         9800 when RkNative.HasVectorPath => Office2003Kernel.TryParse(hashLine),
         10400 or 10500 or 10510 when RkNative.HasVectorPath => PdfRc4Kernel.TryParse(hashLine),
@@ -51,18 +53,20 @@ public static class NativeKernels
         {
             12500 => RkNative.Rar3ExecutedPaths(),
             13000 => RkNative.Pbkdf2Sha256ExecutedPaths(),
+            13600 or 22000 => RkNative.Pbkdf2Sha1ExecutedPaths(),
             29331 => RkNative.WhirlpoolExecutedPaths(),
             _ => 0,
         };
         if (observed != 0)
         {
+            if (Math.Abs(mode) is 13600 or 22000 && observed == 1) return "native scalar";
             if (Math.Abs(mode) == 29331)
                 return observed == 4 ? "native AVX-512" : observed == 1 ? "native scalar" : "native AVX-512 + native scalar";
-            var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256") }
+            var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256"), (32, "native ARM SHA-1") }
                 .Where(p => (observed & p.Item1) != 0).Select(p => p.Item2);
             return string.Join(" + ", names);
         }
-        if (actualOnly && Math.Abs(mode) is 12500 or 13000 or 29331) return "not run";
+        if (actualOnly && Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331) return "not run";
         var f = RkNative.Features;
         if (Math.Abs(mode) == 29331)
             return RkNative.WhirlpoolLanes() == 8 ? "native AVX-512" : "native scalar";
@@ -70,6 +74,8 @@ public static class NativeKernels
             return RkNative.Rar3Lanes() == 32 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
         if (Math.Abs(mode) == 13000)
             return RkNative.Pbkdf2Sha256Lanes() == 16 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.ArmSha2) ? "native ARM SHA-256" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
+        if (Math.Abs(mode) is 13600 or 22000)
+            return RkNative.Pbkdf2Sha1Lanes() == 1 ? "native scalar" : RkNative.Pbkdf2Sha1Lanes() == 16 ? "native AVX-512" : f.HasFlag(RkNative.Feature.Avx2) ? "native AVX2" : f.HasFlag(RkNative.Feature.ArmSha1) ? "native ARM SHA-1" : f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "scalar";
         if (Math.Abs(mode) is 9700 or 9800 or 10400 or 10500 or 10510)
             return RkNative.HasVectorPath ? f.HasFlag(RkNative.Feature.Neon) ? "native NEON" : "native AVX2" : "managed scalar";
         return Math.Abs(mode) == 10700 ? "native AES / SHA" : "native CPU";
@@ -89,6 +95,7 @@ public static class NativeKernels
         {
             12500 => RkNative.Rar3SelfTestState(),
             13000 => RkNative.Pbkdf2Sha256SelfTestState(),
+            13600 or 22000 => RkNative.Pbkdf2Sha1SelfTestState(),
             29331 => RkNative.WhirlpoolSelfTestState(),
             _ => -1,
         }) switch { 0 => "not run", 1 => "passed", 2 => "failed", 3 => "switched off", _ => "not applicable" };
@@ -108,7 +115,7 @@ public static class NativeKernels
 
     public static bool Supports(int mode) => BenchmarkHashes.ContainsKey(mode);
 
-    /// <summary>Reference hashes (hashcat's examples, password "hashcat") used for benchmarking.</summary>
+    /// <summary>Reference benchmark hashes, usually password "hashcat" ("hashcat!" for WPA).</summary>
     public static readonly IReadOnlyDictionary<int, string> BenchmarkHashes = new Dictionary<int, string>
     {
         // A small stored entry (the cputest.zip sample, password "zq7", data descriptor so the check byte
@@ -127,6 +134,8 @@ public static class NativeKernels
         [10700] = "$pdf$5*6*256*-3904*1*16*503b00505721f20ef74f37a47b7b93ea*127*5b152edd133e7a6af935153d535b08b0e4b26cd44ef0d51c06496d0943d7afd969b113434acc604df4c060075d1fe9ee00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000*127*98880d8ec9a744cb9530953a94625bc48bc32556ac2ff265caf6bbd467fce4c88500976327697a668dc920cabb78cec600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000*32*0000000000000000000000000000000000000000000000000000000000000000",
         [12500] = "$RAR3$*0*45109af8ab5f297a*adbf6c5385d7a40373e8f77d7b89d317",
         [13000] = "$rar5$16$38466361001011015181344360681307$15$00000000000000000000000000000000$8$cc7a30583e62676a",
+        [13600] = "$zip2$*0*1*0*0675369741458183*5dc5*0**36b85538918416712640*$/zip2$",
+        [22000] = "WPA*01*4d4fe7aac3a2cecab195321ceb99a7d0*fc690c158264*f4747f87f9f4*686173686361742d6573736964***",
         [-17210] = "$pkzip2$1*1*2*0*1d1*1c5*eda7a8de*0*28*0*1d1*eda7*5096*1dea673da43d9fc7e2be1a1f4f664269fceb6cb88723a97408ae1fe07f774d31d1442ea8485081e63f919851ca0b7588d5e3442317fff19fe547a4ef97492ed75417c427eea3c4e146e16c100a2f8b6abd7e5988dc967e5a0e51f641401605d673630ea52ebb04da4b388489901656532c9aa474ca090dbac7cf8a21428d57b42a71da5f3d83fed927361e5d385ca8e480a6d42dea5b4bf497d3a24e79fc7be37c8d1721238cbe9e1ea3ae1eb91fc02aabdf33070d718d5105b70b3d7f3d2c28b3edd822e89a5abc0c8fee117c7fbfbfd4b4c8e130977b75cb0b1da080bfe1c0859e6483c42f459c8069d45a76220e046e6c2a2417392fd87e4aa4a2559eaab3baf78a77a1b94d8c8af16a977b4bb45e3da211838ad044f209428dba82666bf3d54d4eed82c64a9b3444a44746b9e398d0516a2596d84243b4a1d7e87d9843f38e45b6be67fd980107f3ad7b8453d87300e6c51ac9f5e3f6c3b702654440c543b1d808b62f7a313a83b31a6faaeedc2620de7057cd0df80f70346fe2d4dccc318f0b5ed128bcf0643e63d754bb05f53afb2b0fa90b34b538b2ad3648209dff587df4fa18698e4fa6d858ad44aa55d2bba3b08dfdedd3e28b8b7caf394d5d9d95e452c2ab1c836b9d74538c2f0d24b9b577*$/pkzip2$",
     };
 
@@ -201,7 +210,7 @@ public static class NativeKernels
         // Seven characters (like hashcat's example password) from upper-case + digits + specials: never
         // matches "hashcat"/"zq7" and is far too large to finish. Length matters for RAR3 (cost ~ 2L+11).
         // RAR 3's cost grows with the password length; 4 characters is the usual benchmark sample for it.
-        if (length <= 0) length = Math.Abs(mode) == 12500 ? 4 : 7;
+        if (length <= 0) length = Math.Abs(mode) == 12500 ? 4 : Math.Abs(mode) == 22000 ? 8 : 7;
         var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", Math.Clamp(length, 3, 16)))])!;
         var started = Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

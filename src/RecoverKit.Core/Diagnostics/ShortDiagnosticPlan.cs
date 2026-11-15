@@ -59,13 +59,13 @@ public sealed partial class DetailedBenchmarkRunner
             foreach (var d in devices) report.System[$"Device {d.Id}"] = $"{d.Name}; {d.Backend}; driver {d.DriverVersion}; alias {d.AliasOf}; skipped {d.IsSkippedAlias}";
             gpuAllowed = HashcatRunner.ActiveGpus(settings, devices).Count > 0 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
-        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 17200, 17210, 29331 } : Array.Empty<int>())
+        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 13600, 22000, 17200, 17210, 29331 } : Array.Empty<int>())
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && (v.Name is "avx2" or "avx512" || mode == 29331 && v.Name == "scalar")))
         foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name, mode))
             Add("cpu", $"Wide comparison mode {mode}, {variant.Name}, {count} workers", 12, async token =>
             {
                 var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, count, settings.Priority, 1, token, 1);
-                report.Measurements.Add(new() { Section = "cpu", Step = "Wide comparison", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = 7,
+                report.Measurements.Add(new() { Section = "cpu", Step = "Wide comparison", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = CpuDiagnostics.CandidateLength(mode),
                     Engine = "cpu", Variant = variant.Name, Threads = count, Repeat = 1, Correct = result.Check.Passed, Speed = result.Speed,
                     Error = result.Error ?? result.Check.Error, ElapsedSeconds = result.ElapsedSeconds,
                     Details = new() { ["actual path"] = result.ActualPath, ["self-test state"] = result.SelfTestState,
@@ -100,7 +100,7 @@ public sealed partial class DetailedBenchmarkRunner
                 async Task Measure(int repeat, CancellationToken token)
                 {
                     var result = await CpuDiagnosticWorker.MeasureAsync(mode, variant.Name, threads, settings.Priority, repeat, token, 1);
-                    report.Measurements.Add(new() { Section = "cpu", Step = "Short CPU window", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = 7,
+                    report.Measurements.Add(new() { Section = "cpu", Step = "Short CPU window", Mode = mode, Target = $"native synthetic fixture mode {mode}", Length = CpuDiagnostics.CandidateLength(mode),
                         Engine = "cpu", Variant = variant.Name, Threads = threads, Repeat = repeat, Correct = result.Check.Passed, Speed = result.Speed, Error = result.Error ?? result.Check.Error,
                         ElapsedSeconds = result.ElapsedSeconds, Details = new() { ["actual path"] = result.ActualPath, ["self-test state"] = result.SelfTestState, ["Short plan"] = "True", ["Selection"] = "Unconfirmed choices use automatic calibration" } });
                 }

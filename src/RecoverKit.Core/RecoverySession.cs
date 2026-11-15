@@ -133,7 +133,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         {
             foreach (var mode in target.Modes)
             {
-                bool dictionaryBytes = mode is 12500 or 13000 or 10700 or 29331 && target.VolumeCredentials is null
+                bool dictionaryBytes = mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 && target.VolumeCredentials is null
                     && steps.Any(step => step.Kind == AttackKind.Dictionary);
                 var cached = target.ConfirmPassword is { } confirm
                     ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm, dictionaryBytes)

@@ -37,10 +37,10 @@ public sealed class NativeRunner
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        if (lines.Length != 1) return null;
+        if (lines.Length == 0 || mode != 22000 && lines.Length != 1) return null;
         var space = MaskSpace.FromHashcatArgs(attack.Args);
         if (space is null) return null;
-        var kernel = NativeKernels.TryCreate(mode, lines[0], partial);
+        var kernel = NativeKernels.TryCreate(mode, mode == 22000 ? hashLines : lines[0], partial);
         if (kernel is null || space.MaxLength > kernel.MaxPasswordLength) return null;
         return (kernel, space);
     }
@@ -106,7 +106,7 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = await RecordFoundAsync(s, hashLine, result.Password!, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
+                var pw = await RecordFoundAsync(s, MatchedHashLine(kernel, hashLine, result.Password!), result.Password!, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
                 TryDelete(restoreFile);
                 return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
@@ -119,6 +119,11 @@ public sealed class NativeRunner
                 return new RunResult { Outcome = RunOutcome.Exhausted, ExitCode = 1, LastStatus = last };
         }
     }
+
+    /// <summary>Chooses the verified network and hashcat's cache key for a CPU hit.</summary>
+    internal static string MatchedHashLine(NativeKernel kernel, string lines, byte[] password)
+        => kernel is Kernels.WpaKernel wpa ? wpa.PotfileKey(password, lines)
+            ?? throw new InvalidOperationException("The WPA password does not verify any target network.") : lines;
 
     /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
     internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw, string? confirmedCache = null)

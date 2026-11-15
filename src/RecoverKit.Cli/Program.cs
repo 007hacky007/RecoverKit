@@ -91,7 +91,7 @@ try
                 RecoverKit.Core.Native.NativeKernels.ResetCpuPath(mode);
                 void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
                     (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" :
-                        Math.Abs(mode) is 12500 or 13000 or 29331 ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
+                        Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331 ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
                 Measure();
                 // Include the experimental native row on CPUs whose default stays managed.
                 if (Math.Abs(mode) is 17200 or 17210 && RecoverKit.Core.Native.RkNative.Available &&

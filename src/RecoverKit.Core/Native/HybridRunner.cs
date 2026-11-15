@@ -120,9 +120,9 @@ public sealed class HybridRunner
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
         bool cpuAddsTooLittle = settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode);
-        if (mode is 13000 or 12500 or 10700 or 29331 && settings.UseNativeCpuEngine && credentials is null
+        if (mode is 13000 or 12500 or 10700 or 13600 or 22000 or 29331 && settings.UseNativeCpuEngine && credentials is null
             && partial is null && attack.Stdin is null && string.IsNullOrWhiteSpace(settings.ExtraArguments)
-            && !hashLines.Trim().Contains('\n') && DictionaryAttack.Parse(attack.Args) is { } dictionary
+            && (mode == 22000 || !hashLines.Trim().Contains('\n')) && DictionaryAttack.Parse(attack.Args) is { } dictionary
             && NativeKernels.TryCreate(mode, hashLines.Trim()) is { } kernel)
             return cpuAddsTooLittle && !resumeDictionary ? null : new HybridPlan(kernel, null) { Dictionary = dictionary };
         if (cpuAddsTooLittle) return null;
@@ -280,7 +280,7 @@ public sealed class HybridRunner
                     case LengthOutcome.Found:
                         TryDelete(restoreFile);
                         if (plan.Dictionary is not null) TryDelete(LeftoverFile(r.SessionDir, r.SessionName));
-                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, hashLine, cpuPw, r.ConfirmPassword is not null || plan.Dictionary is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
+                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, NativeRunner.MatchedHashLine(plan.Kernel, hashLine, cpuPw), cpuPw, r.ConfirmPassword is not null || plan.Dictionary is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
                         if (plan.Dictionary is not null)
                         {
                             if (job.FoundByCpu is { } bytes) pw = [DictionaryPlain(bytes)];

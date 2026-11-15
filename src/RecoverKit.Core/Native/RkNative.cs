@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 15;
+    private const int RequiredVersion = 16;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -43,7 +43,7 @@ internal static unsafe partial class RkNative
     [LibraryImport(Lib, EntryPoint = "rk_rar3_executed_paths")]
     public static partial int Rar3ExecutedPaths();
 
-    /// <summary>Clears executed paths for mode 12500, 13000 or 29331 before a CPU probe.</summary>
+    /// <summary>Clears observed RAR, PBKDF2-SHA1 or Whirlpool paths before a CPU probe.</summary>
     [LibraryImport(Lib, EntryPoint = "rk_reset_executed_paths")]
     public static partial void ResetExecutedPaths(int mode);
 
@@ -121,6 +121,22 @@ internal static unsafe partial class RkNative
     /// <summary>Paths executed by hashing calls: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-256 16.</summary>
     [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha256_executed_paths")]
     public static partial int Pbkdf2Sha256ExecutedPaths();
+
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1")]
+    public static partial int Pbkdf2Sha1(byte* pws, int stride, int* lens, int n, byte* salt, int saltLen, uint iterations, byte* dk, int dkLen);
+
+    // One complete 20-byte block per candidate, numbered from one (WinZip verifier blocks 2-4).
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1_block")]
+    public static partial int Pbkdf2Sha1Block(byte* pws, int stride, int* lens, int n, byte* salt, int saltLen, uint iterations, uint block, byte* dk);
+
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1_lanes")]
+    public static partial int Pbkdf2Sha1Lanes();
+
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1_selftest_state")]
+    public static partial int Pbkdf2Sha1SelfTestState();
+
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1_executed_paths")]
+    public static partial int Pbkdf2Sha1ExecutedPaths();
 
     [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
     public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);
@@ -205,7 +221,7 @@ internal static unsafe partial class RkNative
     }
 }
 
-/// <summary>A kernel whose candidates the native library can pre-filter (32-bit check, hits re-verified).</summary>
+/// <summary>A kernel whose candidates the native library can pre-filter, with hits re-verified.</summary>
 internal unsafe interface INativeFilter
 {
     /// <summary>Returns the number of hits (indices written to <paramref name="hits"/>), or -1 if unsupported.</summary>
@@ -238,6 +254,7 @@ internal sealed unsafe class NativeFilterWorker(NativeKernel kernel, INativeFilt
 
     public override int SearchBatch(ReadOnlySpan<byte> prefixes, int count, ReadOnlySpan<byte> last)
     {
+        if (count <= 0 || last.IsEmpty) return -1;
         int plen = prefixes.Length / count, len = plen + 1, n = count * last.Length;
         if (len > kernel.MaxPasswordLength) return -1;
         if (_pws.Length < n * len) _pws = new byte[n * len];

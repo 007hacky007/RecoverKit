@@ -18,6 +18,8 @@ public class MatchedSpeedProbeTests
     [InlineData(12500, 4)]   // RAR 3's cost grows with the length: measured like the commercial product's figure
     [InlineData(17210, 7)]
     [InlineData(10700, 7)]
+    [InlineData(13600, 7)]
+    [InlineData(22000, 8)]
     public void CpuAndGpuUseSameSyntheticFixtureAndMaskLength(int mode, int length)
     {
         var request = MatchedSpeedProbe.CreateRequest(mode, new Settings(), [], "probe", TimeSpan.FromSeconds(8), true);

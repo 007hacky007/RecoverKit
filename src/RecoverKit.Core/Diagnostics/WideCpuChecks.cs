@@ -9,6 +9,7 @@ internal static unsafe class WideCpuChecks
 {
     internal static CpuDiagnostics.CorrectnessResult Check(int mode)
     {
+        if (mode is 13600 or 22000) return CheckPbkdf2Sha1();
         if (mode == 29331) return CheckWhirlpool();
         int cases = 0;
         int width = mode == 12500 ? RkNative.Rar3Lanes() : RkNative.Pbkdf2Sha256Lanes();
@@ -47,6 +48,51 @@ internal static unsafe class WideCpuChecks
                 if (RkNative.Rar5Search(s, 15, c, p, 7, n, h, n) != n || !hits.SequenceEqual(Enumerable.Range(0, n)))
                     return new(false, cases, "RAR 5 filter lost or reordered matching batch positions.");
             cases += n;
+        }
+        return new(true, cases);
+    }
+
+    private static CpuDiagnostics.CorrectnessResult CheckPbkdf2Sha1()
+    {
+        const int stride = 80, iterations = 17;
+        int n = Math.Max(9, RkNative.Pbkdf2Sha1Lanes() + 3), cases = 0;
+        int[] sizes = [0, 1, 7, 8, 55, 63, 64, 65, 80];
+        int[] lengths = Enumerable.Range(0, n).Select(i => sizes[i % sizes.Length]).ToArray();
+        byte[] passwords = new byte[n * stride];
+        for (int i = 0; i < passwords.Length; i++) passwords[i] = (byte)(33 + i * 17);
+        foreach (int saltLength in new[] { 0, 16, 32, 60 })
+        {
+            byte[] salt = Enumerable.Range(0, saltLength).Select(i => (byte)(i * 7)).ToArray();
+            foreach (int dkLength in new[] { 32, 66 })
+            {
+                byte[] actual = new byte[n * dkLength];
+                fixed (byte* p = passwords, s = salt, o = actual)
+                fixed (int* lens = lengths)
+                    if (RkNative.Pbkdf2Sha1(p, stride, lens, n, s, salt.Length, iterations, o, dkLength) != 0)
+                        return new(false, cases, "Native PBKDF2 SHA-1 rejected the lane check.");
+                for (int i = 0; i < n; i++)
+                {
+                    var expected = Rfc2898DeriveBytes.Pbkdf2(passwords.AsSpan(i * stride, lengths[i]), salt, iterations, HashAlgorithmName.SHA1, dkLength);
+                    cases++;
+                    if (!expected.AsSpan().SequenceEqual(actual.AsSpan(i * dkLength, dkLength)))
+                        return new(false, cases, $"PBKDF2 SHA-1 differs from the reference at batch position {i}, password length {lengths[i]}, output length {dkLength}.");
+                }
+            }
+            foreach (uint block in new uint[] { 1, 2, 4 })
+            {
+                byte[] actual = new byte[n * 20];
+                fixed (byte* p = passwords, s = salt, o = actual)
+                fixed (int* lens = lengths)
+                    if (RkNative.Pbkdf2Sha1Block(p, stride, lens, n, s, salt.Length, iterations, block, o) != 0)
+                        return new(false, cases, "Native PBKDF2 SHA-1 rejected the selected-block check.");
+                for (int i = 0; i < n; i++)
+                {
+                    var expected = Rfc2898DeriveBytes.Pbkdf2(passwords.AsSpan(i * stride, lengths[i]), salt, iterations, HashAlgorithmName.SHA1, (int)block * 20);
+                    cases++;
+                    if (!expected.AsSpan(expected.Length - 20).SequenceEqual(actual.AsSpan(i * 20, 20)))
+                        return new(false, cases, $"PBKDF2 SHA-1 block {block} differs from the reference at batch position {i}.");
+                }
+            }
         }
         return new(true, cases);
     }

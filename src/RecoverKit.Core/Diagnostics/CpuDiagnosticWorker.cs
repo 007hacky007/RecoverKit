@@ -75,9 +75,9 @@ public static class CpuDiagnosticWorker
 
     internal static WorkerResult EnforcePath(WorkerResult result, string variant)
     {
-        if (variant is not ("scalar" or "avx2" or "avx512")) return result;
-        string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").ToLowerInvariant();
-        if (actual == variant && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
+        if (variant is not ("scalar" or "avx2" or "avx512" or "neon" or "arm-sha1")) return result;
+        string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").Replace(" ", "").ToLowerInvariant();
+        if (actual == variant.Replace("-", "") && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
         string reason = result.SelfTestState switch
         {
             "failed" => "self-test failed",
@@ -90,13 +90,13 @@ public static class CpuDiagnosticWorker
     }
 
     public static Task<WorkerResult> CheckResultAsync(int mode, string variant, CancellationToken ct = default)
-        => ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct);
+        => ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, CpuDiagnostics.CandidateLength(mode), 0, ct);
 
     public static async Task<CpuDiagnostics.CorrectnessResult> CheckAsync(int mode, string variant, CancellationToken ct = default)
-        => (await ExecuteAsync(mode, variant, 1, ProcessPriority.Normal, 0, 7, 0, ct)).Check;
+        => (await CheckResultAsync(mode, variant, ct)).Check;
 
     public static Task<WorkerResult> MeasureAsync(int mode, string variant, int threads, ProcessPriority priority, int repeat, CancellationToken ct = default, int seconds = 3)
-        => ExecuteAsync(mode, variant, threads, priority, repeat, 7, seconds, ct);
+        => ExecuteAsync(mode, variant, threads, priority, repeat, CpuDiagnostics.CandidateLength(mode), seconds, ct);
 
     public static Task<WorkerResult> MeasureAutomaticAsync(int mode, string variant, int threads, int length, ProcessPriority priority, CancellationToken ct = default)
         => ExecuteAsync(mode, variant, threads, priority, 1, length, -1, ct);
@@ -110,6 +110,8 @@ public static class CpuDiagnosticWorker
             directory = Directory.CreateTempSubdirectory("rk-cpu-worker-").FullName;
             string output = Path.Combine(directory, "result.json");
             var start = SelfStartInfo();
+            if (Math.Abs(mode) is 13600 or 22000 && variant != "default")
+                start.Environment["RECOVERKIT_PBKDF2_SHA1_PATH"] = variant;
             foreach (var arg in new[] { Command, mode.ToString(CultureInfo.InvariantCulture), variant, threads.ToString(CultureInfo.InvariantCulture), priority.ToString(),
                 repeat.ToString(CultureInfo.InvariantCulture), length.ToString(CultureInfo.InvariantCulture), seconds.ToString(CultureInfo.InvariantCulture), output }) start.ArgumentList.Add(arg);
             return await RunProcessAsync(start, output, TimeSpan.FromSeconds(seconds + 30), ct);

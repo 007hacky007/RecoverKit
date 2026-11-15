@@ -1,0 +1,161 @@
+PBKDF2-SHA1 CPU kernels: verification and measurements, 2026-11-15
+
+Scope
+
+Native API 16 adds PBKDF2-HMAC-SHA1 for WinZip AES (13600) and WPA (22000),
+including mask and file-wordlist hybrid. No commits, staging or publication.
+All results below were measured in this run. Earlier partial work supplied no results.
+
+Verification
+
+sh native/build.sh
+  Built win-x64 and osx-arm64, API 16.
+dotnet build RecoverKit.sln -c Release --no-restore -p:NuGetAudit=false
+  Build succeeded: 0 warnings, 0 errors (outside the sandbox).
+dotnet test -c Release -p:NuGetAudit=false
+  Default suite: 1736 passed, 0 failed, 0 skipped.
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~Pbkdf2Sha1HashcatTests
+  15 passed: every independent WPA PMKID/EAPOL fixture, all WinZip strengths,
+  masks, rule dictionaries, GPU/hybrid recovery and WPA CPU potfile roundtrip.
+  RECOVERKIT_TEST_HASHCAT pointed at the task's private hashcat 8.0.0 copy.
+
+Scalar, NEON and ARM SHA-1 were checked against .NET and RFC 6070, including
+empty/long keys, salt padding boundaries, selected blocks and partial batches.
+The Windows DLL was also loaded on an existing Xeon E5-2620 v4 Windows VM:
+  API=16, features=5, lanes=8.
+  574 candidate/block comparisons passed across AVX2 and scalar.
+  A second process requested AVX-512 with its off switch set: the same 574
+  comparisons passed on AVX2/scalar, guard state 3 (switched off).
+No software was installed. The VM had no .NET runtime. Managed Windows execution,
+AVX-512 execution and Ryzen/RTX throughput remain unverified.
+
+Failures found and resolved
+
+Initial native build was blocked by sandbox access to the installed compiler
+cache; rebuilt outside the sandbox. The .NET test runner also required loopback
+socket access outside the sandbox. A sandboxed full-solution build stalled
+without output and was terminated; the retry outside the sandbox passed in 2.56 s.
+Initial restore lacked asset files and could
+not retrieve vulnerability data; packages restored from local cache, subsequent
+commands disabled that network audit. No software or packages were downloaded.
+
+Regression tests exposed missing dictionary registrations, zero-prefix division,
+WPA raw-line potfile keys and byte-changing dictionary cache reads. All were fixed.
+The first WPA GPU dictionary fixture used a seven-byte source word plus append
+rule and exhausted. hashcat 8 filters that source word before applying the GPU
+rule. The passing comparison uses an eight-byte source and a substitution rule.
+That upstream short-source/rule behavior is outside this change; native checks
+accept the correctly expanded 8-63-byte candidates.
+The standalone Windows check initially expected only AVX2 in a cumulative path
+mask; its one-iteration fixture correctly records scalar too. Correcting the
+checker expectation produced the passing results above.
+
+M1 Pro CPU measurements
+
+Command, three rounds, alternating scalar/NEON/ARM SHA-1 within each mode:
+  RECOVERKIT_PBKDF2_SHA1_PATH=SELECTOR dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-native --mode MODE --threads 10 --seconds 4 --length 8
+RECOVERKIT_HOME was redirected to the task's private home in every process.
+Every output confirmed API 16 and the actual executed path. Rates are candidates/s.
+The benchmark excludes its initial warmup.
+
+Mode   Path          Round 1   Round 2   Round 3   Range
+13600  scalar         40015     40583     43025    40015-43025
+13600  NEON          142811    138722    144290   138722-144290
+13600  ARM SHA-1     141298    137172    153475   137172-153475
+22000  scalar          4755      5369      6098     4755-6098
+22000  NEON           15734     18203     20218    15734-20218
+22000  ARM SHA-1      16944     17371     17319    16944-17371
+
+Before registration both requested modes printed 0 p/s (no built-in support).
+The library present at that initial baseline was also unavailable to managed code;
+no speed comparison against an old native implementation is claimed.
+
+M1 Pro complete mask jobs
+
+Private hashcat 8.0.0, Metal GPU, native ARM SHA-1, 9 CPU workers in hybrid.
+Both modes offer only pure GPU kernels according to this copy's --hash-info.
+Eight-byte candidates, password absent, all jobs exhausted the complete space:
+  WinZip: ABCDEFGH at every position, 16777216 candidates.
+  WPA: ABCDEF at every position, 1679616 candidates.
+The targets were the same published example hashes as bench-native.
+
+Generic command:
+  dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll crack MODE.hash --hash-mode MODE --hashcat PRIVATE_HASHCAT --hcmask '?1?1?1?1?1?1?1?1' -1 CHARSET --strategy GpuOnly --threads 9 HYBRID_OPTION --no-potfile --new
+HYBRID_OPTION was --no-hybrid or --hybrid. Automatic calibration was disabled
+and speed/startup caches cleared before each job to measure a fresh hybrid split.
+Three adjacent pairs per mode; pair order was reversed in the second round.
+Elapsed values below are the CLI's whole-job seconds, including hashcat startup.
+
+Mode   GPU alone, seconds           Hybrid, seconds               Change
+13600  22.698, 22.586, 22.779        28.444, 28.790, 28.444         24.9-27.5% longer
+22000  19.001, 18.381, 18.963        33.980, 33.881, 33.475         76.5-84.3% longer
+
+Reported live samples while both engines were active, candidates/s:
+  WinZip GPU alone: 814514-875180; hybrid total: 914338-956362.
+  WPA GPU alone: 100722-104974; hybrid total: 112664-120130.
+Higher combined rates did not offset the CPU tail after hashcat finished.
+These are fresh-cache finite jobs, not evidence for every duration or cached split.
+A subsequent WPA CLI job retained the measured speeds and explicitly printed
+that the CPU added less than a quarter of the integrated GPU's speed, then ran
+hashcat alone. The existing drop rule and new-format planner tests both passed.
+
+Ryzen estimate and remaining verification
+
+An illustrative same-throughput-per-thread extrapolation from the M1's ARM SHA-1
+medians to 16 threads gives about 226000/s WinZip and 27700/s WPA. Against the
+previously supplied GPU baselines (not remeasured here), that would contribute
+roughly 6.5% and 5.7% of combined throughput. This is a rough model, not a Zen 5
+prediction: AVX-512 has twice AVX2's lanes, while clocks, instruction throughput
+and SMT differ from the M1. Worth measuring on the discrete-GPU system; a net
+benefit has not been established. It was not worth hybrid on these M1 finite jobs.
+
+Run from the repository root in Windows PowerShell, with the newly built DLL and
+an existing private hashcat 8.0.0 copy and restored NuGet packages:
+
+  $env:RECOVERKIT_HOME = Join-Path $env:TEMP 'rk-pbkdf2-sha1'
+  $env:RECOVERKIT_TEST_HASHCAT = 'C:\bench\hashcat\hashcat.exe'
+  dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  dotnet test -c Release -p:NuGetAudit=false
+  dotnet test -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~Pbkdf2Sha1|FullyQualifiedName~WpaCpuTests|FullyQualifiedName~WinZipAesCpuTests'
+  dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-full --hashcat $env:RECOVERKIT_TEST_HASHCAT --sections cpu --thorough --out (Join-Path $env:RECOVERKIT_HOME 'cpu-sha1.html')
+
+The Wide vector paths table must show passing WinZip/WPA AVX2 and AVX-512 cells,
+actual paths, passed guard states and three-sample ranges at matching lengths.
+For a direct three-round comparison, each command starts a fresh process:
+
+  foreach ($mode in 13600,22000) {
+    foreach ($round in 1..3) {
+      foreach ($variant in 'avx2','avx512') {
+        $env:RECOVERKIT_PBKDF2_SHA1_PATH = $variant
+        dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-native --mode $mode --threads 16 --seconds 10 --length 8
+      }
+    }
+  }
+  Remove-Item Env:\RECOVERKIT_PBKDF2_SHA1_PATH
+  $env:RECOVERKIT_PBKDF2_SHA1_AVX512 = '0'
+  dotnet test -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~Pbkdf2Sha1Tests|FullyQualifiedName~Pbkdf2Sha1DiagnosticTests'
+  Remove-Item Env:\RECOVERKIT_PBKDF2_SHA1_AVX512
+
+For matching complete-job GPU/hybrid measurements, create the two public hashes:
+
+  New-Item -ItemType Directory -Force $env:RECOVERKIT_HOME | Out-Null
+  '$zip2$*0*1*0*0675369741458183*5dc5*0**36b85538918416712640*$/zip2$' | Set-Content -Encoding ascii (Join-Path $env:RECOVERKIT_HOME '13600.hash')
+  'WPA*01*4d4fe7aac3a2cecab195321ceb99a7d0*fc690c158264*f4747f87f9f4*686173686361742d6573736964***' | Set-Content -Encoding ascii (Join-Path $env:RECOVERKIT_HOME '22000.hash')
+  foreach ($mode in 13600,22000) {
+    foreach ($round in 1..3) {
+      foreach ($option in '--no-hybrid','--hybrid') {
+        dotnet run --project src/RecoverKit.Cli -c Release --no-build -- crack (Join-Path $env:RECOVERKIT_HOME "$mode.hash") --hash-mode $mode --hashcat $env:RECOVERKIT_TEST_HASHCAT --hcmask '?1?1?1?1?1?1?1?1' -1 'ABCDEFGHIJ' --strategy GpuOnly --threads 15 $option --no-potfile --new
+      }
+    }
+  }
+
+Each of these Windows jobs has 100000000 candidates; keep startup and tail time,
+not just the live speed. Save the CLI output and CPU report. Repeat with an actual
+AES-256 archive and real WPA data, since these measurements use synthetic inputs.
+
+Departures and limits
+
+Format authentication uses .NET primitives after native PBKDF2; new dependencies
+were unnecessary. Nonce-corrected EAPOL and PSK-SHA256 PMKID targets remain wholly
+on hashcat. No scheduler retuning was made to conceal the M1 finite-job slowdown.
+The shared performance plan in the other checkout was read but not changed.

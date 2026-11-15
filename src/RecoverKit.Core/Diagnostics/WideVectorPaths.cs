@@ -22,7 +22,7 @@ public static class WideVectorPaths
         if (allThreads is { } logical && PositiveInt(report.System.GetValueOrDefault("CPU thread budget")) is { } budget)
             allThreads = Math.Min(logical, budget);
         var rows = new List<WideVectorKernel>();
-        foreach (var (mode, name) in new[] { (12500, "RAR3"), (13000, "RAR5"), (17200, "ZIP deflated"), (17210, "ZIP stored"), (29331, "TrueCrypt Whirlpool") })
+        foreach (var (mode, name) in new[] { (12500, "RAR3"), (13000, "RAR5"), (13600, "WinZip AES"), (22000, "WPA"), (17200, "ZIP deflated"), (17210, "ZIP stored"), (29331, "TrueCrypt Whirlpool") })
         {
             var measurements = report.Measurements.Where(r => r.Section == "cpu" && r.Mode == mode
                 && (r.Variant is "avx2" or "avx512" || mode == 29331 && r.Variant == "scalar")
@@ -78,7 +78,7 @@ public static class WideVectorPaths
         if (!row.Correct) return "Diagnostic correctness check failed.";
         string? state = row.Details.GetValueOrDefault("self-test state");
         if (row.Variant == "avx512" && state is ("failed" or "switched off")) return "Native self-test state: " + state + ".";
-        if (row.Variant == "avx512" && row.Mode is 12500 or 13000 or 29331 && state != "passed")
+        if (row.Variant == "avx512" && row.Mode is 12500 or 13000 or 13600 or 22000 or 29331 && state != "passed")
             return "Native wide self-test did not pass: " + (state ?? "not reported") + ".";
         string actual = row.Details.GetValueOrDefault("actual path") ?? "";
         string normalized = actual.Replace("-", "").Replace(" ", "").ToLowerInvariant();
