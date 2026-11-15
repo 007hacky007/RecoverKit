@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-15
+
 ### Added
 - 7-Zip archives whose encrypted files are all too large for hashcat (about 8 MB) are no longer
   refused. 7-Zip stores a checksum only for each whole file, so RecoverKit checks such archives
@@ -318,6 +320,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.6.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.2
 [1.6.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.1
 [1.6.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.0
 [1.5.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.5.0
