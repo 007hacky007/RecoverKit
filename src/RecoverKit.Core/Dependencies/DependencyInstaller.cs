@@ -11,10 +11,11 @@ namespace RecoverKit.Core.Dependencies;
 public sealed class DependencyInstaller(
     Settings settings,
     Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task>? run = null,
-    Func<Action<Settings>, Task>? updateSettings = null)
+    Func<Action<Settings>, Task>? updateSettings = null,
+    Func<RepairQuestion, CancellationToken, Task<bool>>? ask = null)
 {
     private readonly Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> _run =
-        run ?? DefaultRun(settings, updateSettings ?? (change => { change(settings); settings.Save(); return Task.CompletedTask; }));
+        run ?? DefaultRun(settings, updateSettings ?? (change => { change(settings); settings.Save(); return Task.CompletedTask; }), ask);
 
     public async Task<IReadOnlyList<(DependencyItem Item, Exception? Error)>> InstallAllAsync(
         IEnumerable<DependencyItem> items,
@@ -56,7 +57,8 @@ public sealed class DependencyInstaller(
     /// <summary>Points the settings at the copy in the engines folder (the data folder is fixed per user).</summary>
     internal static void PointAtEnginesCopy(Settings s, string enginesExe) => s.HashcatPath = enginesExe;
 
-    private static Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> DefaultRun(Settings settings, Func<Action<Settings>, Task> updateSettings)
+    private static Func<DependencyItem, IProgress<InstallProgress>?, CancellationToken, Task> DefaultRun(Settings settings, Func<Action<Settings>, Task> updateSettings,
+        Func<RepairQuestion, CancellationToken, Task<bool>>? ask)
         => async (item, progress, ct) =>
         {
             switch (item.Action)
@@ -90,9 +92,9 @@ public sealed class DependencyInstaller(
                 }
                 case DependencyAction.RepairHashcat:
                 {
-                    var exe = await HashcatRepair.RepairAsync(settings.HashcatPath, progress, ct);
+                    var exe = await HashcatRepair.RepairAsync(settings.HashcatPath, progress, ct, ask);
                     await updateSettings(s => s.HashcatPath = HashcatTool.IsInside(exe, HashcatInstaller.InPlaceBundle) ? null : exe);
-                    progress?.Report(new InstallProgress { Stage = "done", Message = "Done." });
+                    progress?.Report(new InstallProgress { Stage = "done", Message = $"Done. hashcat starts again, from {Path.GetDirectoryName(exe)}." });
                     break;
                 }
                 case DependencyAction.DownloadNvrtc:

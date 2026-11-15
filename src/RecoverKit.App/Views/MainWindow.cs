@@ -770,7 +770,7 @@ public sealed partial class MainWindow : Window
         {
             change(_settings);
             _settings.Save();
-        }).GetTask()));
+        }).GetTask(), ask: (q, _) => Dispatcher.UIThread.InvokeAsync(() => Msg.Choose(this, q.Text, q.Title, q.Accept, q.Decline))));
         _depsPage = page;
         _depsLayer.Child = page;
         _depsLayer.IsVisible = true;

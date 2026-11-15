@@ -66,7 +66,7 @@ public static class DependencyCheck
             // RecoverKit's own copy did not start (antivirus, a stuck process, a damaged copy): repair it.
             if (f.HashcatStartTimedOut && f.BundleAvailable && f.HashcatIsManaged)
                 return new(DependencyId.Hashcat, pinnedName, Light.Red,
-                    f.HashcatError + " Repair stops stuck hashcat processes, copies hashcat again and, if it still does not start, moves it to another folder.",
+                    f.HashcatError + " Repair stops stuck hashcat programs and copies hashcat again. It shows what it will do first, and asks before it moves hashcat to another folder or removes anything.",
                     DependencyAction.RepairHashcat);
             // A broken hashcat of the user's own (or an older managed copy) gives way to the bundled one.
             return f.BundleAvailable && !IsPinnedManagedCopy(f)

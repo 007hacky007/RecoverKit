@@ -26,6 +26,12 @@ All notable changes to RecoverKit. Downloads are on the
   details say why and how fast. A password that passes every check but cannot be confirmed is
   listed as a possible password to try by hand, never as found.
 
+### Changed
+- Repair (when hashcat does not start) first lists what it will do, with the folders involved, and
+  starts only when you agree. If the fresh copy still does not start, it explains why and asks
+  before putting hashcat in another folder; after such a move it offers to remove the old, unused
+  copy. Declining any step leaves everything as it was.
+
 ### Fixed
 - Dictionary rules now also test valid passwords made from source words up to 256 bytes that fall
   outside a format's input length limits, including short WPA words extended to eight bytes and

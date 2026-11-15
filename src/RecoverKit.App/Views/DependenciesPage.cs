@@ -313,7 +313,7 @@ public sealed class DependenciesPage : UserControl
                 if (error is null)
                 {
                     AnythingInstalled = true;
-                    SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
+                    SetItem(item.Id, i => i with { Light = Light.Green, Reason = item.Action == DependencyAction.RepairHashcat ? "Repaired. hashcat starts again." : "Installed.", Pending = false });
                 }
                 else
                 {
@@ -381,7 +381,7 @@ public sealed class DependenciesPage : UserControl
     {
         AnythingInstalled = true;
         if (_done.Task.IsCompleted || _items.FirstOrDefault(i => i.Id == item.Id) is not { } row || row.Light == Light.Green) return;
-        SetItem(item.Id, i => i with { Light = Light.Green, Reason = "Installed.", Pending = false });
+        SetItem(item.Id, i => i with { Light = Light.Green, Reason = item.Action == DependencyAction.RepairHashcat ? "Repaired. hashcat starts again." : "Installed.", Pending = false });
         BuildRows();
     }
 

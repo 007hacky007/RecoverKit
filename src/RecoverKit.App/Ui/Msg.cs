@@ -20,7 +20,11 @@ internal static class Msg
     public static async Task<bool> Ask(Window owner, string text, string? title = null, MsgIcon icon = MsgIcon.Question)
         => await Show(owner, text, title ?? Views.MainWindow.AppName, MsgButtons.YesNo, icon) == MsgResult.Yes;
 
-    public static async Task<MsgResult> Show(Window owner, string text, string title, MsgButtons buttons, MsgIcon icon)
+    /// <summary>A question with its own button names (the accept button is the default one).</summary>
+    public static async Task<bool> Choose(Window owner, string text, string title, string accept, string decline, MsgIcon icon = MsgIcon.Question)
+        => await Show(owner, text, title, MsgButtons.YesNo, icon, (accept, decline)) == MsgResult.Yes;
+
+    public static async Task<MsgResult> Show(Window owner, string text, string title, MsgButtons buttons, MsgIcon icon, (string Yes, string No)? labels = null)
     {
         var w = new Window
         {
@@ -33,7 +37,7 @@ internal static class Msg
 
         Control[] btns = buttons switch
         {
-            MsgButtons.YesNo => [B("Yes", MsgResult.Yes, def: true), B("No", MsgResult.No, cancel: true)],
+            MsgButtons.YesNo => [B(labels?.Yes ?? "Yes", MsgResult.Yes, def: true), B(labels?.No ?? "No", MsgResult.No, cancel: true)],
             MsgButtons.YesNoCancel => [B("Yes", MsgResult.Yes, def: true), B("No", MsgResult.No), B("Cancel", MsgResult.Cancel, cancel: true)],
             _ => [B("OK", MsgResult.Ok, def: true, cancel: true)],
         };
