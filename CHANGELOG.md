@@ -25,17 +25,37 @@ All notable changes to RecoverKit. Downloads are on the
   Pro about 2,500 passwords per second for compressed files, 1,600 for stored ones); the file's
   details say why and how fast. A password that passes every check but cannot be confirmed is
   listed as a possible password to try by hand, never as found.
+- A built-in processor engine for WPA/WPA2 (including SHA-256 PMKID lines) and WinZip AES. It runs
+  only where the detailed performance test measured it faster, alone or next to the graphics card.
+  Otherwise hashcat alone stays the default for these formats, because sharing the work with the
+  processor made attacks slower.
 
 ### Changed
 - Repair (when hashcat does not start) first lists what it will do, with the folders involved, and
   starts only when you agree. If the fresh copy still does not start, it explains why and asks
   before putting hashcat in another folder; after such a move it offers to remove the old, unused
   copy. Declining any step leaves everything as it was.
+- The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
+- The Benchmark measures RAR 3 with 4-character passwords instead of 7. RAR 3 hashes the
+  password again in each of its 262,144 rounds, so it gets slower as passwords get longer
+  (1.32x from 4 to 7 characters); 4 characters is the length other recovery tools' RAR 3 figures
+  match. Other formats hash the password once and cost the same at any test length.
+- Each Benchmark result names the test password length, and for formats where the GPU and the
+  processor work together, what each side measured.
+- The detailed performance test measures RAR 3 on the GPU alone, the processor alone and both
+  together, as it does for RAR 5 and ZIP.
+- Benchmark results name the GPU backend that ran, CUDA, OpenCL or Metal: "Engine: hashcat, GPU
+  (CUDA)". An NVIDIA GPU running through OpenCL after a failed CUDA kernel build is listed as
+  OpenCL with the reason.
+- When the processor and the GPU share an attack, processor threads wait less at the end of each
+  batch.
 
 ### Fixed
-- Dictionary rules now also test valid passwords made from source words up to 256 bytes that fall
-  outside a format's input length limits, including short WPA words extended to eight bytes and
-  long words shortened by a rule.
+- Dictionary attacks with rules skipped passwords made from words outside a format's length
+  limits: hashcat drops such words before it applies the rules. For WPA, which needs at least 8
+  characters, "hashcat" with the rule "add !" never became "hashcat!"; in the default WPA scenario
+  about a quarter of the rule step's passwords were skipped. RecoverKit now runs these words through
+  the rules in an extra pass and tests every result of a valid length, for words up to 256 bytes.
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
   limit". The password is now checked against the first files of the block, so only the beginning
@@ -56,22 +76,6 @@ All notable changes to RecoverKit. Downloads are on the
   from hashcat, every CUDA kernel build failed and the GPU ran through OpenCL; the dependencies page
   then called the driver "too old or unknown" and offered no CUDA compiler.
 - A stopped and resumed processor attack no longer tests again work it had already finished.
-
-### Changed
-- The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
-- The Benchmark measures RAR 3 with 4-character passwords instead of 7. RAR 3 hashes the
-  password again in each of its 262,144 rounds, so it gets slower as passwords get longer
-  (1.32x from 4 to 7 characters); 4 characters is the length other recovery tools' RAR 3 figures
-  match. Other formats hash the password once and cost the same at any test length.
-- Each Benchmark result names the test password length, and for formats where the GPU and the
-  processor work together, what each side measured.
-- The detailed performance test measures RAR 3 on the GPU alone, the processor alone and both
-  together, as it does for RAR 5 and ZIP.
-- Benchmark results name the GPU backend that ran, CUDA, OpenCL or Metal: "Engine: hashcat, GPU
-  (CUDA)". An NVIDIA GPU running through OpenCL after a failed CUDA kernel build is listed as
-  OpenCL with the reason.
-- When the processor and the GPU share an attack, processor threads wait less at the end of each
-  batch.
 
 ## [1.6.1] - 2026-11-14
 
