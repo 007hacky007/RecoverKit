@@ -1190,6 +1190,11 @@ public sealed partial class MainWindow : Window
         }
         if (_closeConfirmed) return;   // the window is closing; nothing more to show
         FinishLive(result);
+        if (result.Passwords.Count > 0 && result.Outcome is SessionOutcome.Error or SessionOutcome.Stopped)
+        {
+            Log(LogKind.Success, "Passwords recovered before the attack stopped:");
+            foreach (var password in result.Passwords) Write(password + "\n", Palette.SuccessBrush, true, 18, log: false);
+        }
         foreach (var possible in result.PossiblePasswords)
         {
             Write("possible password, not verified: ", Palette.WarningBrush);

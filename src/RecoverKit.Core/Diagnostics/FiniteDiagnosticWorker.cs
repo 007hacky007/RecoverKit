@@ -120,7 +120,7 @@ public static class FiniteDiagnosticWorker
         }
     }
 
-    internal static string[] SizedMask(double speed, double seconds)
+    internal static string[] SizedMask(double speed, double seconds, int minimumLength = 1)
     {
         double candidates = Math.Clamp(speed * seconds, 196, 28_925_465_497_600d);
         int length = 2;
@@ -130,7 +130,7 @@ public static class FiniteDiagnosticWorker
         var pair = (from a in Enumerable.Range(1, 14) from b in Enumerable.Range(1, 14)
                     orderby Math.Abs(a * b - want) select (a, b)).First();
         return ["-a", "3", "-1", "ABCDEFGHIJKLMN", "-2", "ABCDEFGHIJKLMN"[..pair.a], "-3", "ABCDEFGHIJKLMN"[..pair.b],
-            string.Concat(Enumerable.Repeat("?1", length - 2)) + "?2?3"];
+            new string('A', Math.Max(0, minimumLength - length)) + string.Concat(Enumerable.Repeat("?1", length - 2)) + "?2?3"];
     }
 
     public static int Run(string[] args)
@@ -149,9 +149,10 @@ public static class FiniteDiagnosticWorker
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 3; }
     }
 
-    private static async Task<Result> RunJobAsync(WorkerRequest value, string directory)
+    internal static async Task<Result> RunJobAsync(WorkerRequest value, string directory)
     {
-        if (value.Mode is not (13000 or 17210 or 12500) || value.Length is < 1 or > 10 || value.Count < -1
+        if (!DetailedBenchmarkRunner.HybridModes.Contains(value.Mode) || value.Length is < 1 or > 10
+            || value.Mode == 22000 && value.Length < 8 || value.Count < -1
             || value.Count > Environment.ProcessorCount || value.Limit < 1 || value.Limit > Environment.ProcessorCount
             || value.Count > value.Limit || value.Limits is null || value.Devices is null)
             return Failed("Finite diagnostic request is invalid.");

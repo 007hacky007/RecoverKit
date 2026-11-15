@@ -50,6 +50,7 @@ public sealed class SessionState
     /// <summary>A RAR CPU candidate reached a compression construct the decoder could not check.</summary>
     public string? Rar3UnconfirmedReason { get; set; }
     public List<PossiblePassword> Rar3PossiblePasswords { get; set; } = new();
+    public List<string> WpaPasswords { get; set; } = new();
     public DateTime SavedUtc { get; set; }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
@@ -113,6 +114,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
     {
         DataPath = settings.DataPath,
         HashcatDir = tool?.Directory,
+        Hashcat = tool,
         DefaultDictionary = settings.DefaultDictionary,
     };
 
@@ -140,6 +142,11 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                     : dictionaryBytes ? (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
                         .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList()
                     : await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
+                if (cached.Count > 0 && IsMultiNetworkWpa(target))
+                {
+                    var (code, remaining, _) = await tool.RunAsync(["--left", "--quiet", "-m", mode.ToString(), hashFile, "--potfile-path", potfile], TimeSpan.FromSeconds(30), ct: ct);
+                    if (code != 0 || !string.IsNullOrWhiteSpace(remaining)) continue;
+                }
                 if (cached.Count > 0)
                 {
                     DictionaryKernelPlanner.Cleanup(settings, key);
@@ -149,7 +156,13 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         }
 
         var power = await StartPowerLimitAsync(ct);
-        if (power.Cancelled) return new SessionResult { Outcome = SessionOutcome.Stopped };
+        if (power.Cancelled)
+        {
+            var stopped = new SessionResult { Outcome = SessionOutcome.Stopped };
+            await IncludeWpaPasswordsAsync(stopped, resume, target, hashFile, settings.DontUsePasswordCache
+                ? Path.Combine(settings.SessionsDir, key + ".dictionary-networks.potfile") : potfile);
+            return stopped;
+        }
         try
         {
             var result = await RunStepsAsync(target, filePath, resume, key, potfile, hashFile, steps, ct);
@@ -229,14 +242,49 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         return (session, false);
     }
 
+    private static bool IsMultiNetworkWpa(HashTarget target)
+        => target.Modes.Count == 1 && target.Modes[0] is 22000 or 22001 && target.HashLines.Trim().Contains('\n');
+
+    private async Task<List<string>> ShowWpaPasswordsAsync(int mode, string hashFile, string potfile)
+        => (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
+            .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).Distinct().ToList();
+
+    private async Task IncludeWpaPasswordsAsync(SessionResult result, SessionState? state, HashTarget target, string hashFile, string potfile)
+    {
+        if (!IsMultiNetworkWpa(target)) return;
+        var found = new List<string>(state?.WpaPasswords ?? []);
+        if (File.Exists(potfile))
+        {
+            try { found.AddRange(await ShowWpaPasswordsAsync(target.Modes[0], hashFile, potfile)); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
+            { Log?.Invoke(LogKind.Warning, "Could not read the recovered network passwords: " + ex.Message); }
+        }
+        result.Passwords.AddRange(found.Where(p => p.Length > 0).Except(result.Passwords));
+        if (state is not null)
+            state.WpaPasswords = result.Passwords.Distinct().Take(target.HashLines.Count(c => c == '\n') + 1).ToList();
+    }
+
     private async Task<SessionResult> RunStepsAsync(HashTarget target, string filePath, SessionState? resume, string key,
         string potfile, string hashFile, IReadOnlyList<AttackSpec> steps, CancellationToken ct)
     {
         var state = resume ?? new SessionState { FilePath = filePath, Key = key, Modes = target.Modes.ToList(), Steps = steps.ToList(), DictionaryPlanPending = true };
+        bool retainNetworks = IsMultiNetworkWpa(target);
+        string networkPotfile = retainNetworks && settings.DontUsePasswordCache
+            ? Path.Combine(settings.SessionsDir, key + ".dictionary-networks.potfile") : potfile;
+        bool deleteSession = false;
+        async Task<SessionResult> FinishAsync(SessionResult result)
+        {
+            await IncludeWpaPasswordsAsync(result, state, target, hashFile, networkPotfile);
+            if (result.Outcome == SessionOutcome.Stopped) state.Save(settings);
+            if (deleteSession) SessionState.Delete(settings, key);
+            if (result.Outcome == SessionOutcome.NotFound && result.Passwords.Count > 0)
+                return new SessionResult { Outcome = SessionOutcome.Found, Passwords = result.Passwords, Key = result.Key, DecryptedCopy = result.DecryptedCopy };
+            return result;
+        }
         try { await DictionaryKernelPlanner.PrepareSessionAsync(state, target, tool, settings, Devices, PlannerContext, message => Log?.Invoke(LogKind.Info, message), ct); }
-        catch (OperationCanceledException) { state.Save(settings); return new SessionResult { Outcome = SessionOutcome.Stopped }; }
+        catch (OperationCanceledException) { state.Save(settings); return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped }); }
         catch (Exception ex) when (ex is IOException or InvalidDataException)
-        { SessionState.Delete(settings, key); return new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }; }
+        { deleteSession = true; return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }); }
         var runner = new HashcatRunner(tool) { KnownDevices = Devices };
         runner.StatusReceived += s => Status?.Invoke(s);
         runner.OutputLine += l => { if (!settings.ReduceOutput) Log?.Invoke(LogKind.Info, l); };
@@ -271,12 +319,12 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
             PreparedAttack attack;
             try
             {
-                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, message => Log?.Invoke(LogKind.Info, message), ct, settings.ExtraArguments);
+                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, message => Log?.Invoke(LogKind.Info, message), ct, settings.ExtraArguments, tool);
                 attack = AttackPlanner.Prepare(spec, target, PlannerContext);
             }
-            catch (OperationCanceledException) { state.Save(settings); return new SessionResult { Outcome = SessionOutcome.Stopped }; }
+            catch (OperationCanceledException) { state.Save(settings); return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped }); }
             catch (Exception ex) when (ex is IOException or InvalidDataException)
-            { SessionState.Delete(settings, key); return new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }; }
+            { deleteSession = true; return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }); }
             catch (AttackPlanException ex)
             {
                 Log?.Invoke(LogKind.Warning, $"Step {si + 1}/{state.Steps.Count} skipped: {ex.Message}");
@@ -286,7 +334,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
             if (spec.Kind == AttackKind.KeySearch)
             {
                 var ks = await KeySearchStepAsync(runner, target, hashFile, key, si, state, attack, resume, ct);
-                if (ks is not null) return ks;
+                if (ks is not null) return await FinishAsync(ks);
                 continue;
             }
 
@@ -312,7 +360,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                 catch (OperationCanceledException)
                 {
                     state.Save(settings);
-                    return new SessionResult { Outcome = SessionOutcome.Stopped, Key = stayKeysHex, DecryptedCopy = stayCopy };
+                    return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped, Key = stayKeysHex, DecryptedCopy = stayCopy });
                 }
 
                 if (stay.Keys is { } stayKeys)
@@ -346,6 +394,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
             int startMode = si == state.StepIndex ? state.ModeIndex : 0;
             for (int mi = startMode; mi < state.Modes.Count; mi++)
             {
+                if (spec.DictionaryKernel is { RuleExpanded: true, Modes: { } rescueModes } && !rescueModes.Contains(state.Modes[mi])) continue;
                 int mode = pmkTable is not null ? 22001 : state.Modes[mi];
                 // Apply measured choices to this step only. Preferences and their explicit limits stay intact.
                 var runSettings = settings;
@@ -377,7 +426,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                         state.ModeIndex = mi;
                         state.Restorable = false;
                         state.Save(settings);
-                        return new SessionResult { Outcome = SessionOutcome.Stopped };
+                        return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped });
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     { Log?.Invoke(LogKind.Warning, "Performance profile is unavailable; using preferences."); }
@@ -446,9 +495,9 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                         : hybridPlan is not null
                             ? Native.HybridRunner.RestoreFile(runSettings.SessionsDir, resume?.HashcatSession ?? "")
                             : HashcatRunner.RestoreFile(runSettings.SessionsDir, resume?.HashcatSession ?? "");
-                bool restore = !restartHybridDictionary && resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
+                bool restore = (attack.CanRestore || cpuDictionary) && !restartHybridDictionary && resume is not null && si == resume.StepIndex && mi == resume.ModeIndex && resume.Restorable
                                && File.Exists(restoreFile);
-                if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex && !restore)
+                if (resume is { Restorable: true } && si == resume.StepIndex && mi == resume.ModeIndex && !restore && spec.DictionaryKernel?.StreamRules != true)
                     Log?.Invoke(LogKind.Warning, "The saved engine cannot resume this step with the current settings; starting the step again.");
                 string session = restore ? resume!.HashcatSession : $"rk_{key}_{si}_{mi}";
                 if (resume is null) File.Delete(HashcatRunner.ZipFilterStateFile(settings.SessionsDir, session));
@@ -476,7 +525,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                     state.UseOptimizedKernel = null;
                     state.Restorable = false;
                     state.Save(settings);
-                    return new SessionResult { Outcome = SessionOutcome.Stopped };
+                    return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped });
                 }
                 state.UseOptimizedKernel = optimized;
                 state.StepIndex = si;
@@ -496,7 +545,8 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                     Settings = runSettings,
                     UseOptimizedKernel = optimized,
                     VolumeCredentials = target.VolumeCredentials,
-                    PasswordCachePath = potfile,
+                    PasswordCachePath = retainNetworks ? networkPotfile : potfile,
+                    SessionPasswordCache = retainNetworks,
                     Guard = HashcatRunner.GuardFor(runSettings, Devices),
                     ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
                     RequiresPartialZipKernel = target.ZipPartial is not null,
@@ -530,31 +580,46 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                     result = await new Native.ZipDictionaryRunner { Status = s => Status?.Invoke(s) }.RunAsync(target, request, ct);
                 }
 
-                if (spec.DictionaryKernel is not { Pass: 2 } && result.LastStatus is { TotalSpeed: > 0 } ls)
+                if (spec.DictionaryKernel is not { Pass: 2 } and not { RuleExpanded: true } && result.LastStatus is { TotalSpeed: > 0 } ls)
                     settings.SpeedByMode[mode] = ls.TotalSpeed;
+
+                var stepPasswords = retainNetworks
+                    ? result.RawPasswords.Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).Distinct().ToList()
+                    : result.Passwords;
+                // Preserve partial hits across passes and stops. A 22001 potfile alone cannot
+                // reconstruct the PMKs or their table passwords because it omits plaintexts.
+                if (retainNetworks)
+                    state.WpaPasswords = state.WpaPasswords
+                        .Concat(pmkTable is null ? stepPasswords : stepPasswords.Select(pmkTable.PasswordFor).OfType<string>())
+                        .Where(p => p.Length > 0)
+                        .Distinct().Take(target.HashLines.Count(c => c == '\n') + 1).ToList();
 
                 switch (result.Outcome)
                 {
                     case RunOutcome.Cracked:
-                        SessionState.Delete(settings, key);
+                        var found = stepPasswords;
+                        if (retainNetworks) found = found.Concat(await ShowWpaPasswordsAsync(mode, hashFile, networkPotfile)).Distinct().ToList();
+                        deleteSession = true;
                         Cleanup(session);
-                        var found = result.Passwords;
                         if (pmkTable is not null)   // hashcat reports the PMK; map it back to its password
                             found = found.Select(p => pmkTable.PasswordFor(p) ?? p).ToList();
-                        return new SessionResult { Outcome = SessionOutcome.Found, Passwords = found, Key = stayKeysHex, DecryptedCopy = stayCopy };
+                        if (retainNetworks) found = found.Where(p => p.Length > 0).Concat(state.WpaPasswords).Distinct().ToList();
+                        return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Found, Passwords = found, Key = stayKeysHex, DecryptedCopy = stayCopy });
                     case RunOutcome.Aborted:
                         state.Save(settings);
-                        return new SessionResult { Outcome = SessionOutcome.Stopped };
+                        return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped });
                     case RunOutcome.Error:
                         Log?.Invoke(LogKind.Error, result.Error ?? "hashcat failed.");
                         if (hybridPlan?.Dictionary is null || !File.Exists(Native.HybridRunner.RestoreFile(runSettings.SessionsDir, session)))
                         {
-                            SessionState.Delete(settings, key);
+                            deleteSession = true;
                             Cleanup(session);
                         }
-                        return new SessionResult { Outcome = SessionOutcome.Error, Error = result.Error };
+                        return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = result.Error });
                     default:
-                        Log?.Invoke(LogKind.Info, $"Step {si + 1} finished, password not found ({result.LastStatus?.ProgressDone ?? 0:N0} candidates tested).");
+                        Log?.Invoke(LogKind.Info, retainNetworks && result.Passwords.Count > 0
+                            ? $"Step {si + 1} finished; continuing with the remaining networks."
+                            : $"Step {si + 1} finished, password not found ({result.LastStatus?.ProgressDone ?? 0:N0} candidates tested).");
                         Cleanup(session);
                         if (spec.DictionaryKernel is { Pass: 1, TailPath: not null })
                         {
@@ -568,12 +633,12 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                 }
             }
         }
-        SessionState.Delete(settings, key);
+        deleteSession = true;
         if (stepsRun == 0 && stepsNeedingCpu > 0 && stayKeysHex is null)
-            return new SessionResult { Outcome = SessionOutcome.Error, Error = cpuOnlyReason };
-        return stayKeysHex is null
+            return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = cpuOnlyReason });
+        return await FinishAsync(stayKeysHex is null
             ? new SessionResult { Outcome = SessionOutcome.NotFound }
-            : new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = stayKeysHex, DecryptedCopy = stayCopy };
+            : new SessionResult { Outcome = SessionOutcome.KeyRecovered, Key = stayKeysHex, DecryptedCopy = stayCopy });
     }
 
     /// <summary>

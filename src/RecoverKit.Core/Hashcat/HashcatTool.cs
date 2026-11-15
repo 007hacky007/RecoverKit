@@ -56,6 +56,7 @@ public sealed class HashModeInfo
     public string Name { get; init; } = "";
     public bool SlowHash { get; init; }
     public bool HasOptimizedKernel { get; init; }
+    public int PasswordLenMin { get; init; }
     public int PasswordLenMax { get; init; }
     public int? OptimizedPasswordLenMax { get; init; }
     public string? BenchmarkMask { get; init; }
@@ -492,6 +493,7 @@ public sealed partial class HashcatTool
             Name = e.GetProperty("name").GetString() ?? "",
             SlowHash = e.TryGetProperty("slow_hash", out var sh) && sh.GetBoolean(),
             HasOptimizedKernel = e.TryGetProperty("kernel_type", out var kt) && kt.EnumerateArray().Any(x => x.GetString() == "optimized"),
+            PasswordLenMin = e.TryGetProperty("password_len_min", out var pureMin) ? pureMin.GetInt32() : 0,
             PasswordLenMax = e.TryGetProperty("password_len_max", out var pureMax) ? pureMax.GetInt32() : 256,
             OptimizedPasswordLenMax = limit,
             BenchmarkMask = mask ?? (e.TryGetProperty("benchmark_mask", out var pureMask) ? pureMask.GetString() : null),

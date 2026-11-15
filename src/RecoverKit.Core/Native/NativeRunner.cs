@@ -36,8 +36,11 @@ public sealed class NativeRunner
         if (!ignoreGpu && settings.PerformanceChoice?.Engine is "gpu" or "hybrid") return null;
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
+        // A CPU variant timing alone does not establish a win over hashcat's CPU engine.
+        if (!ignoreGpu && mode is 13600 or 22000 && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        if (lines.Length == 0 || mode != 22000 && lines.Length != 1) return null;
+        // hashcat searches every network; our CPU runners stop on their first hit.
+        if (lines.Length != 1) return null;
         var space = MaskSpace.FromHashcatArgs(attack.Args);
         if (space is null) return null;
         var kernel = NativeKernels.TryCreate(mode, mode == 22000 ? hashLines : lines[0], partial);

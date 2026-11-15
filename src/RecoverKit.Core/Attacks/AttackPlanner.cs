@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using RecoverKit.Core.Attacks.Stay;
 using RecoverKit.Core.Formats;
+using RecoverKit.Core.Hashcat;
 
 namespace RecoverKit.Core.Attacks;
 
@@ -11,6 +12,7 @@ public sealed class PlannerContext
 {
     public string? DataPath { get; init; }
     public string? HashcatDir { get; init; }
+    public HashcatTool? Hashcat { get; init; }
     public string? DefaultDictionary { get; init; }
 }
 
@@ -20,6 +22,8 @@ public sealed class PreparedAttack
     public required string Description { get; init; }
     public List<string> Args { get; } = new();
     public Func<IEnumerable<string>>? Stdin { get; set; }
+    internal Func<CancellationToken, IEnumerable<string>>? CancellableStdin { get; set; }
+    internal bool StdinTotalIsUpperBound { get; set; }
     public BigInteger Keyspace { get; set; }
     public List<string> Notes { get; } = new();
     public bool CanRestore => Stdin is null;
@@ -33,17 +37,28 @@ public static class AttackPlanner
     {
         if (a.DictionaryKernel is { Arguments: { } args } pass)
         {
-            string label = pass.Pass == 1 ? "optimized pass" : pass.Pass == 2 ? "pure long-word pass" : "pure pass";
+            string label = pass.Pass == 1 ? "optimized pass" : pass.Pass == 2 ? "pure long-word pass" : pass.RuleExpanded ? "expanded rules pass" : "pure pass";
             var step = a.Clone();
             step.DictionaryKernel = null;
             step.Dictionaries = [args[2], null, null, null];
             step.SkipShorterThan = step.SkipLongerThan = 0;
             step.Rules = pass.Rules.Count == 0 ? RulesPreset.AsIs : RulesPreset.CustomFile;
             step.RulesFile = pass.Rules.FirstOrDefault()?.Path;
-            var prepared = Dictionary(step, ctx, _ => pass.Words, rawFile: true, description: a.Describe() + $" [{label}]");
+            string count = pass.RuleExpanded ? $", {pass.SelectedWords:N0} {(pass.SelectedWords == 1 ? "word" : "words")}" : "";
+            var prepared = Dictionary(step, ctx, _ => pass.Words, rawFile: true, description: a.Describe() + $" [{label}{count}]");
             prepared.Args.Clear();
             prepared.Args.AddRange(args);
             prepared.Keyspace = (BigInteger)pass.Words * pass.RuleCount;
+            if (pass.StreamRules)
+            {
+                var tool = ctx.Hashcat ?? throw new AttackPlanException("hashcat is needed for this streamed rules pass.");
+                prepared.Args.Clear();
+                prepared.Args.AddRange(["-a", "0"]);
+                prepared.Stdin = () => RuleRescue.Candidates(pass, tool, CancellationToken.None);
+                prepared.CancellableStdin = ct => RuleRescue.Candidates(pass, tool, ct);
+                prepared.StdinTotalIsUpperBound = true;
+                prepared.Notes.Add("This rules pass is streamed. Its progress total is an upper bound; after a stop it restarts from the beginning without skipping candidates.");
+            }
             return prepared;
         }
         lineCounter ??= p => Wordlists.CountLines(p);

@@ -27,6 +27,9 @@ All notable changes to RecoverKit. Downloads are on the
   listed as a possible password to try by hand, never as found.
 
 ### Fixed
+- Dictionary rules now also test valid passwords made from source words up to 256 bytes that fall
+  outside a format's input length limits, including short WPA words extended to eight bytes and
+  long words shortened by a rule.
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
   limit". The password is now checked against the first files of the block, so only the beginning

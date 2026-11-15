@@ -19,7 +19,18 @@ public class WpaCpuTests
     private const string Eapol3_99 = "WPA*02*074af6bcca37f137cd89ac555e921adc*001122334455*aabbccddeeff*49454545*000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f*0103005f02010b00000000000000000000202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000*00";
 
     private static string[] Lines => [HashcatExample, Pmkid, Eapol1_123, Eapol2_121, Eapol3_121, Eapol3_112, Eapol3_99];
-    public static IEnumerable<object[]> KnownAnswers => Lines.Select(line => new object[] { line });
+    public static IEnumerable<object[]> KnownAnswers => Lines.Concat(new[] { "00", "01", "04", "10", "80", "ff", "02", "03", "12", "82" }
+        .Select(PmkidWithPair)).Select(line => new object[] { line });
+
+    private static string PmkidWithPair(string pair)
+    {
+        string line = Pmkid + pair;
+        if ((Convert.ToByte(pair, 16) & 2) == 0) return line;
+        byte[] pmk = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2("password"u8, "IEEE"u8, 4096, System.Security.Cryptography.HashAlgorithmName.SHA1, 32);
+        byte[] data = [.. "PMK Name"u8, .. Convert.FromHexString("001122334455aabbccddeeff")];
+        string expected = Convert.ToHexStringLower(System.Security.Cryptography.HMACSHA256.HashData(pmk, data).AsSpan(0, 16));
+        return line.Replace("2c5f58eac753301a96ea027d7e59c87f", expected);
+    }
 
     [Theory]
     [MemberData(nameof(KnownAnswers))]
@@ -184,11 +195,32 @@ public class WpaCpuTests
         else Assert.Null(WpaKernel.TryParse(Pmkid + "\n" + line));
     }
 
+    [Theory]
+    [InlineData("00", false)]
+    [InlineData("01", false)]
+    [InlineData("04", false)]
+    [InlineData("10", false)]
+    [InlineData("80", false)]
+    [InlineData("ff", true)]
+    [InlineData("02", true)]
+    [InlineData("03", true)]
+    [InlineData("12", true)]
+    [InlineData("82", true)]
+    public void PmkidUsesOnlyTheSha256MessagePairBit(string pair, bool sha256)
+    {
+        string line = PmkidWithPair(pair);
+        Assert.Equal(sha256, (Convert.ToByte(pair, 16) & 2) != 0);
+        var kernel = Assert.IsType<WpaKernel>(WpaKernel.TryParse(line));
+        Assert.True(kernel.Verify("password"u8));
+        Assert.False(kernel.Verify("wrongone"u8));
+        Assert.Equal(0, kernel.CreateWorker().SearchPasswords("password"u8, 8, 1));
+    }
+
     [Fact]
     public void RejectsEveryUnsupportedOrMalformedLine()
     {
         var fields = Eapol2_121.Split('*');
-        var invalid = new List<string> { "", "WPA*02*deadbeef", Pmkid.Replace("WPA*01", "WPA*03"), Pmkid + "03", Pmkid + "zz", Pmkid.Replace("49454545", new string('a', 66)), Pmkid.Replace("49454545", "123") };
+        var invalid = new List<string> { "", "WPA*02*deadbeef", Pmkid.Replace("WPA*01", "WPA*03"), Pmkid + "zz", Pmkid.Replace("49454545", new string('a', 66)), Pmkid.Replace("49454545", "123") };
         foreach (var (field, value) in new[] { (0, "OTHER"), (1, "04"), (2, "00"), (3, "001122"), (4, "zz1122334455"), (6, "00"), (7, "01030000020000"), (8, ""), (8, "000") })
         {
             var bad = (string[])fields.Clone();

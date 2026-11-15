@@ -36,7 +36,7 @@ public sealed unsafe class WpaKernel : NativeKernel, INativeFilter
         return null;
     }
 
-    /// <summary>Refuse the entire target if any record requires an unsupported derivation or nonce correction.</summary>
+    /// <summary>Any unsupported record sends the entire target to hashcat, including supported records.</summary>
     public static WpaKernel? TryParse(string lines)
     {
         var records = new List<Record>();
@@ -53,13 +53,13 @@ public sealed unsafe class WpaKernel : NativeKernel, INativeFilter
                 int pair = f[8].Length == 0 ? 0 : Convert.FromHexString(f[8])[0];
                 if (f[1] == "01")
                 {
-                    // PMKID bit 1 selects PSK-SHA256; keep that variant with hashcat until supported here.
-                    if (f[6].Length != 0 || f[7].Length != 0 || (pair & ~1) != 0) return null;
+                    // Only bit 1 selects the PMKID digest; the other bits are capture metadata.
+                    if (f[6].Length != 0 || f[7].Length != 0) return null;
                     var data = new byte[20];
                     "PMK Name"u8.CopyTo(data);
                     ap.CopyTo(data, 8);
                     sta.CopyTo(data, 14);
-                    records.Add(new Record(essid, expected, data, [], 0));
+                    records.Add(new Record(essid, expected, data, [], (pair & 2) != 0 ? -1 : 0));
                     continue;
                 }
                 if (f[6].Length != 64 || f[7].Length is < 198 or > 1024 || f[8].Length != 2 ||
@@ -123,7 +123,8 @@ public sealed unsafe class WpaKernel : NativeKernel, INativeFilter
     private static bool CheckPmk(ReadOnlySpan<byte> pmk, Record record)
     {
         Span<byte> digest = stackalloc byte[32];
-        if (record.Version == 0) HMACSHA1.HashData(pmk, record.KeyData, digest);
+        if (record.Version == -1) HMACSHA256.HashData(pmk, record.KeyData, digest);
+        else if (record.Version == 0) HMACSHA1.HashData(pmk, record.KeyData, digest);
         else
         {
             if (record.Version == 3) HMACSHA256.HashData(pmk, record.KeyData, digest);

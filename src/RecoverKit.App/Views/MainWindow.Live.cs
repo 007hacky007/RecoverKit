@@ -406,6 +406,8 @@ public sealed partial class MainWindow
                 SetDetails(true);
                 break;
         }
+        if (result.Passwords.Count > 0 && result.Outcome is SessionOutcome.Error or SessionOutcome.Stopped)
+            ShowFoundCard(result.Passwords);
     }
 
     private void ShowFoundCard(IReadOnlyList<string> passwords)

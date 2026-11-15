@@ -97,17 +97,22 @@ public static class Generators
     /// <summary>Writes candidates to a stream as UTF-8 lines; stops quietly when the reader goes away.</summary>
     public static void Pump(IEnumerable<string> candidates, Stream output, CancellationToken ct)
     {
-        using var w = new StreamWriter(output, new UTF8Encoding(false), 1 << 20) { NewLine = "\n", AutoFlush = false };
+        var w = new StreamWriter(output, new UTF8Encoding(false), 1 << 20) { NewLine = "\n", AutoFlush = false };
         try
         {
             foreach (var c in candidates)
             {
                 if (ct.IsCancellationRequested) break;
-                w.WriteLine(c);
+                try { w.WriteLine(c); }
+                catch (IOException) { return; } // The consumer closed the pipe.
+                catch (ObjectDisposedException) { return; }
             }
-            w.Flush();
         }
-        catch (IOException) { /* hashcat exited or closed the pipe */ }
-        catch (ObjectDisposedException) { }
+        finally
+        {
+            try { w.Dispose(); }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+        }
     }
 }

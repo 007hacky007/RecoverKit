@@ -24,6 +24,7 @@ public sealed record RunRequest
     public ThermalGuard? Guard { get; init; }
     /// <summary>Hybrid attacks: hashcat runs on the GPUs only, the built-in engine has the processor.</summary>
     public bool GpuOnly { get; init; }
+    internal bool SessionPasswordCache { get; init; }
     /// <summary>Device ids to leave out of this run (an integrated GPU slower than the CPU thread it costs).</summary>
     public IReadOnlyCollection<int>? ExcludeDevices { get; init; }
     /// <summary>
@@ -109,14 +110,14 @@ public sealed class HashcatRunner(HashcatTool tool)
         // With a confirmation check hashcat must not stop at (or cache) a password that only passes the
         // hash: it keeps guessing, and RecoverKit caches the confirmed one itself.
         if (r.ConfirmPassword is not null) a.AddRange(["--keep-guessing", "--potfile-disable"]);
-        else if (s.DontUsePasswordCache) a.Add("--potfile-disable");
+        else if (s.DontUsePasswordCache && !r.SessionPasswordCache) a.Add("--potfile-disable");
         else a.AddRange(["--potfile-path", r.PasswordCachePath ?? s.PotfilePath]);
         a.AddRange(["-w", Math.Clamp(s.Workload, 1, 4).ToString()]);
         a.AddRange(MustAvoidAppleOpenCl(r.Mode, OperatingSystem.IsMacOS())
             ? MetalOnlyArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices)
             : DeviceArguments(s, KnownDevices, r.GpuOnly, r.ExcludeDevices, preferMetal: r.ConfirmPassword is not null && OperatingSystem.IsMacOS()));
         if (r.UseOptimizedKernel) a.Add("-O");
-        if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", "600"]);
+        if (r.Attack.Stdin is not null) a.AddRange(["--stdin-timeout-abort", r.Attack.StdinTotalIsUpperBound ? "0" : "600"]);
         if (!string.IsNullOrWhiteSpace(s.ExtraArguments))
             // The persisted, length-checked decision owns -O, including on resume.
             a.AddRange(s.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries)
@@ -630,17 +631,41 @@ public sealed class HashcatRunner(HashcatTool tool)
 
         using var pumpCts = new CancellationTokenSource();
         Task pump = Task.CompletedTask;
+        Exception? generatorError = null;
+        long supplied = 0;
         if (useStdin)
         {
             var source = r.Attack.Stdin!;
             var stdin = p.StandardInput.BaseStream;
             pump = Task.Run(() =>
             {
-                try { Generators.Pump(source(), stdin, pumpCts.Token); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                IEnumerable<string> Counted()
                 {
+                    using var candidates = (r.Attack.CancellableStdin?.Invoke(pumpCts.Token) ?? source()).GetEnumerator();
+                    bool Next()
+                    {
+                        try { return candidates.MoveNext(); }
+                        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
+                        {
+                            // Record source failures before Pump disposes its writer and closes stdin.
+                            generatorError = ex;
+                            throw;
+                        }
+                    }
+                    while (Next())
+                    {
+                        yield return candidates.Current;
+                        Interlocked.Increment(ref supplied);
+                    }
+                }
+                try { Generators.Pump(Counted(), stdin, pumpCts.Token); }
+                catch (OperationCanceledException) when (pumpCts.IsCancellationRequested) { }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    generatorError = ex;
                     OutputLine?.Invoke("Candidate generator failed: " + ex.Message);
                     try { stdin.Close(); } catch (IOException) { }
+                    _ = StopAsync(p);
                 }
             });
         }
@@ -725,6 +750,17 @@ public sealed class HashcatRunner(HashcatTool tool)
             error = $"hashcat cannot run hash mode {r.Mode} on the Apple GPU (a known Metal/OpenCL runtime limitation). " +
                     "If the built-in CPU engine supports this format, choose \"Don't use GPU threads\" in Preferences to use it.\n" + error;
 
+        if (generatorError is not null && !stopped && outcome != RunOutcome.Cracked)
+        {
+            outcome = RunOutcome.Error;
+            error = "Candidate generator failed: " + generatorError.Message;
+        }
+        if (r.Attack.StdinTotalIsUpperBound && outcome is RunOutcome.Exhausted or RunOutcome.Cracked)
+        {
+            last = (last ?? new HashcatStatus()).With(status: outcome == RunOutcome.Cracked ? 6 : 5,
+                progressDone: supplied, progressTotal: supplied);
+            StatusReceived?.Invoke(last);
+        }
         return new RunResult { Outcome = outcome, ExitCode = code, Passwords = passwords, RawPasswords = raw, Error = error, LastStatus = last };
     }
 

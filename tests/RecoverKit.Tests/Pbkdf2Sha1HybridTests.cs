@@ -3,6 +3,7 @@ using System.Text;
 using RecoverKit.Core;
 using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Hashcat;
+using RecoverKit.Core.Diagnostics;
 using RecoverKit.Core.Native;
 using Xunit;
 
@@ -14,27 +15,60 @@ public sealed class Pbkdf2Sha1HybridTests
     [Theory]
     [InlineData(13600)]
     [InlineData(22000)]
-    public void PlansMasksAndRuleDictionariesAndDropsSmallIntegratedCpuShare(int mode)
+    public void DefaultsUseHashcatAndMeasuredOrExplicitHybridRemainsAvailable(int mode)
     {
-        if (!RkNative.Available) return;
         string hash = NativeKernels.BenchmarkHashes[mode];
-        BackendDevice[] devices = [new() { Id = 1, Type = "GPU", Unified = true }];
-        var settings = new Settings();
+        foreach (bool integrated in new[] { false, true })
+        {
+            BackendDevice[] devices = [new() { Id = 1, Type = "GPU", Unified = integrated }];
+            foreach (var args in new string[][] { ["-a", "3", "ABCDEFG?d"], ["-a", "0", "words", "-r", "rules"] })
+            {
+                var attack = new PreparedAttack { Description = "test" };
+                attack.Args.AddRange(args);
+                var settings = new Settings();
+                Assert.Null(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                settings.PerformanceChoice = new PerformanceDecision { Engine = "hybrid" };
+                Assert.NotNull(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                settings.PerformanceChoice = null;
+                settings.PerformanceStrategyExplicit = true;
+                Assert.NotNull(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                settings.HybridCpuGpu = false;
+                Assert.Null(HybridRunner.Plan(mode, hash, attack, settings, devices));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public void CpuOnlyRequiresAMeasuredExecutionWinner(int mode)
+    {
+        string hash = NativeKernels.BenchmarkHashes[mode];
+        var attack = new PreparedAttack { Description = "test", Args = { "-a", "3", "ABCDEFG?d" } };
+        foreach (var strategy in new[] { DeviceStrategy.CpuOnly, DeviceStrategy.GpuOnly })
+        {
+            var settings = new Settings { Strategy = strategy };
+            BackendDevice[] devices = [new() { Id = 1, Type = "CPU" }];
+            Assert.Null(NativeRunner.Plan(mode, hash, attack, settings, devices));
+            var args = HashcatRunner.DeviceArguments(settings, devices);
+            Assert.Equal("1", args[args.IndexOf("-D") + 1]);
+            settings.PerformanceChoice = new PerformanceDecision { Engine = "cpu", Speed = 1000 };
+            Assert.NotNull(NativeRunner.Plan(mode, hash, attack, settings, devices));
+        }
+    }
+
+    [Fact]
+    public void MultiLineWpaKeepsHashcatsAllNetworkSearch()
+    {
+        string hash = NativeKernels.BenchmarkHashes[22000];
+        var settings = new Settings { PerformanceChoice = new PerformanceDecision { Engine = "hybrid" } };
+        BackendDevice[] devices = [new() { Id = 1, Type = "GPU" }];
         foreach (var args in new string[][] { ["-a", "3", "ABCDEFG?d"], ["-a", "0", "words", "-r", "rules"] })
         {
             var attack = new PreparedAttack { Description = "test" };
             attack.Args.AddRange(args);
-            Assert.NotNull(HybridRunner.Plan(mode, hash, attack, settings, devices));
-            settings.CpuSpeedByMode[mode] = 100;
-            settings.GpuSpeedByMode[mode] = 10000;
-            Assert.Null(HybridRunner.Plan(mode, hash, attack, settings, devices));
-            settings.CpuSpeedByMode.Clear();
-        }
-        if (mode == 22000)
-        {
-            var mask = new PreparedAttack { Description = "test", Args = { "-a", "3", "ABCDEFG?d" } };
-            Assert.NotNull(HybridRunner.Plan(mode, hash + "\n" + hash, mask, settings, devices));
-            Assert.NotNull(NativeRunner.Plan(mode, hash + "\n" + hash, mask, settings, devices, ignoreGpu: true));
+            Assert.Null(HybridRunner.Plan(22000, hash + "\n" + hash, attack, settings, devices));
+            Assert.Null(NativeRunner.Plan(22000, hash + "\n" + hash, attack, settings, devices, ignoreGpu: true));
         }
     }
 

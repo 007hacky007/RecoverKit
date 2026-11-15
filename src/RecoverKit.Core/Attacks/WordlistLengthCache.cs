@@ -34,6 +34,7 @@ internal sealed class WordlistLengthInfo
 {
     [JsonRequired] public DictionaryFileStamp Source { get; set; } = new();
     [JsonRequired] public Dictionary<int, long> Lengths { get; set; } = new();
+    public bool? HasAutohexWords { get; set; }
     [JsonIgnore] public int Maximum => Lengths.Count == 0 ? 0 : Lengths.Keys.Max();
     [JsonIgnore] public long Words => Lengths.Values.Sum();
     public long LongerThan(int threshold) => Lengths.Where(pair => pair.Key > threshold).Sum(pair => pair.Value);
@@ -47,6 +48,7 @@ internal static class WordlistLengthCache
         [JsonRequired] public DictionaryFileStamp Source { get; set; } = new();
         [JsonRequired] public Dictionary<int, long> Lengths { get; set; } = new();
         [JsonRequired] public int Maximum { get; set; }
+        public bool? HasAutohexWords { get; set; }
     }
 
     public static Task<WordlistLengthInfo?> AnalyzeAsync(string path, Action<long, long>? progress = null,
@@ -68,7 +70,7 @@ internal static class WordlistLengthCache
 
             using var stream = new FileStream(source.Path, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
-            var info = new WordlistLengthInfo { Source = source };
+            var info = new WordlistLengthInfo { Source = source, HasAutohexWords = false };
             var timer = Stopwatch.StartNew();
             long reportedAt = 0, consumed = 0;
             progress?.Invoke(0, source.Size);
@@ -76,6 +78,7 @@ internal static class WordlistLengthCache
             var buffer = new byte[65536];
             int current = 0, n;
             byte last = 0;
+            bool autohexPrefix = true;
             while ((n = stream.Read(buffer)) > 0)
             {
                 ct.ThrowIfCancellationRequested();
@@ -86,12 +89,19 @@ internal static class WordlistLengthCache
                 {
                     int newline = remaining.IndexOf((byte)'\n');
                     int count = newline < 0 ? remaining.Length : newline;
+                    if (current < 5 && count > 0)
+                    {
+                        int prefix = Math.Min(count, 5 - current);
+                        autohexPrefix &= remaining[..prefix].SequenceEqual("$HEX["u8.Slice(current, prefix));
+                        if (autohexPrefix && current + count >= 5) info.HasAutohexWords = true;
+                    }
                     current = checked(current + count);
                     if (count > 0) last = remaining[count - 1];
                     if (newline < 0) break;
                     AddLine(info.Lengths, current - (last == '\r' ? 1 : 0));
                     current = 0;
                     last = 0;
+                    autohexPrefix = true;
                     remaining = remaining[(newline + 1)..];
                 }
                 if (consumed < source.Size && timer.ElapsedMilliseconds - reportedAt >= 500)
@@ -155,7 +165,7 @@ internal static class WordlistLengthCache
             if (source.Size == 0 ? words != 0
                 : words == 0 || checked(bytes + words - 1) > source.Size || checked(bytes + 2 * words) < source.Size)
                 return null;
-            return new() { Source = source, Lengths = entry.Lengths };
+            return new() { Source = source, Lengths = entry.Lengths, HasAutohexWords = entry.HasAutohexWords };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
             or ArgumentException or NotSupportedException or OverflowException)
@@ -169,7 +179,7 @@ internal static class WordlistLengthCache
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(temp, JsonSerializer.Serialize(new CacheEntry { Version = 2, Source = info.Source, Lengths = info.Lengths, Maximum = info.Maximum }));
+            File.WriteAllText(temp, JsonSerializer.Serialize(new CacheEntry { Version = 2, Source = info.Source, Lengths = info.Lengths, Maximum = info.Maximum, HasAutohexWords = info.HasAutohexWords }));
             File.Move(temp, path, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

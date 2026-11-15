@@ -39,7 +39,7 @@ public sealed class HashcatStatus
     public List<DeviceSpeed> Devices { get; init; } = new();
 
     public double TotalSpeed => Devices.Sum(d => d.Speed);
-    public double Fraction => ProgressTotal > 0 ? (double)ProgressDone / ProgressTotal : 0;
+    public double Fraction => ProgressTotal > 0 ? (double)ProgressDone / ProgressTotal : Status is 5 or 6 ? 1 : 0;
 
     public string StatusText => Status switch
     {
@@ -63,10 +63,10 @@ public sealed class HashcatStatus
     };
 
     /// <summary>A copy with other devices, status or start time (used by the GPU temperature guard).</summary>
-    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null, long? restorePoint = null, long? progressTotal = null) => new()
+    public HashcatStatus With(List<DeviceSpeed>? devices = null, int? status = null, long? timeStart = null, long? restorePoint = null, long? progressTotal = null, long? progressDone = null) => new()
     {
         Status = status ?? Status, GuessBase = GuessBase, GuessMod = GuessMod, GuessBasePercent = GuessBasePercent,
-        MaskLength = MaskLength, ProgressDone = ProgressDone, ProgressTotal = progressTotal ?? ProgressTotal, RestorePoint = restorePoint ?? RestorePoint,
+        MaskLength = MaskLength, ProgressDone = progressDone ?? ProgressDone, ProgressTotal = progressTotal ?? ProgressTotal, RestorePoint = restorePoint ?? RestorePoint,
         ResumedFrom = ResumedFrom, Rejected = Rejected, RecoveredHashes = RecoveredHashes, TotalHashes = TotalHashes,
         TimeStart = timeStart ?? TimeStart, EstimatedStop = EstimatedStop, Devices = devices ?? Devices,
     };

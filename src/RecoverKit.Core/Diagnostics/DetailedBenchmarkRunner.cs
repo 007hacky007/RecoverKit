@@ -287,6 +287,8 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         return new[] { reserve, Math.Min(best, limit) }.Distinct().Take(2).ToArray();
     }
 
+    internal static readonly int[] HybridModes = [13000, 17210, 12500, 13600, 22000];
+
     private void AddHybridSteps(DiagnosticPlan plan, HashcatTool local, DiagnosticReport report, CancellationToken ct)
     {
         int limit = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
@@ -295,7 +297,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         // Reserve current and preferred backends, each with/without integrated GPUs. Choices resolve after GPU timings.
         int groupSlots = allGroups.Count * 2;
         // RAR 3 shows how the GPU and the processor share its work (the GPU alone, the CPU alone, both).
-        foreach (int mode in new[] { 13000, 17210, 12500 })
+        foreach (int mode in HybridModes)
         {
             List<List<BackendDevice>>? groups = null;
             string[]? mask = null;
@@ -313,8 +315,9 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 if (mode == 17210) gpu = report.Measurements.Where(r => r.Section == "zip" && r.Mode == mode && r.Target.Contains("17 bytes") && r.Correct).Select(r => r.Speed).DefaultIfEmpty(gpu).Max();
                 if (cpu <= 0) cpu = NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode])?.SpeedHint * limit ?? 1000;
                 if (gpu <= 0) gpu = cpu * 2;
-                mask = Thorough ? ["-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", mode is 13000 or 12500 ? 5 : 9))]
-                    : FiniteDiagnosticWorker.SizedMask(cpu + gpu, 12);
+                mask = Thorough && mode is not (13600 or 22000)
+                    ? ["-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", mode is 13000 or 12500 ? 5 : 9))]
+                    : FiniteDiagnosticWorker.SizedMask(cpu + gpu, 12, mode == 22000 ? 8 : 1);
             });
             int workerSlots = Thorough ? 4 : 2;
             for (int groupIndex = 0; groupIndex < groupSlots; groupIndex++)
@@ -343,7 +346,8 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                         row.Details["Metric"] = "complete candidates / whole-job elapsed";
                         row.Details["Finite"] = "true";
                         row.Details["Adaptive sampling"] = (!Thorough).ToString();
-                        row.Details["Default"] = (gi == 0 && (settings.HybridCpuGpu ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
+                        bool hybridDefault = settings.HybridCpuGpu && (mode is not (13600 or 22000) || settings.PerformanceStrategyExplicit);
+                        row.Details["Default"] = (gi == 0 && (hybridDefault ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
                         rows.Add(row);
                         report.Measurements.Add(row);
                     }, () => Available() && (rep == 1 || Thorough || DiagnosticPlan.Contender(rows.FirstOrDefault(r => r.Engine == (Count() == 0 ? "gpu" : Count() < 0 ? "cpu" : "hybrid") && r.Threads == (Count() < 0 ? limit : Count()))?.Speed ?? 0, rows.Select(r => r.Speed))), conditional: !Thorough && (rep == 2 || gi > 0));

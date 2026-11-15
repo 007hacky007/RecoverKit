@@ -60,6 +60,20 @@ public class DiagnosticPlanTests
         }
     }
     [Fact]
+    public void WpaFiniteComparisonsUseLegalLengthsWithoutGrowingTheKeyspace()
+    {
+        foreach (double speed in new[] { 5000d, 20000, 3e9 })
+        {
+            var ordinary = RecoverKit.Core.Native.MaskSpace.FromHashcatArgs(FiniteDiagnosticWorker.SizedMask(speed, 12))!;
+            var wpa = RecoverKit.Core.Native.MaskSpace.FromHashcatArgs(FiniteDiagnosticWorker.SizedMask(speed, 12, 8))!;
+            Assert.InRange(wpa.MinLength, 8, 63);
+            Assert.Equal(ordinary.TotalKeyspace, wpa.TotalKeyspace);
+        }
+        Assert.Contains(13600, DetailedBenchmarkRunner.HybridModes);
+        Assert.Contains(22000, DetailedBenchmarkRunner.HybridModes);
+    }
+
+    [Fact]
     public void AdaptiveSelectionConfirmsWinnerButDoesNotRepeatClearLoser()
     {
         DiagnosticMeasurement Row(string variant, double speed, int repeat) => new()

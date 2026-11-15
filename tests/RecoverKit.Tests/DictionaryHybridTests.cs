@@ -161,6 +161,36 @@ public class DictionaryHybridTests
     }
 
     [Fact]
+    public async Task WpaInvalidFinalLengthsAreDoneWithoutGpuReplay()
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-wpa-reject").FullName;
+        try
+        {
+            int exported = 0;
+            var dictionary = new DictionaryAttack(["-a", "0", "unused"])
+            {
+                BaseCount = 300, AmplifierCount = 3,
+                ReadCandidates = (_, count, _) =>
+                {
+                    Interlocked.Add(ref exported, (int)count);
+                    return Task.FromResult(Enumerable.Range(0, (int)count).SelectMany(_ => new[]
+                        { "shortpw"u8.ToArray(), "wrongone"u8.ToArray(), new byte[64] }).ToList());
+                },
+            };
+            var seen = new ConcurrentDictionary<string, int>();
+            var gpu = new Gpu(seen);
+            var kernel = WpaKernel.TryParse(NativeKernels.BenchmarkHashes[22000])!;
+            var result = await Runner().RunAsync(new HybridPlan(kernel, null) { Dictionary = dictionary },
+                NativeKernels.BenchmarkHashes[22000], Request(dir) with { Mode = 22000 }, gpu, CancellationToken.None);
+            Assert.Equal(RunOutcome.Exhausted, result.Outcome);
+            Assert.True(exported > 0);
+            Assert.Equal(0, gpu.DeferredLineCount);
+            Assert.Equal(900, result.LastStatus!.ProgressDone);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public async Task IncompatibleCandidatesAreDeferredWithoutRetiringTheCpu()
     {
         string dir = Directory.CreateTempSubdirectory("rk-dict-incompatible").FullName;

@@ -8,7 +8,8 @@ namespace RecoverKit.Core.Attacks;
 /// <summary>A saved ordinary attack step, including the inputs needed to reproduce its dictionary.</summary>
 public sealed class DictionaryKernelPass
 {
-    public bool Optimized { get; set; }
+    public bool? Optimized { get; set; }
+    public List<int>? Modes { get; set; }
     public int Pass { get; set; }
     public List<string>? Arguments { get; set; }
     public long Words { get; set; }
@@ -18,6 +19,15 @@ public sealed class DictionaryKernelPass
     public int Threshold { get; set; }
     public string? TailPath { get; set; }
     public string? TailHash { get; set; }
+    public bool RuleExpanded { get; set; }
+    public bool StreamRules { get; set; }
+    public long SelectedWords { get; set; }
+    public string? RuleInputPath { get; set; }
+    public string? RuleInputHash { get; set; }
+    public bool ManagedWords { get; set; }
+    public int InputMinimum { get; set; }
+    public int InputMaximum { get; set; }
+    public int Minimum { get; set; }
 }
 
 internal static class DictionaryKernelPlanner
@@ -43,29 +53,64 @@ internal static class DictionaryKernelPlanner
             {
                 ct.ThrowIfCancellationRequested();
                 var spec = state.Steps[i];
-                if (spec.Kind != AttackKind.Dictionary || state.Modes.Count != 1)
+                if (spec.Kind != AttackKind.Dictionary || state.Modes.Count == 0)
                 { steps.Add(spec); continue; }
                 int mode = state.Modes[0];
                 var effective = profile is null ? settings : ProfileSettings.ForAttack(settings, profile, devices ?? [], mode, 0, target.HashLines, maskAttack: false);
-                if (!effective.OptimizedKernels || effective.PerformanceChoice?.Optimized == false || effective.GpuPerformanceChoice?.Optimized == false
-                    || !string.IsNullOrWhiteSpace(effective.ExtraArguments))
+                if (!string.IsNullOrWhiteSpace(effective.ExtraArguments))
                 { steps.Add(spec); continue; }
                 PreparedAttack attack;
                 try { attack = AttackPlanner.Prepare(spec, target, context, _ => 0); }
                 catch (AttackPlanException) { steps.Add(spec); continue; }
-                if (attack.Stdin is not null || attack.Args.Count < 3 || attack.Args[0] != "-a" || attack.Args[1] != "0"
-                    || !RecoverySession.OptimizedDictionaryBackendAllowed(mode, attack, effective, devices, OperatingSystem.IsMacOS()))
+                bool managedRules = attack.Stdin is not null && attack.Args.Count >= 4
+                    && attack.Args[0] == "-a" && attack.Args[1] == "0" && attack.Args[2] == "-r";
+                if (managedRules)
+                {
+                    var converted = new PreparedAttack { Description = attack.Description, Stdin = attack.Stdin };
+                    converted.Args.AddRange(["-a", "0", AttackPlanner.ResolveDictionary(spec.Dictionaries[0], context)!]);
+                    converted.Args.AddRange(attack.Args.Skip(2));
+                    attack = converted;
+                }
+                if (attack.Stdin is not null && !managedRules || attack.Args.Count < 3 || attack.Args[0] != "-a" || attack.Args[1] != "0")
                 { steps.Add(spec); continue; }
-                var info = await tool.ModeInfoAsync(mode, 0, ct);
-                if (info is not { HasOptimizedKernel: true, OptimizedPasswordLenMax: > 0 })
-                { steps.Add(spec); continue; }
-                var (pure, optimized) = Rates(mode, effective);
+                var infos = new List<HashModeInfo>();
+                foreach (int candidateMode in state.Modes)
+                    if (await tool.ModeInfoAsync(candidateMode, 0, ct) is { } candidateInfo) infos.Add(candidateInfo);
+                var info = infos.FirstOrDefault();
                 string tail = Path.Combine(settings.SessionsDir, $"{state.Key}.dictionary-{i}.txt");
+                int firstPass = steps.Count;
+                var rescued = new List<AttackSpec>();
+                foreach (var group in infos.GroupBy(info => (info.PasswordLenMin, info.PasswordLenMax)))
+                {
+                    var bounds = group.First();
+                    if (await RuleLengthPassAsync(spec, attack, bounds, tool, tail + $".rules-{bounds.Mode}", log, ct) is not { } extra) continue;
+                    extra.DictionaryKernel!.Modes = group.Select(info => info.Mode).ToList();
+                    rescued.Add(extra);
+                }
+                void AddRescued()
+                {
+                    if (rescued.Count == 0) return;
+                    var rescuePass = rescued[0].DictionaryKernel!;
+                    // Validate the original pass too, before it can advance the saved session.
+                    foreach (var step in steps.Skip(firstPass).Where(s => s.DictionaryKernel?.Source is null))
+                    {
+                        step.DictionaryKernel ??= new DictionaryKernelPass();
+                        step.DictionaryKernel.Source = rescuePass.Source;
+                        step.DictionaryKernel.Rules = rescuePass.Rules;
+                    }
+                    steps.AddRange(rescued);
+                }
+                if (managedRules || state.Modes.Count != 1 || info is not { HasOptimizedKernel: true, OptimizedPasswordLenMax: > 0 }
+                    || !effective.OptimizedKernels || effective.PerformanceChoice?.Optimized == false || effective.GpuPerformanceChoice?.Optimized == false
+                    || !RecoverySession.OptimizedDictionaryBackendAllowed(mode, attack, effective, devices, OperatingSystem.IsMacOS()))
+                { steps.Add(spec.Clone()); AddRescued(); continue; }
+                var (pure, optimized) = Rates(mode, effective);
                 double hybrid = 0;
                 if (Native.HybridRunner.Plan(mode, target.HashLines, attack, effective, devices, target.VolumeCredentials, target.ZipPartial) is { Dictionary: not null } plan)
                     hybrid = pure + (effective.CpuSpeedByMode.TryGetValue(mode, out var cpu) && cpu > 0 ? cpu
                         : plan.Kernel.SpeedHint * Native.HybridRunner.CpuThreads(effective, devices, hashcatRunning: true));
                 steps.AddRange(await PlanAsync(spec, attack, info.OptimizedPasswordLenMax.Value, pure, optimized, tail, log, ct, hybridRate: hybrid));
+                AddRescued();
             }
             state.Steps = steps;
             state.DictionaryPlanPending = false;
@@ -74,22 +119,28 @@ internal static class DictionaryKernelPlanner
 
     }
 
-    public static async Task PreparePassAsync(DictionaryKernelPass? pass, Action<string>? log, CancellationToken ct, string? extraArguments = null)
+    public static async Task PreparePassAsync(DictionaryKernelPass? pass, Action<string>? log, CancellationToken ct, string? extraArguments = null, HashcatTool? tool = null)
     {
         if (pass?.Source is null) return;
         if (!string.IsNullOrWhiteSpace(extraArguments))
             throw new InvalidDataException("Extra hashcat arguments changed. Start a new attack instead of resuming these saved dictionary passes.");
         ValidateInputs(pass);
-        if (pass.TailPath is { } tail)
+        if (pass.RuleExpanded)
         {
-            if (!File.Exists(tail) || await HashAsync(tail, ct) != pass.TailHash)
-            {
-                log?.Invoke("Rebuilding the saved long-word dictionary ...");
-                await Task.Run(() => WriteTail(pass, ct), ct);
-                if (await HashAsync(tail, ct) != pass.TailHash) throw new InvalidDataException("The saved long-word dictionary could not be rebuilt identically.");
-            }
+            await RuleRescue.PrepareAsync(pass, tool, log, ct);
+            return;
+        }
+        if (pass.TailPath is { } tail && (!File.Exists(tail) || await HashAsync(tail, ct) != pass.TailHash))
+        {
+            log?.Invoke("Rebuilding the saved long-word dictionary ...");
+            await Task.Run(() => WriteTail(pass, ct), ct);
+            if (await HashAsync(tail, ct) != pass.TailHash) throw new InvalidDataException("The saved long-word dictionary could not be rebuilt identically.");
         }
     }
+
+    internal static Task<AttackSpec?> RuleLengthPassAsync(AttackSpec spec, PreparedAttack attack, HashModeInfo info,
+        HashcatTool tool, string tailPath, Action<string>? log, CancellationToken ct)
+        => RuleRescue.PlanAsync(spec, attack, info, tool, tailPath, log, ct);
 
     internal static (double Pure, double Optimized) Rates(int mode, Settings settings)
     {
@@ -108,7 +159,7 @@ internal static class DictionaryKernelPlanner
         AttackSpec Pure()
         {
             var copy = spec.Clone();
-            copy.DictionaryKernel = new DictionaryKernelPass();
+            copy.DictionaryKernel = new DictionaryKernelPass { Optimized = false };
             return copy;
         }
         var rulePaths = new List<string>();
@@ -182,13 +233,13 @@ internal static class DictionaryKernelPlanner
         return file.Length / (200.0 * 1024 * 1024) < words * rules / pureRate * 0.05;
     }
 
-    private static void ValidateInputs(DictionaryKernelPass pass)
+    internal static void ValidateInputs(DictionaryKernelPass pass)
     {
         if (pass.Source?.Matches() != true || pass.Rules.Any(s => !s.Matches()))
             throw new InvalidDataException("A dictionary or rules file changed. Start a new attack instead of resuming these saved dictionary passes.");
     }
 
-    private static async Task<string> HashAsync(string path, CancellationToken ct)
+    internal static async Task<string> HashAsync(string path, CancellationToken ct)
     {
         using var file = File.OpenRead(path);
         return Convert.ToHexString(await SHA256.HashDataAsync(file, ct));

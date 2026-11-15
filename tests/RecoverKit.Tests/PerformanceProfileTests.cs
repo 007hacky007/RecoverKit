@@ -63,6 +63,12 @@ public class PerformanceProfileTests
         Assert.False(PerformanceProfiles.ShouldCalibrate(new Settings{AutomaticPerformanceCalibration=false},17210,100_000_000,1000));
     }
 
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public void HashcatDefaultsDoNotPayForUnusedCpuCalibration(int mode)
+        => Assert.False(PerformanceProfiles.ShouldCalibrate(new Settings(), mode, 100_000_000, 1000));
+
     [Fact]
     public void SameVariantWithinNoiseKeepsExactDefaultWorkerCount()
     {

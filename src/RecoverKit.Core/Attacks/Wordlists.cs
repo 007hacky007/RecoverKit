@@ -88,13 +88,14 @@ public static class Wordlists
         return lines;
     }
 
-    public static IEnumerable<string> ReadWords(string path, int minLen = 0, int maxLen = 0)
+    public static IEnumerable<string> ReadWords(string path, int minLen = 0, int maxLen = 0, CancellationToken ct = default)
     {
         var enc = EncodingFor(Detect(path));
         using var r = new StreamReader(path, enc, detectEncodingFromByteOrderMarks: true, bufferSize: 1 << 20);
         string? line;
         while ((line = r.ReadLine()) is not null)
         {
+            ct.ThrowIfCancellationRequested();
             if (line.Length == 0) continue;
             int len = Charsets.RuneCount(line);
             if (minLen > 0 && len < minLen) continue;

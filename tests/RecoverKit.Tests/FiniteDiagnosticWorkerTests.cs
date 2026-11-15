@@ -8,6 +8,21 @@ namespace RecoverKit.Tests;
 
 public sealed class FiniteDiagnosticWorkerTests
 {
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public async Task Sha1ModesReachTheWorkerDeviceCheck(int mode)
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-finite-mode-").FullName;
+        try
+        {
+            var request = FiniteDiagnosticWorker.BuildRequest("unused", new Settings(), [], mode, 0, 8, 1);
+            var result = await FiniteDiagnosticWorker.RunJobAsync(request, dir);
+            Assert.Contains("no eligible GPU", result.Error);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public void LiveRatesSurviveFinalIdleStatus()
     {

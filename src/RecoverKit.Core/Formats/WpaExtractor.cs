@@ -84,7 +84,7 @@ public static class WpaExtractor
             HashLines = string.Join('\n', lines.Distinct()),
             Speed = SpeedClass.Slow,
             MaxPasswordLength = 63,
-            Notes = "WPA passphrases are 8 to 63 characters long; shorter candidates are skipped by hashcat.",
+            Notes = "WPA passphrases are 8 to 63 bytes long. Dictionary rules can shorten or extend words up to 256 bytes; longer words are skipped.",
         };
     }
 
