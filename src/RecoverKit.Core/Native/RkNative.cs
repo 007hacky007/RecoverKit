@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 13;
+    private const int RequiredVersion = 15;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -21,6 +21,15 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_rar3_hash")]
     public static partial int Rar3Hash(byte* salt, byte* passwords, int len, int n, byte* out36);
+
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_decode_stream")]
+    public static partial int Rar3DecodeStream(delegate* unmanaged[Cdecl]<nint, byte*, int, int> read,
+        nint opaque, ulong packed, ulong unpacked, uint window, uint expectedCrc, int* stage);
+
+    [LibraryImport(Lib, EntryPoint = "rk_rar3_decode_stream_alloc")]
+    public static partial int Rar3DecodeStreamAlloc(delegate* unmanaged[Cdecl]<nint, byte*, int, int> read,
+        nint opaque, ulong packed, ulong unpacked, uint window, uint expectedCrc, int* stage,
+        delegate* unmanaged[Cdecl]<nint, nuint, void*> alloc);
 
     /// <summary>Candidates per RAR 3 batch: 32 AVX-512, 16 AVX2/NEON, 1 scalar. Runs the wide-path self-test once.</summary>
     [LibraryImport(Lib, EntryPoint = "rk_rar3_lanes")]

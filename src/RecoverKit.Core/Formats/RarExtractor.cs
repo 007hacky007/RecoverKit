@@ -146,7 +146,8 @@ public static class RarExtractor
             return;
         }
 
-        Rar3Entry? best = null;
+        Rar3Entry? best = null, large = null;
+        var unsupported = new HashSet<string>();
         bool encrypted = false;
         long p = pos + size;
         for (int guard = 0; p < s.Length; guard++)
@@ -184,13 +185,28 @@ public static class RarExtractor
                 {
                     encrypted = true;
                     int method = bh[25];
-                    // hashcat 7.1.2 limits the ciphertext hex token to 655056 characters.
-                    bool usable = (bflags & 0x13) == 0 && (bflags & 0xe0) != 0xe0 &&
+                    // The hex token limit is stricter than hashcat's 327,680-byte packed buffer.
+                    bool complete = (bflags & 0x13) == 0 && (bflags & 0xe0) != 0xe0 &&
                         (bflags & 0x400) != 0 && bh[24] is >= 29 and <= 36 &&
                         method is >= 0x30 and <= 0x35 &&
-                        packed is > 0 and <= 327528 && packed % 16 == 0 &&
-                        unpacked is > 0 and <= 655360 &&
+                        packed is > 0 and <= long.MaxValue && packed % 16 == 0 &&
+                        unpacked is > 0 and <= long.MaxValue &&
                         (method != 0x30 || packed == ((unpacked + 15) & ~15UL));
+                    bool usable = complete && packed <= 327520 && unpacked <= 655360;
+                    if (complete && !usable && (large is null || packed < (ulong)large.Packed ||
+                        packed == (ulong)large.Packed && unpacked < (ulong)large.Unpacked))
+                        large = new Rar3Entry(p + bsize, (long)packed, (long)unpacked, method,
+                            Bin.Slice(bh, saltOffset, 8), Bin.Slice(bh, 16, 4), 65536 << ((bflags >> 5) & 7));
+                    if (!complete)
+                    {
+                        if ((bflags & 3) != 0) unsupported.Add("split entries need all archive volumes");
+                        else if ((bflags & 0x10) != 0) unsupported.Add("solid entries depend on earlier files");
+                        else if ((bflags & 0xe0) == 0xe0) unsupported.Add("the encrypted entry is a directory");
+                        else if ((bflags & 0x400) == 0) unsupported.Add("the encrypted entry has no salt");
+                        else if (bh[24] is < 29 or > 36) unsupported.Add($"encryption version {bh[24]} is unsupported");
+                        else if (method is < 0x30 or > 0x35) unsupported.Add($"compression method 0x{method:x2} is unsupported");
+                        else unsupported.Add("the encrypted entry has damaged or inconsistent sizes");
+                    }
                     // Tiny entries provide weak CRC checks; prefer enough data to reject false passwords.
                     if (usable && (best is null ||
                         (unpacked >= 8 && best.Unpacked < 8) ||
@@ -198,8 +214,8 @@ public static class RarExtractor
                         ((method == 0x30 && best.Method != 0x30) ||
                          (method == 0x30) == (best.Method == 0x30) && packed < (ulong)best.Packed)))
                     {
-                        best = new Rar3Entry(p + bsize, (int)packed, (int)unpacked, method,
-                            Bin.Slice(bh, saltOffset, 8), Bin.Slice(bh, 16, 4));
+                        best = new Rar3Entry(p + bsize, (long)packed, (long)unpacked, method,
+                            Bin.Slice(bh, saltOffset, 8), Bin.Slice(bh, 16, 4), 65536 << ((bflags >> 5) & 7));
                     }
                 }
             }
@@ -209,7 +225,7 @@ public static class RarExtractor
         if (encrypted) d.Add("Encrypted file names", "no");
         if (best is not null)
         {
-            var data = Bin.ReadAt(s, best.Offset, best.Packed);
+            var data = Bin.ReadAt(s, best.Offset, (int)best.Packed);
             d.Target = new HashTarget
             {
                 FormatId = "RAR3",
@@ -225,11 +241,37 @@ public static class RarExtractor
             };
             return;
         }
+        if (large is not null)
+        {
+            string speed = large.Method == 0x30
+                ? "Stored files require reading the whole file for every password. As an example from one machine, a 10-thread M1 Pro checked roughly 1,700 passwords per second for a 640 KiB file; larger files are slower. "
+                : "As an example from one machine, a 10-thread M1 Pro checked roughly 3,000 short passwords per second; your speed depends on the processor and other work running. ";
+            string notes = "hashcat can check only files up to 327,680 packed bytes (327,520 after its text parser limit) " +
+                "and 655,360 unpacked bytes. This archive's complete, supported encrypted files are all larger. " +
+                "RecoverKit therefore checks passwords on the processor without the graphics card. " +
+                speed +
+                (large.Method == 0x30 ? "" : "Compressed checks share up to 256 MiB of working memory, retained until RecoverKit closes, " +
+                    "plus about 6 MiB per processor thread. With 10 threads, allow about 320 MiB plus the application's usual memory. " +
+                    "If memory runs short, the same password is retried until memory is available or recovery is stopped. ") +
+                "Recovers the password for one encrypted file. Other files may use different passwords.";
+            var entry = new Rar3FileTarget(d.FilePath, large.Offset, large.Packed, large.Unpacked,
+                large.Method, large.DictionarySize, large.Salt, Bin.U32(large.Crc, 0));
+            var first = Bin.ReadAt(s, large.Offset, (int)Math.Min(64, large.Packed));
+            var last = Bin.ReadAt(s, large.Offset + large.Packed - 16, 16);
+            d.Target = new HashTarget
+            {
+                FormatId = "RAR3", FormatName = "RAR 3.x archive", Protection = "AES-128, SHA-1 x 262144",
+                Modes = [], Rar3File = entry,
+                HashLines = $"$RK-RAR3$*{large.Offset}*{large.Packed}*{large.Unpacked}*{large.Method:x2}*{large.DictionarySize}*{Bin.Hex(large.Salt)}*{Bin.Hex(large.Crc)}*{Bin.Hex(first)}*{Bin.Hex(last)}",
+                Speed = SpeedClass.VerySlow, MaxPasswordLength = 128, Utf16Password = true, Notes = notes,
+            };
+            d.Add("Password recovery", notes);
+            return;
+        }
         d.Message = encrypted
-            ? "No usable encrypted RAR 3.x file found. Recovery needs a complete, salted RAR 3.x entry " +
-              "that does not depend on earlier solid files, with at most 327,520 encrypted bytes and 655,360 unpacked bytes."
+            ? "No usable encrypted RAR 3.x file found: " + string.Join("; ", unsupported) + "."
             : "Archive is not password protected.";
     }
 
-    private sealed record Rar3Entry(long Offset, int Packed, int Unpacked, int Method, byte[] Salt, byte[] Crc);
+    private sealed record Rar3Entry(long Offset, long Packed, long Unpacked, int Method, byte[] Salt, byte[] Crc, int DictionarySize);
 }

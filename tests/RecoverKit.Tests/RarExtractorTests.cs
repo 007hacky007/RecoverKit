@@ -187,8 +187,10 @@ public class RarExtractorTests
     public void EnforcesHashcatSizeBoundaries(int packed, int unpacked, bool usable)
     {
         var d = Extract(Archive(Entry(Compressed, packed: packed, unpacked: unpacked)));
-        Assert.Equal(usable, d.Target is not null);
-        if (!usable) Assert.Contains("encrypted", d.Message!);
+        Assert.NotNull(d.Target);
+        Assert.Equal(usable, d.Target.Rar3File is null);
+        Assert.Equal(usable ? [23800] : Array.Empty<int>(), d.Target.Modes);
+        if (!usable) Assert.Contains("processor", d.Target.Notes!);
     }
 
     [Theory]
@@ -201,7 +203,7 @@ public class RarExtractorTests
         if (highOffset == 32)
             Assert.Throws<FormatException>(() => Extract(Archive(entry)));
         else
-            Assert.Null(Extract(Archive(entry)).Target);
+            Assert.Equal((1L << 32) + 13, Extract(Archive(entry)).Target!.Rar3File!.UnpackedLength);
     }
 
     [Theory]

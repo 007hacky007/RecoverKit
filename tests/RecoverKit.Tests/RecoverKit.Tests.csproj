@@ -29,6 +29,7 @@
     <ProjectReference Include="..\..\src\RecoverKit.Core\RecoverKit.Core.csproj" />
     <None Update="Fixtures\SevenZip\*.7z" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="Fixtures/KeePass/*" />
+    <EmbeddedResource Include="Fixtures/Rar3Kdf/*.rar" />
     <EmbeddedResource Include="Fixtures/android-v*.ab" />
     <EmbeddedResource Include="Fixtures/Access/*.bin" />
     <EmbeddedResource Include="Fixtures/Word/*" />
@@ -37,6 +38,7 @@
     <EmbeddedResource Include="Fixtures/Office/*" />
     <EmbeddedResource Include="Fixtures/Pdf/*.pdf" />
     <EmbeddedResource Include="Fixtures/OfficeXor/*" />
+    <EmbeddedResource Include="Fixtures/Rar3/*.gz" />
   </ItemGroup>
 
 </Project>
