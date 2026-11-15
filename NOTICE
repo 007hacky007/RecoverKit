@@ -40,9 +40,11 @@ license
   https://pypi.org/project/nvidia-cuda-nvrtc-cu12/ - NVIDIA CUDA Toolkit End User License Agreement
   (https://docs.nvidia.com/cuda/eula/index.html). Downloaded from PyPI on request, not bundled.
 
-LZMA metadata decoder (built in)
+LZMA streaming and metadata decoder (built in)
   src/RecoverKit.Core/Formats/SevenZipLzma.cs adapts the LZMA1 decoder from Igor Pavlov's
   LZMA SDK 23.01 (https://www.7-zip.org/sdk.html), placed in the public domain.
+  LZMA2 controls follow the public-domain Lzma2Dec.c (2024-03-01) from the same SDK.
+  RecoverKit adds reusable bounded dictionary history and incremental output.
 
 Access test fixtures (test data only)
   tests/RecoverKit.Tests/Fixtures/Access/*.bin contain header-page excerpts from Jackcess

@@ -1050,21 +1050,88 @@ notes are taken from it, and the release job fails if the section is missing.
   XOR workbook and independently obfuscated real Word/BIFF5 files. Headless LibreOffice 26.2.4.2
   reopened the recovered passwords and checked document text and worksheet cells against the sources.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
-  and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
+  and [hashcat 8.0.0 module 11600](https://github.com/hashcat/hashcat/blob/v8.0.0/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
   a 16 MiB output limit and a bounded decoder adapted from the public-domain LZMA SDK 23.01.
   No installed 7-Zip or new package is needed. Folder bindings and substream CRCs select the
   smallest compatible encrypted stream (or a prefix of a solid folder). LZMA solid prefixes
   combine adjacent substream CRCs until hashcat's CRC-length-based estimate decrypts the full
   encrypted stream, avoiding silent verification failures from under-reading compressed input.
-  Prefixes that cannot meet that condition are skipped. Hashcat
+  A large solid block can also use a bounded packed prefix. Adjacent file CRCs, including empty
+  files, are combined until the checked prefix covers at least eight bytes; shorter checks never
+  go to hashcat. Every hashcat hit also passes the CPU kernel's streaming verification through
+  `ConfirmPassword` and `--keep-guessing`. Hashcat 11600 does not check AES zero padding, so tiny
+  standalone Copy files use the CPU's padding plus CRC check instead. Hashcat
   accepts Copy, LZMA1, LZMA2 and Deflate without filters, with an empty AES salt. Encrypted data
   is limited to 8 MiB and decompressed CRC input to 9,999,999 bytes; compressed hashes also need
   space for their suffix within the module's input limit. NumCyclesPower above 24 is refused,
-  matching the reference extractor's practical limit. Split volumes must be joined manually;
-  SFX signature searches cover the first 4 MiB. Real fixtures were created with 7zz 26.03 and
+  matching the reference extractor's practical limit. When no stream fits hashcat, a
+  `SevenZipCpuTarget` with no hashcat mode uses the built-in CPU engine. `SevenZipKernel` derives
+  the AES key with managed `IncrementalHash` SHA-256, feeding 64 KiB batches of complete
+  salt/password/counter records. The slower native 7z KDF was removed; native API 11 remains
+  unchanged. It checks the first LZMA/LZMA2 bytes, any zero AES padding, and a short trial
+  decode before streaming decryption, decompression and CRC32 over the selected decoded prefix.
+  Exhausting a trial prefix is inconclusive. A solid block starting with fewer than eight bytes combines
+  adjacent substream CRCs until it has enough evidence. Shorter CPU checks are refused except
+  for tiny Copy files with at least eight bytes of verified zero padding.
+  Copy has no stream header filter and, without padding, must read
+  the whole checked file for every candidate. Copy and Deflate full checks run in parallel;
+  LZMA/LZMA2 share one full decode per target behind a cancellable gate, reusing history and
+  probability models across workers and candidates. CRC32 uses ARM's IEEE CRC32 instructions
+  when available, with a managed slice-by-8 fallback (never x86's CRC-32C instructions).
+  History grows to the smaller of the dictionary and checked output length, rounded to 64 KiB
+  pages. A 1536 MiB dictionary can therefore need 1536 MiB for one full check, but not per thread.
+  Each worker reuses a 64 KiB KDF buffer and a trial history page; probability models need up to
+  28 KiB for LZMA2 or 6 MiB for extreme LZMA1 literal properties. Stream buffers stay bounded.
+  Target notes show the selected stream's maximum history use and its actual hashcat refusal
+  reasons, including solid-prefix and compressed-token limits below or at 8 MiB. Packed, unpacked
+  and substream sizes above the signed 64-bit stream range are rejected as malformed metadata.
+  LZMA2 control 1 resets the dictionary and requires new properties/state; control 2 preserves
+  them. All 256 controls are checked at each SDK initialization level. LZMA1 uses the SDK's
+  minimum 4096-byte dictionary. Copy, LZMA, LZMA2 and Deflate are supported;
+  PPMd, BZip2, BCJ/filter chains, salted extraction and direct-key mode remain unsupported.
+  Brute-force and ASCII masks use `NativeRunner`; plain dictionaries use bounded parallel batches.
+  Stop checks cover the KDF, waiting for the decode gate and streaming output. Worker cancellation
+  also stops queued or active checks after a confirmed winner. Independent confirmation ignores
+  winner cancellation. A hit from this exact `SevenZipKernel` worker has already passed its full
+  CRC check, so `NativeEngine` skips its repeated `Verify`; other kernels and additional
+  confirmation callbacks still run their checks. Resume replays unfinished prefixes/batches and
+  refuses changed dictionaries. Rules, combinations and extra hashcat options are refused before
+  starting an engine. CPU targets bypass hashcat, GPU calibration and GPU power controls; the CLI
+  does not locate or install hashcat for these targets.
+  Split archives are read across their numbered parts; SFX signature searches cover the first 4 MiB.
+  Real fixtures were created with 7zz 26.03 and
   p7zip 17.05 using password `kit7`; extraction was compared with 7z2john and verified with
-  bundled hashcat 7.1.2. The default tests perform no KDF or cracking work.
+  bundled hashcat 8.0.0. CPU tests lower `SevenZipExtractor.TestDataLimit` to reuse these small
+  fixtures. Generated-stream tests use installed `7zz` when available and otherwise report a skip.
+  Generated mixed text/random/text tests cover normal/high compression, a 64 KiB dictionary,
+  alternate literal properties and multiple compression threads. A CPU-only Slow test creates
+  a real 14 MiB mixed input with default 7zz settings and verifies the resulting oversized stream.
+  `SevenZipCpuSpeedTests` contains CPU-only Slow tests for repeated rates, KDF batch sizes and
+  filter counts; run with `--filter FullyQualifiedName~SevenZipCpuSpeedTests`.
+  On an M1 Pro, generated 14 MiB mixed text/random/text targets at NumCyclesPower 19 with
+  seven-byte candidates measured the following rates in six three-second repeats across two
+  runs under concurrent machine load. The active CRC path was .NET's ARM IEEE CRC32 intrinsic; the KDF
+  was managed `IncrementalHash` SHA-256. No native library or GPU kernel was used for 7z.
+
+  | Codec | One thread (passwords/s) | Ten threads (passwords/s) | KDF share, ten threads |
+  | --- | ---: | ---: | ---: |
+  | Copy, no AES padding | 79.0-96.3 | 527.8-703.6 | 44.09-54.58% |
+  | LZMA | 182.2-186.6 | 1052.0-1340.7 | 98.81-99.09% |
+  | LZMA2 | 180.3-185.5 | 1075.4-1249.1 | 98.52-99.09% |
+  | Deflate | 177.5-184.2 | 644.3-1098.3 | 98.74-99.25% |
+
+  Unpadded Copy must decrypt and CRC all 14 MiB for every guess; its scheduling estimate includes
+  checked size at about 2 GB/s per thread, plus the KDF, rather than scaling only with KDF rounds.
+  Notes give codec-specific examples from this machine, not a promise for other CPUs or sizes.
+  Across both runs' 32,768 random wrong keys on no-padding streams, LZMA rejected 32,665 at
+  the header and 103 at trial decode; LZMA2 rejected 32,621 at the header, 22 at trial decode
+  and 125 at CRC; Deflate rejected 32,614 at trial decode and 154 at CRC. Copy required CRC
+  for all 32,768 keys. There
+  were no wrong matches. The existing generated-stream tests exercise the filters with right
+  keys over multiple sizes and compression properties, including trial-prefix exhaustion.
+  The solid-prefix regression also emulates hashcat's Copy CRC check on 100,000 random keys
+  after combining empty/tiny files into an eight-byte prefix, with no matches.
 - KeePass extraction implements hashcat 7.1.2 modes 13400 (KDB, KDBX 2/3) and 34300
   (KDBX 4 Argon2d/Argon2id). Mode 34300 hard-codes a 253-byte header in both its tokenizer
   and HMAC kernel; headers of other lengths and AES-KDF are rejected. Header SHA-256 is

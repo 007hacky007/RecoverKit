@@ -36,6 +36,9 @@ public sealed class HashTarget
     /// <summary>The archive entry used for full confirmation when the GPU receives only a prefix.</summary>
     public ZipPartialTarget? ZipPartial { get; init; }
 
+    /// <summary>A large 7z stream for the built-in CPU engine; these targets have no hashcat modes.</summary>
+    public SevenZipCpuTarget? SevenZipCpu { get; init; }
+
     /// <summary>
     /// A second check for candidates that passed the hash: a password is reported (or taken from the
     /// password cache) only when this also returns true for its bytes. Set for ZIP archives whose other

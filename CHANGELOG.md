@@ -6,27 +6,39 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- 7-Zip archives whose encrypted files are all too large for hashcat (about 8 MB) are no longer
+  refused. 7-Zip stores a checksum only for each whole file, so RecoverKit checks such archives
+  itself on the processor, without the graphics card: wrong passwords are rejected from the first
+  bytes, and the few that pass are confirmed by unpacking the whole file. This is much slower than
+  hashcat (on an Apple M1 Pro about 1,000 passwords per second for LZMA and LZMA2, a few hundred
+  for uncompressed files); the file's details say why and how fast. Copy, LZMA, LZMA2 and Deflate
+  are supported; PPMd, BZip2, filter chains and archives with salted encryption are not.
 - An experimental AVX-512 path for TrueCrypt volumes protected with Whirlpool when the processor
-  checks passwords (Preferences), off by default until measured on more CPUs. The previous processor path remains the default. On supported CPUs the
-  quick benchmark and detailed CPU report compare both paths and report any self-test failure.
+  checks passwords (Preferences), off by default until measured on more CPUs. The previous
+  processor path remains the default. On supported CPUs the quick benchmark and detailed CPU report
+  compare both paths and report any self-test failure.
 
 ### Fixed
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
-  limit". The password is now checked against the first file of the block, so only the beginning of
-  the block is needed. An archive whose only encrypted stream is one file larger than about 8 MB is
-  still refused, because 7-Zip stores a checksum only for the whole file.
+  limit". The password is now checked against the first files of the block, so only the beginning
+  of the block is needed.
+- 7-Zip archives whose only checkable data was shorter than 8 bytes (for example a tiny file stored
+  without compression) were checked by hashcat with a checksum over those few bytes, which wrong
+  passwords can match; RecoverKit only warned that false positives were possible. Such checks now
+  cover at least 8 bytes or run on the processor, and every password hashcat reports for a 7-Zip
+  archive is confirmed by RecoverKit before it is shown.
 - Attacks that RecoverKit feeds to hashcat itself (dictionaries converted on the fly, word
   combinations, national characters) showed "0s" left and a full progress bar. They now show the
   progress and time left from the number of candidates RecoverKit sends.
 - On PCs with an AMD integrated GPU, the details log no longer shows hashcat's notes that the AMD HIP
   runtime is missing. They were harmless: such GPUs run through OpenCL. The notes stay in the debug
   log.
-
 - NVIDIA: RecoverKit now asks the driver itself for its CUDA version and uses nvidia-smi only as a
   fallback. Where nvidia-smi gave no version, a CUDA Toolkit newer than the driver was not hidden
   from hashcat, every CUDA kernel build failed and the GPU ran through OpenCL; the dependencies page
   then called the driver "too old or unknown" and offered no CUDA compiler.
+- A stopped and resumed processor attack no longer tests again work it had already finished.
 
 ### Changed
 - The speed in the status bar shows every digit ("1 382 456 789 p/s") instead of "1.38 G p/s".
@@ -41,6 +53,8 @@ All notable changes to RecoverKit. Downloads are on the
 - Benchmark results name the GPU backend that ran, CUDA, OpenCL or Metal: "Engine: hashcat, GPU
   (CUDA)". An NVIDIA GPU running through OpenCL after a failed CUDA kernel build is listed as
   OpenCL with the reason.
+- When the processor and the GPU share an attack, processor threads wait less at the end of each
+  batch.
 
 ## [1.6.1] - 2026-11-14
 
