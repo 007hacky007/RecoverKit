@@ -5,6 +5,16 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- RAR 3 archives whose encrypted files are all too large for hashcat are no longer refused (file
+  data encrypted with -p; archives with encrypted file names were never limited). RAR 3 stores a
+  checksum only for each whole file, so RecoverKit checks such archives itself on the processor,
+  without the graphics card: wrong passwords are rejected from the first bytes, and the few that
+  pass are confirmed by unpacking the whole file. This is much slower than hashcat (on an Apple M1
+  Pro about 2,500 passwords per second for compressed files, 1,600 for stored ones); the file's
+  details say why and how fast. A password that passes every check but cannot be confirmed is
+  listed as a possible password to try by hand, never as found.
+
 ### Fixed
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
