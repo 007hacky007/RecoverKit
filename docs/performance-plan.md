@@ -390,6 +390,11 @@ modes measured on both devices.
   header filter and its calibration included. Formats measured only on Metal were moved before
   their runs finished; a mode where Metal misses goes into `HashcatRunner.MetalMisses` and is
   decided on its own measurements.
+- The Metal-only run is complete: 46 modes, 995 Metal runs on 2026-11-14 and 15 (20 per mode and
+  kernel; 5 each for the old-Office and PDF 1.1-1.3 collider modes 9710, 9810 and 10410), 973 of
+  which found the password. Every mode found it in every run except the two below.
+- Ethereum scrypt (15700) ended 2 of 20 runs with hashcat's out-of-memory error (exit 252). That
+  is a reported error, not a silently skipped password, so it stays on Metal.
 - One format fails on Metal: ODF 1.1 (18600). Metal found the password from a one-word list but
   in none of 20 runs with a mask or a wordlist, again without an error; OpenCL found it in 17 of
   17. ODF 1.1 therefore runs on OpenCL (`HashcatRunner.MetalMisses`). Version 1.5.0 shipped with it
@@ -419,7 +424,7 @@ modes measured on both devices.
 
 ## Before measuring from a checkout
 
-- `native/bin` can hold a stale library. The code requires API version 11; an older library is
+- `native/bin` can hold a stale library. The code requires API version 13; an older library is
   ignored silently and the managed kernels run instead. Run `sh native/build.sh` first, and check
   the path that `bench-native` prints. CI builds the library fresh, so releases are not affected.
 - hashcat's example hash for mode 17210 has a false positive about 2 s into an 8-character `?a`
