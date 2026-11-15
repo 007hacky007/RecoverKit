@@ -5,12 +5,25 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- 7-Zip archives whose encrypted files are all too large for hashcat (about 8 MB) are no longer
+  refused. 7-Zip stores a checksum only for each whole file, so RecoverKit checks such archives
+  itself on the processor, without the graphics card: wrong passwords are rejected from the first
+  bytes, and the few that pass are confirmed by unpacking the whole file. This is much slower than
+  hashcat (on an Apple M1 Pro about 1,000 passwords per second for LZMA and LZMA2, a few hundred
+  for uncompressed files); the file's details say why and how fast. Copy, LZMA, LZMA2 and Deflate
+  are supported; PPMd, BZip2, filter chains and archives with salted encryption are not.
+
 ### Fixed
 - 7-Zip archives whose encrypted data block is larger than 8 MiB (a solid archive with large files,
   without encrypted file names) were refused with "encrypted streams larger than hashcat's 8 MiB
-  limit". The password is now checked against the first file of the block, so only the beginning of
-  the block is needed. An archive whose only encrypted stream is one file larger than about 8 MB is
-  still refused, because 7-Zip stores a checksum only for the whole file.
+  limit". The password is now checked against the first files of the block, so only the beginning
+  of the block is needed.
+- 7-Zip archives whose only checkable data was shorter than 8 bytes (for example a tiny file stored
+  without compression) were checked by hashcat with a checksum over those few bytes, which wrong
+  passwords can match; RecoverKit only warned that false positives were possible. Such checks now
+  cover at least 8 bytes or run on the processor, and every password hashcat reports for a 7-Zip
+  archive is confirmed by RecoverKit before it is shown.
 
 ## [1.6.1] - 2026-11-14
 
