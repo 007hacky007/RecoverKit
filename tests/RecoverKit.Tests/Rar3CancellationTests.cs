@@ -48,6 +48,7 @@ public sealed class Rar3CancellationTests
     private sealed class CancelOnSearch(NativeKernel kernel, CancellationTokenSource stop) : NativeKernel
     {
         public override string Name => kernel.Name;
+        public override bool StopsInsideBatch => kernel.StopsInsideBatch;
         public override double SpeedHint => kernel.SpeedHint;
         public override bool Verify(ReadOnlySpan<byte> password) => kernel.Verify(password);
         public override KernelWorker CreateWorker() => new Worker(kernel.CreateWorker(), stop);

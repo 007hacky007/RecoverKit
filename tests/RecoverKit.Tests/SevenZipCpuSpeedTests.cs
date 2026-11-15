@@ -96,6 +96,7 @@ public sealed class SevenZipCpuSpeedTests(ITestOutputHelper output)
         private readonly SevenZipKernel kernel = new(target);
         internal long KdfTicks, AllTicks, Completed;
         public override string Name => kernel.Name;
+        public override bool StopsInsideBatch => true;
         public override double SpeedHint => kernel.SpeedHint;
         public override bool Verify(ReadOnlySpan<byte> password) => kernel.Verify(password);
         public override KernelWorker CreateWorker() => new Worker(this, target, default);

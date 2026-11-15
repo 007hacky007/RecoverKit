@@ -95,6 +95,7 @@ public class SevenZipCpuTests
         internal CancellationToken WorkerToken;
         internal int VerifyCalls;
         public override string Name => inner.Name;
+        public override bool StopsInsideBatch => true;
         public override double SpeedHint => inner.SpeedHint;
         public override bool Verify(ReadOnlySpan<byte> password) { VerifyCalls++; return inner.Verify(password); }
         public override KernelWorker CreateWorker() => inner.CreateWorker();
@@ -169,6 +170,7 @@ public class SevenZipCpuTests
     {
         private readonly SevenZipKernel kernel = new(target, stop.Token);
         public override string Name => kernel.Name;
+        public override bool StopsInsideBatch => true;
         public override double SpeedHint => kernel.SpeedHint;
         public override bool Verify(ReadOnlySpan<byte> password) => kernel.Verify(password);
         public override KernelWorker CreateWorker() => new Worker(kernel.CreateWorker(), stop);

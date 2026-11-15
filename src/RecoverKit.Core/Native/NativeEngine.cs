@@ -226,6 +226,8 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
             }
             Progress?.Invoke(new NativeProgress { Length = len, Done = Math.Min(d, total), Total = total, Speed = speed, Started = started, ResumedFrom = startPrefix * last.Length });
         }
+        // A length that ends before the first check above still reports where it stands.
+        Progress?.Invoke(new NativeProgress { Length = len, Done = Math.Min(Volatile.Read(ref done), total), Total = total, Speed = speed, Started = started, ResumedFrom = startPrefix * last.Length });
         tested = Volatile.Read(ref done) - startPrefix * last.Length;
         if (failure is not null) throw new InvalidOperationException("Built-in engine kernel failed: " + failure.Message, failure);
 

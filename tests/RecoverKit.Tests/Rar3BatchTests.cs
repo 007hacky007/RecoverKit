@@ -120,6 +120,7 @@ public class Rar3BatchTests
     {
         public List<string> Candidates { get; } = [];
         public override string Name => kernel.Name;
+        public override bool StopsInsideBatch => kernel.StopsInsideBatch;
         public override double SpeedHint => kernel.SpeedHint;
         public override int PrefixBatch(int lastCount) => kernel.PrefixBatch(lastCount);
         public override bool Verify(ReadOnlySpan<byte> password) => kernel.Verify(password);
