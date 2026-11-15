@@ -1,0 +1,182 @@
+<style>
+.rk{font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:13px;color:#1b1e24;background:#f3f3f3;border:1px solid #c9ccd1;border-radius:8px;overflow:hidden;text-align:left;max-width:1180px}
+.rk *{box-sizing:border-box}
+.rk .bar{display:flex;gap:8px;align-items:center;padding:10px 12px;background:#fafafa;border-bottom:1px solid #dcdde0;flex-wrap:wrap}
+.rk .in{background:#fff;border:1px solid #b9bcc2;border-radius:5px;padding:5px 8px;min-width:0;font-size:13px;color:#1b1e24}
+.rk .chip{border:1px solid #b9bcc2;border-radius:12px;padding:2px 9px;background:#fff;font-size:12px}
+.rk .chip.on{background:#0a6cf0;border-color:#0a6cf0;color:#fff}
+.rk .btn{border-radius:5px;padding:6px 14px;background:#d5d6d9;font-size:13px;white-space:nowrap;display:inline-block}
+.rk .btn.pri{background:#0a6cf0;color:#fff}
+.rk .dim{color:#5f6670}
+.rk .small{font-size:11.5px}
+.rk table{border-collapse:collapse;width:100%;background:#fff}
+.rk th{font-weight:600;font-size:11.5px;color:#5f6670;text-align:left;padding:6px 8px;border-bottom:1px solid #dcdde0;background:#fafafa;white-space:nowrap}
+.rk td{padding:7px 8px;border-bottom:1px solid #eef0f2;white-space:nowrap}
+.rk td.num,.rk th.num{text-align:right;font-variant-numeric:tabular-nums}
+.rk tr.sel td{background:#e3eefe}
+.rk .rank{display:inline-block;width:20px;text-align:center;border-radius:4px;font-weight:700;font-size:11.5px;color:#fff}
+.rk .rS{background:#7b3fe4}.rk .rA{background:#1e9e55}.rk .rB{background:#2f86c8}.rk .rC{background:#d98a00}.rk .rD{background:#9aa0a8}
+.rk .ok{color:#1e9e55;font-weight:600}
+.rk .warn{color:#b05a00}
+.rk .hist{display:flex;align-items:flex-end;gap:2px;height:70px;border-bottom:1px solid #c9ccd1}
+.rk .hist div{flex:1;background:#7db2ff;border-radius:2px 2px 0 0;position:relative}
+.rk .hist div.out{background:#d5d9df}
+.rk .hx{display:flex;gap:2px}.rk .hx span{flex:1;text-align:center;font-size:10px;color:#5f6670}
+.rk .prog{height:6px;background:#e1e3e6;border-radius:3px;overflow:hidden}
+.rk .prog div{height:100%;background:#0a6cf0}
+.rk .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.rk .tabs{display:flex;border-bottom:1px solid #dcdde0;background:#fafafa;padding:0 12px}
+.rk .tab{padding:9px 14px;color:#5f6670;border-bottom:2px solid transparent}
+.rk .tab.on{color:#0a6cf0;border-color:#0a6cf0;font-weight:600}
+.rk .title{font-size:17px;color:#003399;font-weight:500}
+.rk .ttl{padding:8px 12px;font-weight:600;background:#e8e9ec;border-bottom:1px solid #d0d2d6;font-size:12.5px}
+.rk .sec{font-weight:600;font-size:12px;margin:14px 0 6px}
+.rk dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0}
+.rk dt{color:#5f6670}.rk dd{margin:0;font-variant-numeric:tabular-nums}
+.rk .pat{display:grid;grid-template-columns:1fr 70px 44px;gap:3px 8px;align-items:center}
+.rk .pat .b{height:7px;background:#7db2ff;border-radius:2px}
+.rk .note{background:#fff7e6;border:1px solid #f0d49a;border-radius:6px;padding:7px 9px;margin-top:10px}
+.rk .pages{display:flex;gap:4px;align-items:center}
+.rk .pg{padding:2px 7px;border-radius:4px}.rk .pg.on{background:#0a6cf0;color:#fff}
+</style>
+
+<h2>B, with a details column (v3: download speed, File on disk tab)</h2>
+<p class="subtitle">"Choose wordlist" dialog, opened from the "..." next to a dictionary on the Dictionary settings page. Real data for ignis-1M.txt from the weakpass API.</p>
+
+<div class="rk">
+  <div class="ttl">Choose wordlist for: Primary dictionary</div>
+  <div class="tabs"><span class="tab">Built-in (5)</span><span class="tab">Downloaded (3)</span><span class="tab on">weakpass.com (1,692)</span><span class="tab">File on disk</span></div>
+  <div class="bar">
+    <input class="in" style="width:220px" placeholder="Search by name">
+    <span class="dim small">Rank</span>
+    <span class="chip on">S</span><span class="chip on">A</span><span class="chip on">B</span><span class="chip">C</span><span class="chip">D</span><span class="chip">E</span><span class="chip">F</span>
+    <span class="dim small" style="margin-left:6px">Size</span>
+    <select class="in"><option>Up to 1 GB</option><option>Up to 10 MB</option><option>Up to 100 MB</option><option>Any size</option></select>
+    <span class="dim small">Cracks at least</span>
+    <select class="in"><option>Any</option><option>5%</option><option>10%</option></select>
+  </div>
+
+  <div style="display:flex">
+    <!-- list -->
+    <div style="flex:1.45;min-width:0;border-right:1px solid #dcdde0;display:flex;flex-direction:column">
+      <table>
+        <tr><th>Name</th><th>Rank</th><th class="num">Cracks</th><th class="num">Words</th><th class="num">Download</th><th class="num">Time for this file</th></tr>
+        <tr><td>hashmob.net_2025.large.found</td><td><span class="rank rS">S</span></td><td class="num">18.7%</td><td class="num">57.4 M</td><td class="num">158 MB</td><td class="num">53 min</td></tr>
+        <tr><td>hashmob.net_2025.medium.found</td><td><span class="rank rS">S</span></td><td class="num">15.4%</td><td class="num">14.5 M</td><td class="num">42 MB</td><td class="num">13 min</td></tr>
+        <tr><td>ASLM.txt</td><td><span class="rank rS">S</span></td><td class="num">13.7%</td><td class="num">41.6 M</td><td class="num">133 MB</td><td class="num">39 min</td></tr>
+        <tr><td>hashmob.net_2025.small.found</td><td><span class="rank rS">S</span></td><td class="num">10.6%</td><td class="num">2.3 M</td><td class="num ok">&#10003; Downloaded</td><td class="num">2 min</td></tr>
+        <tr><td>kaonashi14M.txt</td><td><span class="rank rA">A</span></td><td class="num">13.5%</td><td class="num">14.3 M</td><td class="num"><span class="dim">42% &middot; 4.8 MB/s</span></td><td class="num">13 min</td></tr>
+        <tr><td>piotrcki-wordlist-top10m.txt</td><td><span class="rank rA">A</span></td><td class="num">11.9%</td><td class="num">9.9 M</td><td class="num">44 MB</td><td class="num">9 min</td></tr>
+        <tr><td>top_passwords.txt</td><td><span class="rank rA">A</span></td><td class="num">9.6%</td><td class="num">2.6 M</td><td class="num">5.8 MB</td><td class="num">2 min</td></tr>
+        <tr class="sel"><td>ignis-1M.txt</td><td><span class="rank rA">A</span></td><td class="num">7.9%</td><td class="num">1.0 M</td><td class="num">3.5 MB</td><td class="num">55 s</td></tr>
+        <tr><td>hashmob.net_2025.tiny.found</td><td><span class="rank rA">A</span></td><td class="num">7.2%</td><td class="num">291 K</td><td class="num ok">&#10003; Downloaded</td><td class="num">16 s</td></tr>
+        <tr><td>sage.latin.txt</td><td><span class="rank rB">B</span></td><td class="num">19.1%</td><td class="num">182 M</td><td class="num">533 MB</td><td class="num">2h 46m</td></tr>
+        <tr><td>kaonashiWPA100M.txt</td><td><span class="rank rB">B</span></td><td class="num">16.1%</td><td class="num">100 M</td><td class="num">340 MB</td><td class="num">1h 31m</td></tr>
+        <tr><td>dictionary_2021.txt</td><td><span class="rank rB">B</span></td><td class="num">15.5%</td><td class="num">103 M</td><td class="num">520 MB</td><td class="num">1h 34m</td></tr>
+      </table>
+      <div class="bar small" style="border-top:1px solid #dcdde0;border-bottom:none;margin-top:auto;justify-content:space-between">
+        <span class="dim">92 of 1,692 lists</span>
+        <span class="pages"><span class="pg">&lsaquo;</span><span class="pg on">1</span><span class="pg">2</span><span class="pg">3</span><span class="pg">4</span><span class="pg">&rsaquo;</span></span>
+      </div>
+    </div>
+
+    <!-- details -->
+    <div style="flex:1;min-width:0;padding:14px 16px;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="title">ignis-1M.txt</span><span class="rank rA" style="width:auto;padding:1px 8px">Rank A</span></div>
+      <div class="dim small" style="margin:3px 0 10px">From github.com/ignis-sec/Pwdb-Public</div>
+
+      <dl>
+        <dt>Words</dt><dd>1,000,000</dd>
+        <dt>Cracks</dt><dd>7.9% of weakpass test hashes</dd>
+        <dt>Download</dt><dd>3.5 MB (.7z)</dd>
+        <dt>On disk</dt><dd>8.8 MB &middot; <span class="ok">412 GB free</span></dd>
+        <dt>Time for this file</dt><dd>55 s at 18,236 p/s, rules "as is"</dd>
+        <dt>Downloaded</dt><dd class="dim">2,898 times &middot; updated 15 Nov 2026</dd>
+      </dl>
+
+      <div class="sec">Password lengths</div>
+      <div class="hist">
+        <div style="height:7%" title="4"></div><div style="height:11%"></div><div style="height:76%"></div><div style="height:47%"></div><div style="height:100%"></div><div style="height:46%"></div><div style="height:31%"></div><div style="height:10%"></div><div style="height:6%"></div><div style="height:2%"></div><div style="height:1.5%"></div><div style="height:1%"></div><div style="height:1%"></div><div style="height:1%"></div>
+      </div>
+      <div class="hx"><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17+</span></div>
+      <div class="dim small" style="margin-top:4px">Most passwords are 6 to 10 characters (88%).</div>
+
+      <div class="sec">Character mix</div>
+      <div class="pat small">
+        <span>letters + digits</span><div class="b" style="width:100%"></div><span class="num">42.9%</span>
+        <span>lowercase only</span><div class="b" style="width:73%"></div><span class="num">31.3%</span>
+        <span>digits only</span><div class="b" style="width:40%"></div><span class="num">17.3%</span>
+        <span>lower + upper + digits</span><div class="b" style="width:10%"></div><span class="num">4.3%</span>
+        <span>with symbols</span><div class="b" style="width:2%"></div><span class="num">0.7%</span>
+      </div>
+
+      <div class="sec">Most common patterns</div>
+      <div class="mono small" style="line-height:1.6">?d?d?d?d?d?d <span class="dim">8.5%</span> &nbsp; ?l?l?l?l?l?l <span class="dim">7.7%</span><br>?l?l?l?l?l?l?l?l <span class="dim">6.9%</span> &nbsp; ?l?l?l?l?l?l?d?d <span class="dim">6.2%</span></div>
+
+      <div class="sec">Sample</div>
+      <div class="mono dim">123456 &nbsp;123456789 &nbsp;password &nbsp;qwerty &nbsp;12345678 &nbsp;123123 &nbsp;111111 &nbsp;abc123</div>
+
+      <div style="margin-top:12px"><span class="small" style="color:#0a62c9">Open on weakpass.com</span></div>
+    </div>
+  </div>
+
+  <div class="bar" style="border-top:1px solid #dcdde0;border-bottom:none;background:#f3f3f3">
+    <span class="small" style="flex:none">Downloading kaonashi14M.txt</span><div class="prog" style="width:160px"><div style="width:42%"></div></div><span class="dim small">21 of 50 MB &middot; <b style="color:#1b1e24">4.8 MB/s</b> &middot; 6 s left</span>
+    <span style="margin-left:auto"></span>
+    <span class="btn">Cancel</span><span class="btn pri">Download and use</span>
+  </div>
+</div>
+
+<h3 style="margin-top:28px">The other tabs</h3>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+<div class="rk" style="flex:1;min-width:420px">
+  <div class="tabs"><span class="tab on">Built-in (5)</span><span class="tab">Downloaded (3)</span><span class="tab">weakpass.com (1,692)</span><span class="tab">File on disk</span></div>
+  <table>
+    <tr><th>Name</th><th class="num">Words</th><th>What it is</th></tr>
+    <tr><td>Small English dictionary</td><td class="num">1,600</td><td class="dim">Common words and passwords</td></tr>
+    <tr class="sel"><td>Medium English dictionary</td><td class="num">6,000</td><td class="dim">Larger set of the same</td></tr>
+    <tr><td>Numbers from 0 to 99</td><td class="num">100</td><td class="dim">Mostly for two-word rules</td></tr>
+    <tr><td>Numbers from 0 to 999</td><td class="num">1,000</td><td class="dim"></td></tr>
+    <tr><td>Numbers from 0 to 9999</td><td class="num">10,000</td><td class="dim"></td></tr>
+  </table>
+  <div class="bar small dim" style="border-top:1px solid #dcdde0;border-bottom:none">Shipped inside RecoverKit, nothing to download.</div>
+</div>
+<div class="rk" style="flex:1;min-width:420px">
+  <div class="tabs"><span class="tab">Built-in (5)</span><span class="tab on">Downloaded (3)</span><span class="tab">weakpass.com (1,692)</span><span class="tab">File on disk</span></div>
+  <table>
+    <tr><th>Name</th><th>Rank</th><th class="num">Words</th><th class="num">On disk</th><th></th></tr>
+    <tr class="sel"><td>hashmob.net_2025.small.found</td><td><span class="rank rS">S</span></td><td class="num">2.3 M</td><td class="num">21 MB</td><td class="small" style="color:#0a62c9">Show in folder &middot; Delete</td></tr>
+    <tr><td>hashmob.net_2025.tiny.found</td><td><span class="rank rA">A</span></td><td class="num">291 K</td><td class="num">2.5 MB</td><td class="small" style="color:#0a62c9">Show in folder &middot; Delete</td></tr>
+    <tr><td>kaonashi14M.txt</td><td><span class="rank rA">A</span></td><td class="num">14.3 M</td><td class="num dim">42% &middot; 4.8 MB/s</td><td class="small" style="color:#0a62c9">Cancel</td></tr>
+  </table>
+  <div class="bar small dim" style="border-top:1px solid #dcdde0;border-bottom:none">Stored in &lt;data folder&gt;/wordlists &middot; 24 MB used</div>
+</div>
+</div>
+
+<h3 style="margin-top:28px">File on disk tab</h3>
+<div class="rk" style="max-width:860px">
+  <div class="tabs"><span class="tab">Built-in (5)</span><span class="tab">Downloaded (3)</span><span class="tab">weakpass.com (1,692)</span><span class="tab on">File on disk</span></div>
+  <div style="padding:14px 16px;background:#fff">
+    <div class="small" style="font-weight:600;margin-bottom:6px">Wordlist file</div>
+    <div style="display:flex;gap:8px"><input class="in" style="flex:1" value="/Users/example/Wordlists/company-names.txt"><span class="btn pri">Browse...</span></div>
+    <div class="small dim" style="margin-top:5px">Browse opens the system file browser (*.txt, *.dic, *.lst, all files). You can also type or paste a path.</div>
+    <dl style="margin-top:12px" class="small">
+      <dt>Words</dt><dd>48,211 <span class="dim">(counted)</span></dd>
+      <dt>Size</dt><dd>612 KB &middot; UTF-8</dd>
+      <dt>Time for this file</dt><dd>3 s at 18,236 p/s, rules "as is"</dd>
+    </dl>
+    <div class="sec">Recently used files</div>
+    <table>
+      <tr><th>File</th><th class="num">Size</th><th>Used</th></tr>
+      <tr class="sel"><td>/Users/example/Wordlists/company-names.txt</td><td class="num">612 KB</td><td class="dim">today</td></tr>
+      <tr><td>/Users/example/Wordlists/old-passwords.dic</td><td class="num">1.2 MB</td><td class="dim">12 Nov</td></tr>
+    </table>
+    <div class="sec">In the data folder <span class="dim" style="font-weight:normal">(/Users/example/RecoverKit/data)</span></div>
+    <table>
+      <tr><th>File</th><th class="num">Size</th></tr>
+      <tr><td>english.dic</td><td class="num">4.1 MB</td></tr>
+      <tr><td>names-cz.txt</td><td class="num">220 KB</td></tr>
+    </table>
+  </div>
+  <div class="bar" style="justify-content:flex-end;border-top:1px solid #dcdde0;border-bottom:none;background:#f3f3f3"><span class="btn">Cancel</span><span class="btn pri">Use this file</span></div>
+</div>
