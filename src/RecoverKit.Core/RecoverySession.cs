@@ -14,11 +14,18 @@ public enum LogKind { Info, Step, Warning, Error, Success }
 
 public enum SessionOutcome { Found, FoundInCache, NotFound, Stopped, Error, KeyRecovered }
 
+public sealed record PossiblePassword(string Password, string Reason)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string DisplayPassword => HashcatTool.DecodePlain(Password);
+}
+
 public sealed class SessionResult
 {
     public SessionOutcome Outcome { get; init; }
     public List<string> Passwords { get; init; } = new();
     public string? Error { get; init; }
+    public List<PossiblePassword> PossiblePasswords { get; init; } = new();
     /// <summary>Key search: the recovered 40-bit RC4 key (hex).</summary>
     public string? Key { get; init; }
 
@@ -40,6 +47,9 @@ public sealed class SessionState
     /// <summary>Kernel choice for the saved step/mode. Null in older sessions, which resume without -O.</summary>
     public bool? UseOptimizedKernel { get; set; }
     public bool DictionaryPlanPending { get; set; }
+    /// <summary>A RAR CPU candidate reached a compression construct the decoder could not check.</summary>
+    public string? Rar3UnconfirmedReason { get; set; }
+    public List<PossiblePassword> Rar3PossiblePasswords { get; set; } = new();
     public DateTime SavedUtc { get; set; }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
@@ -66,8 +76,11 @@ public sealed class SessionState
 
     public void Save(Settings s)
     {
-        SavedUtc = DateTime.UtcNow;
-        File.WriteAllText(PathFor(s, Key), JsonSerializer.Serialize(this, Json));
+        lock (this)
+        {
+            SavedUtc = DateTime.UtcNow;
+            File.WriteAllText(PathFor(s, Key), JsonSerializer.Serialize(this, Json));
+        }
     }
 
     public static void Delete(Settings s, string key)
@@ -78,8 +91,9 @@ public sealed class SessionState
 }
 
 /// <summary>Runs a list of attacks against a target with hashcat until the password is found.</summary>
-public sealed class RecoverySession(HashcatTool tool, Settings settings)
+public sealed partial class RecoverySession(HashcatTool? hashcat, Settings settings)
 {
+    private readonly HashcatTool tool = hashcat!;
     public event Action<LogKind, string>? Log;
     public event Action<HashcatStatus>? Status;
     /// <summary>GPU temperature guard paused or resumed the attack.</summary>
@@ -98,13 +112,16 @@ public sealed class RecoverySession(HashcatTool tool, Settings settings)
     public PlannerContext PlannerContext => new()
     {
         DataPath = settings.DataPath,
-        HashcatDir = tool.Directory,
+        HashcatDir = tool?.Directory,
         DefaultDictionary = settings.DefaultDictionary,
     };
 
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
+        if (target.SevenZipCpu is not null) return await RunSevenZipCpuAsync(target, filePath, steps, resume, ct);
+        if (target.Rar3File is not null)
+            return await RunRar3FileAsync(target, filePath, steps, resume, ct);
         if (resume is not null && target.LegacyZipTarget is { } old && resume.Key == SessionState.KeyFor(old)) target = old;
         target.VolumeCredentials?.ValidateUnchanged();
         string key = SessionState.KeyFor(target);

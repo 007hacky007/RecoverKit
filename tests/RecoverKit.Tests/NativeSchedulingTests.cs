@@ -187,6 +187,55 @@ public class NativeSchedulingTests(ITestOutputHelper output)
         Assert.Equal(9, result.Tested);
     }
 
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(3, 137)]
+    [InlineData(4, 989)]
+    [InlineData(8, 4321)]
+    public void AKernelThatStopsInsideABatchNeverMovesTheResumePointPastUntestedCandidates(int threads, int stopAt)
+    {
+        // Streaming checks of large files (7-Zip, RAR 3) return early when the engine stops, leaving the
+        // rest of their batch untested. Every candidate must still be tested after a resume.
+        var seen = new ConcurrentDictionary<string, int>();
+        var space = MaskSpace.FromHashcatArgs(["-a", "3", "?d?d?d?d"])!;
+        using var stop = new CancellationTokenSource();
+        int count = 0;
+        var kernel = new StoppingKernel(seen, () => { if (Interlocked.Increment(ref count) == stopAt) stop.Cancel(); });
+        var first = new NativeEngine(kernel, space) { Threads = threads, Priority = ThreadPriority.Normal }.Run(null, stop.Token);
+        Assert.Equal(NativeOutcome.Stopped, first.Outcome);
+        Assert.True(first.Tested <= seen.Count);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<NativeResumePoint>(
+            System.Text.Json.JsonSerializer.Serialize(first.ResumeAt));
+        var second = new NativeEngine(kernel, space) { Threads = threads, Priority = ThreadPriority.Normal }.Run(restored, CancellationToken.None);
+        Assert.Equal(NativeOutcome.Exhausted, second.Outcome);
+        Assert.Equal(10_000, seen.Count);
+    }
+
+    private sealed class StoppingKernel(ConcurrentDictionary<string, int> seen, Action onCandidate) : NativeKernel
+    {
+        public override string Name => "stops inside a batch";
+        public override double SpeedHint => 200_000;
+        public override bool StopsInsideBatch => true;
+        public override int PrefixBatch(int lastCount) => 19;
+        public override bool Verify(ReadOnlySpan<byte> password) => false;
+        public override KernelWorker CreateWorker() => CreateWorker(CancellationToken.None);
+        public override KernelWorker CreateWorker(CancellationToken stop) => new Worker(seen, onCandidate, stop);
+
+        private sealed class Worker(ConcurrentDictionary<string, int> seen, Action onCandidate, CancellationToken stop) : KernelWorker
+        {
+            public override int Search(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> last)
+            {
+                foreach (byte c in last)
+                {
+                    if (stop.IsCancellationRequested) return -1;   // leaves the rest of this batch untested
+                    seen.AddOrUpdate(Convert.ToHexString([.. prefix, c]), 1, (_, n) => n + 1);
+                    onCandidate();
+                }
+                return -1;
+            }
+        }
+    }
+
     private sealed class CoverageKernel(ConcurrentDictionary<string, int> seen, Action onCandidate) : NativeKernel
     {
         public override string Name => "coverage";

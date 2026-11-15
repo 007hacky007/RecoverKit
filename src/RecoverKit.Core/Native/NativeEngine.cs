@@ -100,6 +100,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
         // A fixed suffix needs the full prefix batch to fill the kernel's lanes or candidate pool.
         int minimum = last.Length == 1 ? batch : 1;
         long next = startPrefix;
+        long unfinished = long.MaxValue;   // the first batch a stopping kernel left incomplete
         long done = startPrefix * last.Length;
         int threads = Math.Max(1, Threads);
         byte[]? found = null;
@@ -109,7 +110,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
 
         void Worker(int t)
         {
-            var worker = kernel.CreateWorker();
+            var worker = kernel.CreateWorker(stop.Token);
             var digits = new int[prefixLen];
             var prefix = new byte[prefixLen];
             var packed = new byte[prefixLen * batch];
@@ -160,7 +161,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         var pw = new byte[len];
                         packed.AsSpan(hit / last.Length * prefixLen, prefixLen).CopyTo(pw);
                         pw[len - 1] = last[hit % last.Length];
-                        if (kernel.Verify(pw))
+                        if (worker is Kernels.SevenZipKernel.Worker sevenZip && sevenZip.VerifiedBy(kernel) || kernel.Verify(pw))
                         {
                             if (Confirm is null || Confirm(pw))
                             {
@@ -172,7 +173,15 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         }
                         from = hit + 1;
                     }
-                    // Finish every claimed prefix on stop: next is then an exact, contiguous checkpoint.
+                    // A kernel that can stop inside a batch (a streaming check) may have left part of it
+                    // untested: keep the resume point at this batch so it is tested again.
+                    if (kernel.StopsInsideBatch && stop.IsCancellationRequested)
+                    {
+                        long seen;
+                        while (p < (seen = Volatile.Read(ref unfinished)) && Interlocked.CompareExchange(ref unfinished, p, seen) != seen) { }
+                        return;
+                    }
+                    // Every other kernel finishes each claimed prefix on stop: next is then an exact, contiguous checkpoint.
                     p += count;
                 }
                 Interlocked.Add(ref done, (e - s) * last.Length);
@@ -223,7 +232,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
         if (found is not null) return new NativeResult { Outcome = NativeOutcome.Found, Password = found };
         if (ct.IsCancellationRequested)
         {
-            return new NativeResult { Outcome = NativeOutcome.Stopped, ResumeAt = new NativeResumePoint { Length = len, PrefixIndex = Volatile.Read(ref next) } };
+            return new NativeResult { Outcome = NativeOutcome.Stopped, ResumeAt = new NativeResumePoint { Length = len, PrefixIndex = Math.Min(Volatile.Read(ref next), Volatile.Read(ref unfinished)) } };
         }
         return null; // this length exhausted
     }

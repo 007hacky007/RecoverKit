@@ -1050,21 +1050,88 @@ notes are taken from it, and the release job fails if the section is missing.
   XOR workbook and independently obfuscated real Word/BIFF5 files. Headless LibreOffice 26.2.4.2
   reopened the recovered passwords and checked document text and worksheet cells against the sources.
 - 7-Zip extraction follows the [7z format description](https://github.com/ip7z/7zip/blob/main/DOC/7zFormat.txt)
-  and [hashcat 7.1.2 module 11600](https://github.com/hashcat/hashcat/blob/v7.1.2/src/modules/module_11600.c).
+  and [hashcat 8.0.0 module 11600](https://github.com/hashcat/hashcat/blob/v8.0.0/src/modules/module_11600.c).
   Encrypted metadata is used directly; unencrypted Copy/LZMA1 metadata is decoded locally with
   a 16 MiB output limit and a bounded decoder adapted from the public-domain LZMA SDK 23.01.
   No installed 7-Zip or new package is needed. Folder bindings and substream CRCs select the
   smallest compatible encrypted stream (or a prefix of a solid folder). LZMA solid prefixes
   combine adjacent substream CRCs until hashcat's CRC-length-based estimate decrypts the full
   encrypted stream, avoiding silent verification failures from under-reading compressed input.
-  Prefixes that cannot meet that condition are skipped. Hashcat
+  A large solid block can also use a bounded packed prefix. Adjacent file CRCs, including empty
+  files, are combined until the checked prefix covers at least eight bytes; shorter checks never
+  go to hashcat. Every hashcat hit also passes the CPU kernel's streaming verification through
+  `ConfirmPassword` and `--keep-guessing`. Hashcat 11600 does not check AES zero padding, so tiny
+  standalone Copy files use the CPU's padding plus CRC check instead. Hashcat
   accepts Copy, LZMA1, LZMA2 and Deflate without filters, with an empty AES salt. Encrypted data
   is limited to 8 MiB and decompressed CRC input to 9,999,999 bytes; compressed hashes also need
   space for their suffix within the module's input limit. NumCyclesPower above 24 is refused,
-  matching the reference extractor's practical limit. Split volumes must be joined manually;
-  SFX signature searches cover the first 4 MiB. Real fixtures were created with 7zz 26.03 and
+  matching the reference extractor's practical limit. When no stream fits hashcat, a
+  `SevenZipCpuTarget` with no hashcat mode uses the built-in CPU engine. `SevenZipKernel` derives
+  the AES key with managed `IncrementalHash` SHA-256, feeding 64 KiB batches of complete
+  salt/password/counter records. The slower native 7z KDF was removed; it added no native API
+  unchanged. It checks the first LZMA/LZMA2 bytes, any zero AES padding, and a short trial
+  decode before streaming decryption, decompression and CRC32 over the selected decoded prefix.
+  Exhausting a trial prefix is inconclusive. A solid block starting with fewer than eight bytes combines
+  adjacent substream CRCs until it has enough evidence. Shorter CPU checks are refused except
+  for tiny Copy files with at least eight bytes of verified zero padding.
+  Copy has no stream header filter and, without padding, must read
+  the whole checked file for every candidate. Copy and Deflate full checks run in parallel;
+  LZMA/LZMA2 share one full decode per target behind a cancellable gate, reusing history and
+  probability models across workers and candidates. CRC32 uses ARM's IEEE CRC32 instructions
+  when available, with a managed slice-by-8 fallback (never x86's CRC-32C instructions).
+  History grows to the smaller of the dictionary and checked output length, rounded to 64 KiB
+  pages. A 1536 MiB dictionary can therefore need 1536 MiB for one full check, but not per thread.
+  Each worker reuses a 64 KiB KDF buffer and a trial history page; probability models need up to
+  28 KiB for LZMA2 or 6 MiB for extreme LZMA1 literal properties. Stream buffers stay bounded.
+  Target notes show the selected stream's maximum history use and its actual hashcat refusal
+  reasons, including solid-prefix and compressed-token limits below or at 8 MiB. Packed, unpacked
+  and substream sizes above the signed 64-bit stream range are rejected as malformed metadata.
+  LZMA2 control 1 resets the dictionary and requires new properties/state; control 2 preserves
+  them. All 256 controls are checked at each SDK initialization level. LZMA1 uses the SDK's
+  minimum 4096-byte dictionary. Copy, LZMA, LZMA2 and Deflate are supported;
+  PPMd, BZip2, BCJ/filter chains, salted extraction and direct-key mode remain unsupported.
+  Brute-force and ASCII masks use `NativeRunner`; plain dictionaries use bounded parallel batches.
+  Stop checks cover the KDF, waiting for the decode gate and streaming output. Worker cancellation
+  also stops queued or active checks after a confirmed winner. Independent confirmation ignores
+  winner cancellation. A hit from this exact `SevenZipKernel` worker has already passed its full
+  CRC check, so `NativeEngine` skips its repeated `Verify`; other kernels and additional
+  confirmation callbacks still run their checks. Resume replays unfinished prefixes/batches and
+  refuses changed dictionaries. Rules, combinations and extra hashcat options are refused before
+  starting an engine. CPU targets bypass hashcat, GPU calibration and GPU power controls; the CLI
+  does not locate or install hashcat for these targets.
+  Split archives are read across their numbered parts; SFX signature searches cover the first 4 MiB.
+  Real fixtures were created with 7zz 26.03 and
   p7zip 17.05 using password `kit7`; extraction was compared with 7z2john and verified with
-  bundled hashcat 7.1.2. The default tests perform no KDF or cracking work.
+  bundled hashcat 8.0.0. CPU tests lower `SevenZipExtractor.TestDataLimit` to reuse these small
+  fixtures. Generated-stream tests use installed `7zz` when available and otherwise report a skip.
+  Generated mixed text/random/text tests cover normal/high compression, a 64 KiB dictionary,
+  alternate literal properties and multiple compression threads. A CPU-only Slow test creates
+  a real 14 MiB mixed input with default 7zz settings and verifies the resulting oversized stream.
+  `SevenZipCpuSpeedTests` contains CPU-only Slow tests for repeated rates, KDF batch sizes and
+  filter counts; run with `--filter FullyQualifiedName~SevenZipCpuSpeedTests`.
+  On an M1 Pro, generated 14 MiB mixed text/random/text targets at NumCyclesPower 19 with
+  seven-byte candidates measured the following rates in six three-second repeats across two
+  runs under concurrent machine load. The active CRC path was .NET's ARM IEEE CRC32 intrinsic; the KDF
+  was managed `IncrementalHash` SHA-256. No native library or GPU kernel was used for 7z.
+
+  | Codec | One thread (passwords/s) | Ten threads (passwords/s) | KDF share, ten threads |
+  | --- | ---: | ---: | ---: |
+  | Copy, no AES padding | 79.0-96.3 | 527.8-703.6 | 44.09-54.58% |
+  | LZMA | 182.2-186.6 | 1052.0-1340.7 | 98.81-99.09% |
+  | LZMA2 | 180.3-185.5 | 1075.4-1249.1 | 98.52-99.09% |
+  | Deflate | 177.5-184.2 | 644.3-1098.3 | 98.74-99.25% |
+
+  Unpadded Copy must decrypt and CRC all 14 MiB for every guess; its scheduling estimate includes
+  checked size at about 2 GB/s per thread, plus the KDF, rather than scaling only with KDF rounds.
+  Notes give codec-specific examples from this machine, not a promise for other CPUs or sizes.
+  Across both runs' 32,768 random wrong keys on no-padding streams, LZMA rejected 32,665 at
+  the header and 103 at trial decode; LZMA2 rejected 32,621 at the header, 22 at trial decode
+  and 125 at CRC; Deflate rejected 32,614 at trial decode and 154 at CRC. Copy required CRC
+  for all 32,768 keys. There
+  were no wrong matches. The existing generated-stream tests exercise the filters with right
+  keys over multiple sizes and compression properties, including trial-prefix exhaustion.
+  The solid-prefix regression also emulates hashcat's Copy CRC check on 100,000 random keys
+  after combining empty/tiny files into an eight-byte prefix, with no matches.
 - KeePass extraction implements hashcat 7.1.2 modes 13400 (KDB, KDBX 2/3) and 34300
   (KDBX 4 Argon2d/Argon2id). Mode 34300 hard-codes a 253-byte header in both its tokenizer
   and HMAC kernel; headers of other lengths and AES-KDF are rejected. Header SHA-256 is
@@ -1113,7 +1180,91 @@ notes are taken from it, and the release job fails if the section is missing.
   and entries depending on earlier solid files are skipped. The first file in a solid archive
   can be used. The pinned hashcat version
   accepts at most 327,520 encrypted bytes and 655,360 unpacked bytes per selected file.
-  Data-only recovery uses hashcat on both CPU and GPU; the built-in RAR 3 kernel handles `-hp` only.
+  When no entry fits those limits, `HashTarget.Rar3File` selects the smallest complete supported
+  large entry, with no hashcat mode. `Rar3FileKernel` reuses the existing vector KDF for short ASCII
+  candidates and the shared managed KDF for Unicode and long passwords. The shared reference also
+  reproduces RAR 2.9's SHA-1 input mutation beyond 28 characters. AES decryption feeds the native
+  `rar3_decode.c` port through bounded reads: header/table rejection, a first 4 KiB input trial, then
+  streaming CRC32 confirmation. The raw dictionary wraps at the entry's declared size (64 KiB to
+  4 MiB); standard filters use a separate bounded block, and input/output positions are 64-bit.
+  Consumed filter records are reused. Compressed checks share one process-wide PPM arena, grown
+  to the largest requested header size (at most 256 MiB) and retained until exit. A semaphore is
+  acquired only when a PPM model is requested and held until that decode returns. KDF and LZ
+  checks stay parallel. Model resets use their exact declared size even when the backing arena
+  is larger. Growth frees the old arena first, so two large arenas never coexist. At ten threads,
+  allow about 320 MiB for decoder working memory plus the application's usual memory. Native or
+  managed allocation failures retry the same key from the beginning under the PPM semaphore,
+  with a cancellation-aware 100 ms delay. Persistent memory pressure waits for memory or Stop;
+  progress/checkpoints never pass that unfinished candidate. Cancellation also interrupts gate waits.
+  The PPM wrapper handles optional/default escape characters, model reuse, transitions to/from
+  LZ tables, PPM-coded VM records, and literal escape commands. Incomplete Huffman
+  codes are accepted; oversubscribed tables are rejected. New LZ tables reset low-distance state.
+  VM programs must match a standard filter's XOR checksum, length and CRC;
+  other programs reject the key. Chained standard filters
+  run before CRC output. Filter resets clear pending records before output; later resets remain possible.
+  Noncanonical deferred-window/overlapping layouts, unusual filter registers
+  and queues/blocks beyond the bounded decoder remain unconfirmed, with a specific reason.
+  Stored entries have no sound universal early filter, so every candidate needs the full CRC.
+  Zero AES padding observed in real samples is not assumed by the verifier.
+
+  The CLI and app run this target without locating or probing hashcat. CPU masks, brute force and
+  plain dictionaries have progress and checkpoints; rules, unsupported attacks and extra hashcat
+  arguments are refused with a reason. A stop replays an unfinished mask chunk or dictionary batch,
+  including a candidate interrupted during streaming; native output polls cancellation every 64 KiB.
+  Dictionary checkpoints fingerprint the input and reject changed files. A key producing an
+  undecidable stream does not prevent later candidates from being tried: the session saves its
+  exact password bytes and reason, deduplicates them, and returns them separately from verified
+  passwords. The CLI and app label them "possible password, not verified" and ask for a manual
+  archive check. At 64 saved possibilities the attack stops and replays the unfinished batch or
+  mask chunk on resume; in-flight candidates cannot pass the checkpoint. All session saves share
+  one lock. Earlier reason-only sessions explicitly require starting over because they did not
+  retain candidate passwords. Candidates over 128 UTF-16 characters are skipped and counted as
+  tested; empty dictionary lines are skipped in both enumeration and keyspace counting.
+  Compressed CPU targets need native API 15 (14 on the branch that added them); missing/stale libraries give an explicit error.
+  Solid dependencies, split entries, unsupported methods and inconsistent sizes retain specific refusal messages.
+
+  Verification includes 128 generated encrypted valid streams, compact real LZ/PPM/filter fixtures,
+  synthetic PPM transitions/VM/escape commands, all 256 single-symbol incomplete tables, 1 MiB
+  uniform data, 16-block stride data, filter chains and low-distance table resets. Dictionary wraps
+  at 64 KiB/1 MiB/4 MiB and 18-bit distances are covered. Slow checks stream over 4 GiB of output
+  and apply an x86 filter after 32 MiB; native tests cover offsets above 2 GiB, Itanium and audio.
+  An external generated corpus of 144 RAR 6.24 archives passed full CRC confirmation,
+  including Unicode/95-character passwords and files up to 8,388,703 bytes. Of 114 small streams
+  within hashcat's caps, its supplied decoder returned 98 usable CRCs, all equal to this port;
+  16 stopped short on filter records after a dictionary wrap. The port confirms all 16 too.
+
+  Example measurements from one M1 Pro, native API 13, NEON batch 16 (observed execution mask 8),
+  seven-byte candidates, three repeats with peak concurrency checked: a 5 MiB LZ target ran at
+  489-493 passwords/s with one thread and 2,811-3,013/s with ten (median 2,961/s). A 640 KiB
+  stored entry ran at 237-244/s with one thread and 1,651-1,684/s with ten (median 1,676/s).
+  KDF time was about 97% of the compressed staged check and 48% for stored data. Other work
+  was running on the machine; these are illustrative rates, not guarantees for other processors.
+  After accepting valid incomplete tables and implementing PPM transitions, among 12,288 wrong
+  passwords on six compressed targets, 9,304 (75.72%) failed headers/tables and 2,977 (24.23%)
+  failed the first input chunk. Seven (0.057%) reached the full streaming stage. None matched
+  or remained unconfirmed. Thus 99.943% were rejected before full streaming. All 1,024 wrong
+  candidates for the stored entry needed a full CRC. No GPU run was used.
+  The review fix passed 1,505 default Release tests, both RAR slow tests, the 144-archive managed
+  corpus, and the standalone native standard-filter regressions. The review ASan/UBSan harness
+  ran 191,944 final mutations with short reads, truncated input, LZ/PPM/filter samples and the
+  new PPM transition/VM/reset streams, with no sanitizer failures. CLI uncertainty and resume smoke
+  checks retained the candidate as possible and never returned Found. The solution builds;
+  NuGet's unavailable vulnerability endpoint produced NU1900 warnings. No GPU was run.
+  The second review's memory fix (native API 14) adds concurrent encrypted checks for all 256 PPM
+  model sizes, reuse across resets and candidates, and allocation-failure retry regressions. The
+  default Release run passes 1,506 tests; all 13 CPU RAR slow tests pass. All 24 real WinRAR review
+  archives recover through the CPU-only CLI, and all 16 damaged copies avoid a verified match.
+  ASan/UBSan fuzzing of the pooled decoder ran 96,283 mutations over 609 seconds without faults.
+  Fault injection checks retry, cancellation while waiting, and a ten-thread dictionary stop/resume.
+  On the same M1 Pro, three repeats gave 495-497 passwords/s with one thread and 2,565-2,734/s
+  with ten for the compressed target (median 2,574/s, versus 2,741/s before, about 6% lower).
+  KDF share was 96.8%. The stored target gave 250-251/s with one thread and 1,609-1,650/s with
+  ten, with a 49.6% KDF share. Native NEON execution mask 8 and ten active workers were confirmed.
+  The benchmark process peaked at 84.2 MiB resident memory on macOS; its demand-paged allocation
+  does not measure Windows commit. The ten-decoder native allocation bound is 305.6 MiB, including
+  the single shared 256 MiB arena; Notes allow about 320 MiB plus normal application memory.
+  The same 12,288 wrong compressed candidates retain the 99.943% early-rejection rate above.
+  Longer-password handling remains unchanged: universal WinRAR truncation was not established.
   Only the selected file's password is recovered; other entries can have different passwords.
 - The Intel CPU runtime (OpenCL) is a download on the dependencies page, not bundled: it is red when
   hashcat has no usable device and yellow when Preferences ask for the processor next to the GPU

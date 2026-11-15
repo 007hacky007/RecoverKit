@@ -209,8 +209,18 @@ public class SevenZipExtractorTests
     public void EnforcesEncryptedDataLimit(int packed, bool supported)
     {
         var d = Extract(Archive((packed, (ulong)packed, "00", [], null)));
-        Assert.Equal(supported, d.Target != null);
-        if (!supported) Assert.Contains("8 MiB", d.Message!);
+        Assert.NotNull(d.Target);
+        Assert.Equal(supported, d.Target.Modes.Contains(11600));
+        if (!supported) Assert.Contains("larger", d.Target.Notes!);
+    }
+
+    [Theory]
+    [InlineData(16, 0x8000000000000000UL)]
+    [InlineData(8 * 1024 * 1024 + 16, ulong.MaxValue)]
+    public void RejectsUnpackSizesOutsideTheStreamRange(int packed, ulong size)
+    {
+        var error = Assert.Throws<FormatException>(() => Extract(Archive((packed, size, "21", [0], null))));
+        Assert.Contains("size", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -227,15 +237,17 @@ public class SevenZipExtractorTests
     public void EnforcesDecompressedCrcLimit(ulong crcSize, bool supported)
     {
         var d = Extract(Archive((16, crcSize, "21", [0], null)));
-        Assert.Equal(supported, d.Target != null);
+        Assert.NotNull(d.Target);
+        Assert.Equal(supported, d.Target.Modes.Contains(11600));
     }
 
     [Fact]
     public void ExplainsRealLargeCompressedFileLimit()
     {
         var d = FormatDetector.Detect(Fixture("large-lzma2"));
-        Assert.Null(d.Target);
-        Assert.Contains("9,999,999", d.Message!);
+        Assert.NotNull(d.Target?.SevenZipCpu);
+        Assert.Empty(d.Target.Modes);
+        Assert.Contains("9,999,999", d.Target.Notes!);
     }
 
     [Theory]
@@ -244,7 +256,13 @@ public class SevenZipExtractorTests
     public void ReservesHashcatTokenSpaceForCompressionSuffix(int packed, bool supported)
     {
         var d = Extract(Archive((packed, 100, "21", [0], null)));
-        Assert.Equal(supported, d.Target != null);
+        Assert.NotNull(d.Target);
+        Assert.Equal(supported, d.Target.Modes.Contains(11600));
+        if (!supported)
+        {
+            Assert.Contains("no room", d.Target.Notes!);
+            Assert.DoesNotContain("all larger", d.Target.Notes!);
+        }
     }
 
     [Fact]
@@ -253,6 +271,7 @@ public class SevenZipExtractorTests
         var salted = Extract(Archive((16, 11, "00", [], new byte[] { 0x93, 0, 0x42 })));
         Assert.Null(salted.Target);
         Assert.Contains("salted AES", salted.Message!);
+        Assert.Contains("processor", salted.Message!);
         var direct = Extract(Archive((16, 11, "00", [], new byte[] { 63 })));
         Assert.Null(direct.Target);
         Assert.Contains("NumCyclesPower", direct.Message!);
