@@ -29,6 +29,61 @@ public sealed class SevenZipGeneratedTests
         finally { Directory.Delete(dir, true); }
     }
 
+    [SevenZipTheory]
+    [InlineData("Copy")]
+    [InlineData("LZMA")]
+    [InlineData("LZMA2")]
+    public void TinyFileChecksMatchHashcatCrcLayout(string method)
+    {
+        string dir = Scratch();
+        try
+        {
+            byte[] largeData = new byte[65536]; new Random(1168).NextBytes(largeData);
+            string first = Path.Combine(dir, "00.bin"), large = Path.Combine(dir, "01.bin");
+            File.WriteAllBytes(large, largeData);
+            byte[] key = SevenZipKernel.DeriveKey("kit7"u8, [], 19);
+            foreach (int firstSize in new[] { 1, 2, 7, 8, 9 })
+            {
+                byte[] tiny = Enumerable.Range(1, firstSize).Select(i => (byte)i).ToArray();
+                File.WriteAllBytes(first, tiny);
+                string path = Path.Combine(dir, $"{method}-{firstSize}.7z");
+                Create(dir, path, method, first, large);
+                HashTarget target;
+                try { SevenZipExtractor.TestDataLimit = 128; target = FormatDetector.Detect(path).Target!; }
+                finally { SevenZipExtractor.TestDataLimit = 0; }
+                if (firstSize < 8)
+                {
+                    Assert.Empty(target.Modes);
+                    // 7zz writes Copy files in separate blocks even with solid mode requested.
+                    Assert.Equal(method == "Copy" ? firstSize : firstSize + largeData.Length, target.SevenZipCpu!.CrcLength);
+                    Assert.True(new SevenZipKernel(target.SevenZipCpu).Verify("kit7"u8));
+                    continue;
+                }
+                Assert.Equal([11600], target.Modes);
+                Assert.True(target.ConfirmPassword!("kit7"u8.ToArray()));
+                Assert.False(target.ConfirmPassword("wrong"u8.ToArray()));
+                var fields = target.HashLines.Split('$');
+                int crcLength = int.Parse(fields[method == "Copy" ? 10 : 12]);
+                Assert.Equal(firstSize, crcLength);
+                // The hashcat LZMA hook requests exactly crc_len output bytes from this decrypted prefix.
+                using var aes = System.Security.Cryptography.Aes.Create(); aes.Key = key;
+                byte[] decrypted = aes.DecryptCbc(Convert.FromHexString(fields[11]), Convert.FromHexString(fields[7]),
+                    System.Security.Cryptography.PaddingMode.None);
+                byte[] decoded;
+                if (method == "Copy") decoded = decrypted[..crcLength];
+                else
+                {
+                    using var decoder = SevenZipLzma.Open(new MemoryStream(decrypted), Convert.FromHexString(fields[13]),
+                        firstSize + largeData.Length, method == "LZMA2");
+                    decoded = new byte[crcLength]; decoder.ReadExactly(decoded);
+                }
+                Assert.Equal(tiny, decoded);
+                Assert.Equal(uint.Parse(fields[8]), ZipCryptoSample.Crc32(decoded));
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [SevenZipFact]
     [Trait("Category", "Slow")]
     public void DefaultSettingsOversizedMixedLzma2ArchiveVerifies()

@@ -76,6 +76,7 @@ public class SevenZipCpuTests
         var result = new NativeEngine(kernel, space) { Threads = 1 }.Run(null, default);
         Assert.Equal(NativeOutcome.Found, result.Outcome);
         Assert.True(kernel.WorkerToken.IsCancellationRequested);
+        Assert.Equal(1, kernel.VerifyCalls);
         Assert.True(kernel.Verify("kit7"u8));
     }
 
@@ -92,9 +93,10 @@ public class SevenZipCpuTests
     {
         private readonly SevenZipKernel inner = new(target);
         internal CancellationToken WorkerToken;
+        internal int VerifyCalls;
         public override string Name => inner.Name;
         public override double SpeedHint => inner.SpeedHint;
-        public override bool Verify(ReadOnlySpan<byte> password) => inner.Verify(password);
+        public override bool Verify(ReadOnlySpan<byte> password) { VerifyCalls++; return inner.Verify(password); }
         public override KernelWorker CreateWorker() => inner.CreateWorker();
         public override KernelWorker CreateWorker(CancellationToken stop)
         {

@@ -155,7 +155,7 @@ public sealed class NativeEngine(NativeKernel kernel, MaskSpace space)
                         var pw = new byte[len];
                         packed.AsSpan(hit / last.Length * prefixLen, prefixLen).CopyTo(pw);
                         pw[len - 1] = last[hit % last.Length];
-                        if (kernel.Verify(pw))
+                        if (worker is Kernels.SevenZipKernel.Worker sevenZip && sevenZip.VerifiedBy(kernel) || kernel.Verify(pw))
                         {
                             if (Confirm is null || Confirm(pw))
                             {

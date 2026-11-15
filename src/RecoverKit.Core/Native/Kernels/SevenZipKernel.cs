@@ -6,23 +6,20 @@ using RecoverKit.Core.Formats;
 
 namespace RecoverKit.Core.Native.Kernels;
 
-/// <summary>7z AES with bounded decoding and a CRC check of the selected stream's first file.</summary>
+/// <summary>7z AES with bounded decoding and a CRC check of the selected decoded prefix.</summary>
 public sealed class SevenZipKernel(SevenZipCpuTarget target, CancellationToken stop = default) : NativeKernel
 {
     private readonly CancellationToken _stop = stop;
     private readonly SemaphoreSlim fullDecode = new(1);
     private readonly SevenZipLzma.Buffers fullBuffers = new();
     private static readonly UTF8Encoding Utf8 = new(false, true);
-    private static readonly uint[] CrcTable = Enumerable.Range(0, 256).Select(i =>
-    {
-        uint c = (uint)i;
-        for (int j = 0; j < 8; j++) c = (c >> 1) ^ ((c & 1) != 0 ? 0xedb88320u : 0);
-        return c;
-    }).ToArray();
+    private static readonly uint[] CrcTable = CreateCrcTable();
 
     public override string Name => $"7-Zip AES-256 (SHA-256 x {1UL << target.Power:N0}, streaming CRC)";
     public override int MaxPasswordLength => 256;
-    public override double SpeedHint => 100.0 * 524288 / (1UL << target.Power);
+    // One-thread M1 Pro estimate: KDF plus streaming AES/IEEE CRC at about 2 GB/s for unpadded Copy.
+    public override double SpeedHint => 1.0 / ((1UL << target.Power) / (175.0 * 524288) +
+        (target.Method == 0 && target.PackedSize == target.AesOutputSize ? target.CrcLength / 2_000_000_000.0 : 0));
     public override bool SupportsDictionaryPassword(ReadOnlySpan<byte> password)
     {
         try { return Utf8.GetCharCount(password) <= MaxPasswordLength; }
@@ -83,8 +80,9 @@ public sealed class SevenZipKernel(SevenZipCpuTarget target, CancellationToken s
                 catch (Exception ex) when (ex is FormatException or InvalidDataException) { return CheckResult.Trial; }
             }
 
-            // Only one survivor per target can grow a full dictionary. Other workers keep deriving keys.
-            fullDecode.Wait(ct);
+            // LZMA workers share a large history; Copy and Deflate have only bounded private buffers.
+            bool needsHistory = target.Method is 1 or 2;
+            if (needsHistory) fullDecode.Wait(ct);
             try
             {
                 file.Position = target.DataOffset;
@@ -95,7 +93,7 @@ public sealed class SevenZipKernel(SevenZipCpuTarget target, CancellationToken s
                 using var decryptedStream = new CryptoStream(encrypted, rawDecryptor, CryptoStreamMode.Read, leaveOpen: true);
                 using var packed = new LimitedReadStream(decryptedStream, target.AesOutputSize);
                 using var buffered = new BufferedStream(packed, 65536);
-                using var decoded = Decode(buffered, fullBuffers);
+                using var decoded = Decode(buffered, needsHistory ? fullBuffers : null);
                 var buffer = new byte[65536];
                 long remaining = target.CrcLength;
                 uint crc = uint.MaxValue;
@@ -104,16 +102,62 @@ public sealed class SevenZipKernel(SevenZipCpuTarget target, CancellationToken s
                     if (ct.IsCancellationRequested) return CheckResult.Crc;
                     int n = decoded.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
                     if (n == 0) return CheckResult.Crc;
-                    foreach (byte b in buffer.AsSpan(0, n)) crc = (crc >> 8) ^ CrcTable[(crc ^ b) & 255];
+                    crc = UpdateCrc(crc, buffer.AsSpan(0, n));
                     remaining -= n;
                 }
                 return ~crc == target.Crc ? CheckResult.Match : CheckResult.Crc;
             }
-            finally { fullDecode.Release(); }
+            finally { if (needsHistory) fullDecode.Release(); }
         }
         catch (Exception ex) when (ex is EndOfStreamException or InvalidDataException or FormatException or CryptographicException)
         { return CheckResult.Crc; }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return CheckResult.Crc; }
+    }
+
+    // ARM CRC32 uses the IEEE polynomial. x86 SSE4.2 CRC32 uses CRC-32C and cannot be used here.
+    internal static uint UpdateCrc(uint crc, ReadOnlySpan<byte> bytes)
+    {
+        if (!System.Runtime.Intrinsics.Arm.Crc32.Arm64.IsSupported) return UpdateCrcSoftware(crc, bytes);
+        while (bytes.Length >= 8)
+        {
+            crc = System.Runtime.Intrinsics.Arm.Crc32.Arm64.ComputeCrc32(crc, BinaryPrimitives.ReadUInt64LittleEndian(bytes));
+            bytes = bytes[8..];
+        }
+        foreach (byte b in bytes) crc = System.Runtime.Intrinsics.Arm.Crc32.ComputeCrc32(crc, b);
+        return crc;
+    }
+
+    internal static uint UpdateCrcSoftware(uint crc, ReadOnlySpan<byte> bytes)
+    {
+        while (bytes.Length >= 8)
+        {
+            uint low = crc ^ BinaryPrimitives.ReadUInt32LittleEndian(bytes);
+            uint high = BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]);
+            crc = CrcTable[1792 + (low & 255)] ^ CrcTable[1536 + ((low >> 8) & 255)] ^
+                CrcTable[1280 + ((low >> 16) & 255)] ^ CrcTable[1024 + (low >> 24)] ^
+                CrcTable[768 + (high & 255)] ^ CrcTable[512 + ((high >> 8) & 255)] ^
+                CrcTable[256 + ((high >> 16) & 255)] ^ CrcTable[high >> 24];
+            bytes = bytes[8..];
+        }
+        foreach (byte b in bytes) crc = (crc >> 8) ^ CrcTable[(crc ^ b) & 255];
+        return crc;
+    }
+
+    private static uint[] CreateCrcTable()
+    {
+        var table = new uint[8 * 256];
+        for (int i = 0; i < 256; i++)
+        {
+            uint c = (uint)i;
+            for (int bit = 0; bit < 8; bit++) c = (c >> 1) ^ ((c & 1) != 0 ? 0xedb88320u : 0);
+            table[i] = c;
+        }
+        for (int i = 256; i < table.Length; i++)
+        {
+            uint c = table[i - 256];
+            table[i] = (c >> 8) ^ table[c & 255];
+        }
+        return table;
     }
 
     private static void ReadArchive(Stream file, byte[] buffer)
@@ -170,6 +214,9 @@ public sealed class SevenZipKernel(SevenZipCpuTarget target, CancellationToken s
     {
         private readonly SevenZipLzma.Buffers trialBuffers = new();
         private readonly byte[] kdfBuffer = new byte[65536];
+
+        // Search returns a hit only after this instance's complete streaming CRC check.
+        internal bool VerifiedBy(NativeKernel source) => ReferenceEquals(kernel, source);
 
         internal bool Verify(ReadOnlySpan<byte> password)
         {
