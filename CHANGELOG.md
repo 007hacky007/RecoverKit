@@ -5,6 +5,12 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- Split ZIP archives (.z01, .z02, ..., .zip and .zip.001, .zip.002, ...) open directly,
+  including ZIP64: RecoverKit reads the parts in place without joining them. Open any part
+  with all the others in the same folder; a missing part is named. ZipCrypto and WinZip AES
+  password recovery work across parts. Stay fast key search is unavailable for split ZIPs.
+
 ### Changed
 - WinZip AES and WPA now use the built-in CPU engine next to hashcat by default when any active
   GPU is discrete. With only integrated GPUs, hybrid still needs an explicit choice or a measured

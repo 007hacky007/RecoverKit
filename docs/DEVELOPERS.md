@@ -287,6 +287,53 @@ engine supports. hashcat 7 refused some modes on the Apple GPU (17200 PKZIP: its
 Metal and OpenCL. Should a mode still be refused and the built-in CPU engine support it, the attack
 step reruns on the CPU automatically.
 
+## Split ZIP archives
+
+`ZipArchiveSource.Open(path)` is the shared ZIP opener used by `FormatDetector`, the large-entry
+ZipCrypto kernel and the Stay input readers. It discovers siblings from any selected part:
+
+- PKZIP spanned archives: `name.z01`, `name.z02`, ..., `name.zip`. The final `.zip` EOCD or
+  ZIP64 locator supplies the disk count. All preceding parts are required and the first part
+  must start with `0x08074b50`. Sibling matching ignores case and gaps name the missing part.
+- Byte-split archives: `name.zip.001`, `name.zip.002`, ... . All numbered siblings must be
+  contiguous from `.001`; a missing end record names the next required part. These use the
+  existing `MultiVolumeStream` concatenation, as split 7-Zip archives do.
+
+Both layouts read volumes in place. No joined archive or full-volume buffer is created.
+`MultiVolumeStream.DiskRelative` marks PKZIP input; `DiskOffset` translates a disk number and
+an offset within that disk into a logical position, rejecting offsets outside the named part.
+`ZipExtractor` resolves the central directory using the EOCD/ZIP64 disk and offset, follows the
+ZIP64 locator's own disk/offset, and resolves each local header using its central record's start
+disk. ZIP64 extra field `0x0001` is consumed in order: uncompressed size, compressed size, local
+offset, then the 32-bit start disk, only for fields containing sentinels. PKZIP input never uses
+the SFX `delta`; single-file ZIPs retain that adjustment. Central records and file data can cross
+part boundaries. The central-directory read remains capped at 256 MiB; existing hash/prefix and
+confirmation budgets still apply, including the 64 MiB limit for an embedded AES entry.
+
+Before using a split entry, the local signature, raw name, flags, method, DOS timestamps, sizes, CRC and AES
+metadata must agree with the central record. Data-descriptor placeholders are allowed. A mismatch
+fails detection without a target, including a mismatch in a confirmation entry. Single-file local
+headers retain their previous tolerance. Large ZipCrypto verification reopens the complete sibling
+set and reads the whole attacked entry only for candidates that survive the prefix check.
+`ZipPasswordConfirmer` keeps its bounded data/header checks in memory and needs no path reopen.
+The CLI `info` alias and `extract` use the same detector as `crack` and the GUI. Dependency repair
+reuses detection; there is no separate encrypted-ZIP repair/extraction reader to join volumes.
+
+Stay key recovery and decrypted-copy output are disabled for both split layouts. Detection explains
+this in the file details and leaves `StayZip` empty; a direct `WriteDecryptedCopy` call also refuses
+split input before creating output. Normal dictionary, mask and password confirmation paths work.
+
+Small real-tool fixtures and their regeneration script are in `tests/fixtures/zip-split`.
+`ZipSplitTests` covers both layouts, ZIP64 fields and sparse offsets beyond 4 GiB, disk crossings,
+missing parts, local-header mismatches, single-file compatibility and joined-reference hashes.
+The `ZipSplitCliTests` slow tests require a built CLI and `RECOVERKIT_TEST_HASHCAT` pointing at a
+private hashcat 8.0.0 installation:
+
+```sh
+dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+RECOVERKIT_TEST_HASHCAT=/path/to/hashcat dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~ZipSplitCliTests
+```
+
 ## ZIP kernels for hashcat
 
 hashcat compiles its kernels at run time from the `.cl` sources in its `OpenCL/` folder, and the

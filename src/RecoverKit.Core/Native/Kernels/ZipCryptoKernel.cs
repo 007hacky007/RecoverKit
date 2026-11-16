@@ -92,7 +92,7 @@ public sealed class ZipCryptoKernel : NativeKernel
             {
                 if (partial!.Method != method || partial.DataOffset < 0 || partial.CompressedLength < data.Length || uncompressed < 0)
                     return null;
-                using var archive = File.OpenRead(partial.ArchivePath);
+                using var archive = ZipArchiveSource.Open(partial.ArchivePath);
                 if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return null;
                 archive.Position = partial.DataOffset;
                 var prefix = new byte[data.Length];
@@ -103,7 +103,7 @@ public sealed class ZipCryptoKernel : NativeKernel
                 dataType == 1 ? partial : null);
         }
         catch (Exception ex) when (ex is FormatException or IndexOutOfRangeException or OverflowException
-            or IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+            or IOException or UnauthorizedAccessException or ArgumentException or UnsupportedFormatException) { return null; }
     }
 
     public override KernelWorker CreateWorker() => new Worker(this);
@@ -355,7 +355,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         try
         {
-            using var archive = File.OpenRead(partial.ArchivePath);
+            using var archive = ZipArchiveSource.Open(partial.ArchivePath);
             if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return false;
             archive.Position = partial.DataOffset;
             Span<byte> header = stackalloc byte[12];
@@ -377,7 +377,7 @@ public sealed class ZipCryptoKernel : NativeKernel
             return total == _uncompressed && ~crc == _crc && decrypted.Remaining == 0
                 && (_method == 0 || !decrypted.RequestedPastEnd);
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { return false; }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or FormatException or UnsupportedFormatException) { return false; }
     }
 
     private sealed class DecryptStream(Stream archive, long remaining, uint k0, uint k1, uint k2) : Stream

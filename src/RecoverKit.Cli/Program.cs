@@ -31,6 +31,7 @@ try
 {
     switch (cmd)
     {
+        case "info":
         case "extract":
         {
             if (argv.Count < 2) return Usage();
@@ -492,7 +493,7 @@ static void Print(Detection d)
 
 static int Usage()
 {
-    Console.WriteLine("usage: recoverkit-cli extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir] | bench-zip [--device N] [--seconds S]");
+    Console.WriteLine("usage: recoverkit-cli info <file> | extract <file> [--full] | crack <file> <attack options> | unlock <file> [--index N|all] [--out path] | scenario-line \"/a:b ...\" | install-hashcat [--into dir] [--from portable-hashcat-dir] | bench-zip [--device N] [--seconds S]");
     Console.WriteLine("Detailed test: bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]");
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");

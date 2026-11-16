@@ -185,6 +185,9 @@ incompatible archives are rejected within seconds.
 |---|---|---:|
 | Apple M1 Pro, 10 cores | 5 encrypted files, WinZip-style MSVC headers (test archive) | 42 s |
 
+Split ZIP archives do not run Stay key recovery or write decrypted copies. Use normal password
+attacks for `.z01`/`.zip` or `.zip.001` input; they read the parts in place, including ZIP64.
+
 Requirements: ZipCrypto (not AES), at least 5 encrypted files added in the same run of the
 zipping program. Archives with 2 to 4 files would need Stay's 2020 lattice attack (not implemented).
 

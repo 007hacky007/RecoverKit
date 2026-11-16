@@ -5,11 +5,11 @@ public static class FormatDetector
 {
     public static readonly string[] OpenFilter =
     [
-        "All supported files|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xltx;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab;*.mdb;*.mde;*.accdb",
+        "All supported files|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xltx;*.xlsb;*.ppt;*.pptx;*.pptm;*.odt;*.ods;*.odp;*.odg;*.odf;*.zip;*.zipx;*.z*;*.zip.*;*.rar;*.7z;*.7z.001;*.pdf;*.22000;*.hccapx;*.hccap;*.exe;*.plist;*.ipd;*.kdbx;*.kdb;*.json;*.ldb;*.log;*.seco;UTC--*;default_wallet;*.ab;*.mdb;*.mde;*.accdb",
         "MS Office documents|*.doc;*.docx;*.docm;*.dotx;*.xls;*.xlsx;*.xlsm;*.xltx;*.xlsb;*.ppt;*.pptx;*.pptm",
         "Access databases|*.mdb;*.mde;*.accdb",
         "OpenDocument files|*.od?;*.sx?",
-        "ZIP archives|*.zip;*.zipx",
+        "ZIP archives|*.zip;*.zipx;*.z*;*.zip.*",
         "RAR archives|*.rar",
         "7-Zip archives|*.7z;*.7z.001",
         "KeePass databases|*.kdbx;*.kdb",
@@ -29,7 +29,8 @@ public static class FormatDetector
         {
             // A split 7z archive (.7z.001, .002, ...) is read across its parts as one file.
             var parts = MultiVolumeStream.SevenZipParts(path);
-            using Stream s = parts is not null ? new MultiVolumeStream(parts) : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using Stream s = parts is not null ? new MultiVolumeStream(parts) : ZipArchiveSource.Open(path);
+            if (s is MultiVolumeStream volumes) parts = volumes.Paths.ToList();
             if (parts is not null) d.Add("Parts", parts.Count == 1 ? Path.GetFileName(parts[0]) : $"{parts.Count} ({Path.GetFileName(parts[0])} to {Path.GetFileName(parts[^1])})");
             d.Add("File size", $"{s.Length:N0} bytes");
             if (s.Length == 0) { d.Message = "File is empty."; return d; }
@@ -48,7 +49,7 @@ public static class FormatDetector
             }
             else if (head.Length >= 4 && head[0] == 'P' && head[1] == 'K' && ZipExtractor.LooksLikeZip(s))
             {
-                if (!SpreadsheetProtection.TryExtractZip(s, d)) ZipExtractor.Extract(s, d);
+                if (s is MultiVolumeStream || !SpreadsheetProtection.TryExtractZip(s, d)) ZipExtractor.Extract(s, d);
             }
             else if (head.Length >= 7 && head[0] == 'R' && head[1] == 'a' && head[2] == 'r' && head[3] == '!')
             {
@@ -108,10 +109,10 @@ public static class FormatDetector
                             "use File > Open As...";
             }
         }
-        catch (UnsupportedFormatException ex) { d.Message = ex.Message; }
-        catch (FormatException ex) { d.Message = "File is damaged or has unexpected structure: " + ex.Message; }
-        catch (IOException ex) { d.Message = "Cannot open file: " + ex.Message; }
-        catch (UnauthorizedAccessException ex) { d.Message = "Cannot open file: " + ex.Message; }
+        catch (UnsupportedFormatException ex) { d.Target = null; d.Message = ex.Message; }
+        catch (FormatException ex) { d.Target = null; d.Message = "File is damaged or has unexpected structure: " + ex.Message; }
+        catch (IOException ex) { d.Target = null; d.Message = "Cannot open file: " + ex.Message; }
+        catch (UnauthorizedAccessException ex) { d.Target = null; d.Message = "Cannot open file: " + ex.Message; }
         return d;
     }
 

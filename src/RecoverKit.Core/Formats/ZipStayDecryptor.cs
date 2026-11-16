@@ -43,7 +43,9 @@ public static class ZipStayDecryptor
     /// </summary>
     public static string WriteDecryptedCopy(string archivePath, ZipStayTarget target, ZipStayKeys keys, string outputPath)
     {
-        using var src = File.OpenRead(archivePath);
+        using var src = ZipArchiveSource.Open(archivePath);
+        if (src is MultiVolumeStream)
+            throw new UnsupportedFormatException("Stay key recovery and decrypted-copy writing are not supported for split ZIP archives. Use password recovery instead.");
         var entries = ZipExtractor.ReadCentralDirectory(src, out long delta, out long cdStart, out var cd);
 
         // local record extents: each entry runs from its local header to the next entry's (last: to the CD)
