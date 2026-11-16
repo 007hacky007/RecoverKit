@@ -350,8 +350,8 @@ What this machine shows:
   This is why, when every GPU is integrated and the last hybrid attack measured the CPU below a
   quarter of hashcat's speed, later attacks on that mode run hashcat alone.
 - On a desktop with a discrete GPU the GPU does not share the processor's power budget, so the CPU's
-  share should add almost fully; that case (the user benchmark that prompted this, a Ryzen 7 9800X3D
-  with an RTX 4060) was not available for measurement.
+  share adds almost fully: on a Ryzen 7 9800X3D with an RTX 4060 the RAR 3 benchmark measured GPU
+  76,271/s and CPU 36,052/s (see the Ryzen section above).
 
 Before this work two things cost the built-in engine most of its speed on macOS: the default
 "Idle" priority niced the process, which macOS runs on the efficiency cores (PDF R6 10,000-16,000/s
@@ -361,40 +361,78 @@ the engine fed the GPU at 2,500/s instead of 9,600/s. On macOS neither is lowere
 Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without `--no-hybrid`, and
 `--strategy CpuOnly`; the status lines list each device's speed.
 
-## Ryzen 7 9800X3D + RTX 4060 against a commercial product (RecoverKit 1.6.1)
+## Ryzen 7 9800X3D + RTX 4060 against a commercial product
 
 Measured on the tester's Windows PC: AMD Ryzen 7 9800X3D (Zen 5, 8 cores, 16 threads, AVX-512),
 NVIDIA GeForce RTX 4060, the processor's integrated Radeon unticked. Each program's own built-in
-benchmark: the commercial product on 2026-11-12, RecoverKit 1.6.1 on 2026-11-14. Passwords per
-second; the commercial product uses the processor next to the GPU for every format.
+benchmark: the commercial product on 2026-11-12, RecoverKit 1.6.1 on 2026-11-14 and 1.7.2 on
+2026-11-16. Passwords per second; the commercial product uses the processor next to the GPU for
+every format. The ratio compares 1.7.2 with the commercial product.
 
-| Format | Commercial | RecoverKit 1.6.1 | Ratio | RecoverKit engine |
-|---|---:|---:|---:|---|
-| Word 97 (RC4/MD5) | 43.4 M | **558.8 M** | **12.9x** | hashcat + built-in CPU engine |
-| Word 2003 (RC4/SHA-1) | 56.3 M | **634.1 M** | **11.3x** | hashcat + built-in CPU engine |
-| PDF R6 (AES-256) | 23,158 | **159,061** | **6.9x** | hashcat + built-in CPU engine |
-| RAR 5 | 50,812 | **68,383** | **1.35x** | hashcat + built-in CPU engine (AVX2, AVX-512) |
-| TrueCrypt RIPEMD-160 | 260,444 | **332,109** | **1.28x** | hashcat |
-| ZIP classic | 13.39 G | **14.68 G** | **1.10x** | hashcat + built-in CPU engine |
-| PowerPoint 2013+ | 12,704 | 12,392 | 0.98x | hashcat |
-| RAR 3 | 98,014 | 87,951 | 0.90x | hashcat + built-in CPU engine (AVX-512) |
-| WPA | 531,252 | 456,779 | 0.86x | hashcat |
-| TrueCrypt SHA-512 | 590,736 | 507,259 | 0.86x | hashcat |
-| Word 2007 | 181,756 | 154,338 | 0.85x | hashcat |
-| PDF R3 (128-bit) | 34.6 M | 28.8 M | 0.83x | hashcat + built-in CPU engine |
-| TrueCrypt Whirlpool | 87,438 | 71,267 | 0.82x | hashcat + built-in CPU engine (no AVX-512 path) |
-| WinZip AES | 4.15 M | 3.26 M | 0.79x | hashcat |
+RecoverKit 1.7.2 report: [benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.7.2.html](benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.7.2.html)
 
-- RecoverKit 1.3.0 on the same PC: ZIP classic 1.36 G, RAR 3 61,758, RAR 5 43,904. 1.6.1 is 10.8x,
-  1.42x and 1.56x of that.
-- The RAR 3 AVX-512 path ran here for the first time on real hardware and passed its self-test.
-- RecoverKit leads where its built-in CPU engine carries the work (Office 97-2003, PDF R6) or adds
-  to hashcat (RAR 5, ZIP). The formats that run on hashcat alone are 14% to 21% behind; the
-  commercial product adds the processor there.
+| Format | Commercial | RecoverKit 1.6.1 | RecoverKit 1.7.2 | Ratio | RecoverKit engine (1.7.2) |
+|---|---:|---:|---:|---:|---|
+| Word 97 (RC4/MD5) | 43.4 M | 558.8 M | **529.1 M** | **12.2x** | hashcat + built-in CPU engine |
+| Word 2003 (RC4/SHA-1) | 56.3 M | 634.1 M | **591.4 M** | **10.5x** | hashcat + built-in CPU engine |
+| PDF R6 (AES-256) | 23,158 | 159,061 | **144,859** | **6.3x** | hashcat + built-in CPU engine |
+| RAR 5 | 50,812 | 68,383 | **66,539** | **1.31x** | hashcat + built-in CPU engine (AVX2, AVX-512) |
+| TrueCrypt RIPEMD-160 | 260,444 | 332,109 | **305,730** | **1.17x** | hashcat |
+| RAR 3 | 98,014 | 87,951 (7 chars) | **112,323** (4 chars) | **1.15x** | hashcat + built-in CPU engine (AVX-512) |
+| ZIP classic | 13.39 G | 14.68 G | **14.51 G** | **1.08x** | hashcat + built-in CPU engine (managed AVX2) |
+| PowerPoint 2013+ | 12,704 | 12,392 | 11,830 | 0.93x | hashcat |
+| Word 2007 | 181,756 | 154,338 | 156,984 | 0.86x | hashcat |
+| WPA | 531,252 | 456,779 | 448,144 | 0.84x | hashcat |
+| WinZip AES | 4.15 M | 3.26 M | 3.30 M | 0.79x | hashcat |
+| TrueCrypt SHA-512 | 590,736 | 507,259 | 447,447 | 0.76x | hashcat |
+| PDF R3 (128-bit) | 34.6 M | 28.8 M | 25.6 M | 0.74x | hashcat + built-in CPU engine |
+| TrueCrypt Whirlpool | 87,438 | 71,267 | failed | - | hashcat + built-in CPU engine |
+
+What each side measured in the 1.7.2 hybrid rows (GPU + CPU): Word 97 478.0 M + 51.1 M, Word 2003
+531.1 M + 60.4 M, PDF R6 90,971 + 53,888, RAR 5 48,227 + 18,312, RAR 3 76,271 + 36,052, ZIP
+12.79 G + 1.72 G, PDF R3 21.9 M + 3.7 M.
+
+- 1.7.2 leads on 7 of the 13 measured formats. It leads where the built-in CPU engine carries
+  the work (Office 97-2003, PDF R6) or adds a large share to hashcat (RAR 5 +38%, RAR 3 +47%). On
+  ZIP the GPU alone (12.79 G) is 5% behind and the CPU's 1.72 G puts it ahead.
+- RAR 3 moved from 0.90x to 1.15x because 1.7.x measures it at 4 characters, the length the
+  commercial figure matches (see "Same inputs, live attacks"). 1.6.1 measured 7 characters, which
+  costs 1.32x more per password; 87,951 x 1.32 = 116,000 is close to the new figure. This is a
+  like-for-like correction, not a speed-up.
+- The formats that run on hashcat alone are 7% to 24% behind; the commercial product adds the
+  processor there. WPA and WinZip AES have had a CPU engine since 1.6.2, but it runs next to the
+  GPU only after the performance profile has measured a whole-job win, so the benchmark used
+  hashcat alone. PDF R3 runs hybrid and is still 26% behind: hashcat's GPU share alone
+  (21.9 M) is 37% below the commercial figure.
+- The GPU backend differs between the two runs. On this PC 1.6.1 could not build hashcat's CUDA
+  kernels (a CUDA Toolkit newer than the driver was not hidden from hashcat, fixed after 1.6.1),
+  so hashcat ran the RTX 4060 through OpenCL, although the 1.6.1 report listed the device as CUDA.
+  1.7.2 ran it through CUDA. Rows on hashcat alone moved by -12% to +2% (TrueCrypt SHA-512 -12%,
+  TrueCrypt RIPEMD-160 -8%, PowerPoint -5%, WPA -2%, WinZip AES +1%, Word 2007 +2%). Both runs used
+  hashcat 8.0.0. The short detailed performance test on the same day compared the two backends
+  only for RAR 5 (mode 13000, GPU alone, synthetic fixture, 7 characters): CUDA 46,983/s, OpenCL
+  47,713/s, within 2%. The other CUDA probes did not fit the short test's time budget, so the
+  formats that dropped most (TrueCrypt SHA-512 and RIPEMD-160, PDF) still need the thorough test.
+- The same detailed test measured the CPU engines that 1.7.2 keeps off next to the GPU (AVX-512,
+  16 threads): WinZip AES 1,120,784/s and WPA 140,217/s (8 characters). Added to the GPU's
+  3,301,783/s and 448,144/s from the benchmark, that would be about 4.4 M and 588,000/s, ahead of
+  the commercial 4.15 M and 531,252/s, if the GPU keeps its speed with the CPU busy. Not measured
+  as a combined run.
+- TrueCrypt Whirlpool returned no rate in 1.7.2 ("not supported on this device"): the matched
+  hybrid probe got a zero from the GPU or the CPU side and returned 0. 1.6.1 measured 71,267 on the
+  same PC. The separate CPU path measurement in the same report ran: 11,891/s for the scalar path
+  and 8,901/s for the AVX-512 path (0.75x, 15 threads, 3 pairs). The AVX-512 Whirlpool path is
+  slower on Zen 5 and stays off by default.
+- The RAR 5 CPU share (18,312/s with 15 threads) is close to the 20,000/s estimated below for this
+  CPU before it was measured.
 - The commercial report prints a second figure in brackets (RAR 3: 98,014 (92,947)); the first
   one is compared. Its Word 2007 test file uses 256-bit AES, RecoverKit's 128-bit AES, so that row
-  is approximate. PDF R6 and RAR 3 costs depend on password length, and the two benchmarks may use
-  different lengths (see "Same inputs, live attacks" above).
+  is approximate. PDF R6 and RAR 3 costs depend on password length (see "Same inputs, live
+  attacks" above).
+- RecoverKit 1.3.0 on the same PC: ZIP classic 1.36 G, RAR 3 61,758, RAR 5 43,904.
+- The 1.7.2 report also covers formats without a commercial figure: 7-Zip 506,600, KeePass
+  AES-KDF 54,858, KeePass Argon2 637, Android backup 184,512, Word 2010 77,102, OpenDocument
+  19,110, PDF R2 769.7 M, PDF R5 3.65 G, VeraCrypt SHA-512 1,159, and the wallet formats.
 
 ## Version 1.5.0 performance work
 
@@ -415,9 +453,9 @@ on a machine that was not isolated unless noted. The method and the open items a
 - The dictionary rows are complete jobs with start-up, three to five alternating pairs. In the
   RAR 5 hybrid job the CPU hashed at 5,579/s, close to its 5,762-5,958/s in a mask attack.
 - The integrated GPU of the M1 Pro shares its power budget with the CPU, so a desktop with a
-  discrete GPU should gain more from the CPU's share. That has not been measured.
-- RAR 3 also has an AVX-512 path. It checks itself against known answers before first use; no
-  AVX-512 machine has run it yet. The AVX2 and NEON rates were unchanged by it (3,575 against
+  discrete GPU gains more from the CPU's share (see the Ryzen section above).
+- RAR 3 also has an AVX-512 path. It checks itself against known answers before first use; it
+  first ran on a Ryzen 7 9800X3D in the 1.6.1 benchmark and passed. The AVX2 and NEON rates were unchanged by it (3,575 against
   3,573/s and 3,693 against 3,693/s).
 
 ### Metal instead of OpenCL on macOS
@@ -475,16 +513,14 @@ first range) by hashcat after 137 s; GPU only found `ab10` after 448 s. Another 
 GPU at times during these runs. Unlike RAR 3, the CPU here stays above a quarter of the integrated
 GPU's speed, so both keep running. On a discrete GPU the CPU's share should add almost fully.
 
-Estimate for a Ryzen 7 9800X3D (8 Zen 5 cores, full-width AVX-512) next to an RTX 4060, not
-measured: the AVX-512 loop is about 3,250 vector operations per iteration for 16 lanes (1,112
-VPROLD, 812 VPTERNLOGD, 1,154 VPADDD, 172 shifts). With Zen 5's four vector ALUs and rotates on two
-of them that is roughly 800-850 cycles, about 53 cycles per candidate and iteration, or 1.7 million
-cycles per candidate. At about 5 GHz all-core that is 2,900/s per core and, with one thread left to
-hashcat's GPU thread, about 20,000/s for the CPU (SMT adds little to a loop that already fills the
-vector units). If the RTX 4060 gives hashcat on the order of 80,000-100,000/s for mode 13000, the
-CPU adds 20-25 %, which would turn the reported 7 % deficit against the commercial CPU + GPU
-result into a lead of 10-15 %. The AVX-512 path was compiled and inspected but not run on AVX-512
-hardware for this work.
+Estimate for a Ryzen 7 9800X3D (8 Zen 5 cores, full-width AVX-512) next to an RTX 4060, made
+before it was measured: the AVX-512 loop is about 3,250 vector operations per iteration for 16
+lanes (1,112 VPROLD, 812 VPTERNLOGD, 1,154 VPADDD, 172 shifts). With Zen 5's four vector ALUs and
+rotates on two of them that is roughly 800-850 cycles, about 53 cycles per candidate and
+iteration, or 1.7 million cycles per candidate. At about 5 GHz all-core that is 2,900/s per core
+and, with one thread left to hashcat's GPU thread, about 20,000/s for the CPU. The 1.7.2 benchmark
+on that PC measured 18,312/s for the CPU next to 48,227/s for hashcat on the GPU, 66,539/s
+together: 1.31x the commercial product's 50,812/s.
 
 ## Findings
 
