@@ -159,7 +159,7 @@ public static class StayAttack
         if (e.CompSize - HeaderLength > int.MaxValue) return true;   // zip64-sized body: header match suffices
 
         // the pass-2 cipher state continues straight into the entry data
-        using var fs = File.OpenRead(archivePath);
+        using var fs = ZipArchiveSource.Open(archivePath);
         fs.Seek(e.DataOffset + HeaderLength, SeekOrigin.Begin);
         var len = (int)(e.CompSize - HeaderLength);
         var enc = new byte[len];

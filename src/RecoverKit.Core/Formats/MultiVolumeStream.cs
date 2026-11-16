@@ -3,8 +3,8 @@ using System.Text.RegularExpressions;
 namespace RecoverKit.Core.Formats;
 
 /// <summary>
-/// Read-only view of a split archive's parts (name.7z.001, name.7z.002, ...) as one stream, so a
-/// multi-volume archive is read in place without joining the parts on disk.
+/// Read-only concatenation of ZIP or 7-Zip parts, read in place without joining them on disk.
+/// PKZIP callers can also resolve offsets relative to an individual disk.
 /// </summary>
 public sealed partial class MultiVolumeStream : Stream
 {
@@ -14,10 +14,25 @@ public sealed partial class MultiVolumeStream : Stream
 
     public IReadOnlyList<string> Paths { get; }
 
-    public MultiVolumeStream(IReadOnlyList<string> paths)
+    public bool DiskRelative { get; }
+
+    internal long DiskOffset(uint disk, long offset)
+    {
+        if (disk >= _parts.Length || offset < 0 || offset >= _parts[disk].Length)
+            throw new FormatException("ZIP disk number or offset is outside its part.");
+        return checked(_starts[disk] + offset);
+    }
+
+    internal void ValidateDiskCount(uint count)
+    {
+        if (count != _parts.Length) throw new FormatException("ZIP disk count does not match its parts.");
+    }
+
+    public MultiVolumeStream(IReadOnlyList<string> paths, bool diskRelative = false)
     {
         if (paths.Count == 0) throw new ArgumentException("No parts.", nameof(paths));
         Paths = paths;
+        DiskRelative = diskRelative;
         _parts = new FileStream[paths.Count];
         _starts = new long[paths.Count + 1];
         try
