@@ -378,28 +378,46 @@ Reproduce: `recoverkit-cli crack <file> --hcmask '?u?u?u?u?u'` with and without 
 
 Measured on the tester's Windows PC: AMD Ryzen 7 9800X3D (Zen 5, 8 cores, 16 threads, AVX-512),
 NVIDIA GeForce RTX 4060, the processor's integrated Radeon unticked. Each program's own built-in
-benchmark: the commercial product on 2026-11-12, RecoverKit 1.6.1 on 2026-11-14 and 1.7.2 on
+benchmark: the commercial product on 2026-11-12, RecoverKit 1.6.1 on 2026-11-14, 1.7.2 and 1.8.0 on
 2026-11-16. Passwords per second; the commercial product uses the processor next to the GPU for
-every format. The ratio compares 1.7.2 with the commercial product.
+every format. The ratio compares 1.8.0 with the commercial product. 1.6.1 ran the RTX 4060 through
+OpenCL (CUDA kernel builds failed on this PC), 1.7.2 and 1.8.0 through CUDA.
 
-RecoverKit 1.7.2 report: [benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.7.2.html](benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.7.2.html)
+RecoverKit reports: [1.7.2](benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.7.2.html),
+[1.8.0](benchmarks/ryzen-9800x3d-rtx4060-recoverkit-1.8.0.html) (with the full setup: CUDA on
+the RTX 4060, integrated Radeon excluded automatically, 15 CPU threads next to the GPU, no extra
+hashcat arguments).
 
-| Format | Commercial | RecoverKit 1.6.1 | RecoverKit 1.7.2 | Ratio | RecoverKit engine (1.7.2) |
-|---|---:|---:|---:|---:|---|
-| Word 97 (RC4/MD5) | 43.4 M | 558.8 M | **529.1 M** | **12.2x** | hashcat + built-in CPU engine |
-| Word 2003 (RC4/SHA-1) | 56.3 M | 634.1 M | **591.4 M** | **10.5x** | hashcat + built-in CPU engine |
-| PDF R6 (AES-256) | 23,158 | 159,061 | **144,859** | **6.3x** | hashcat + built-in CPU engine |
-| RAR 5 | 50,812 | 68,383 | **66,539** | **1.31x** | hashcat + built-in CPU engine (AVX2, AVX-512) |
-| TrueCrypt RIPEMD-160 | 260,444 | 332,109 | **305,730** | **1.17x** | hashcat |
-| RAR 3 | 98,014 | 87,951 (7 chars) | **112,323** (4 chars) | **1.15x** | hashcat + built-in CPU engine (AVX-512) |
-| ZIP classic | 13.39 G | 14.68 G | **14.51 G** | **1.08x** | hashcat + built-in CPU engine (managed AVX2) |
-| PowerPoint 2013+ | 12,704 | 12,392 | 11,830 | 0.93x | hashcat |
-| Word 2007 | 181,756 | 154,338 | 156,984 | 0.86x | hashcat |
-| WPA | 531,252 | 456,779 | 448,144 | 0.84x | hashcat |
-| WinZip AES | 4.15 M | 3.26 M | 3.30 M | 0.79x | hashcat |
-| TrueCrypt SHA-512 | 590,736 | 507,259 | 447,447 | 0.76x | hashcat |
-| PDF R3 (128-bit) | 34.6 M | 28.8 M | 25.6 M | 0.74x | hashcat + built-in CPU engine |
-| TrueCrypt Whirlpool | 87,438 | 71,267 | failed | - | hashcat + built-in CPU engine |
+| Format | Commercial | RecoverKit 1.6.1 | RecoverKit 1.7.2 | RecoverKit 1.8.0 | Ratio | RecoverKit engine (1.8.0) |
+|---|---:|---:|---:|---:|---:|---|
+| Word 97 (RC4/MD5) | 43.4 M | 558.8 M | 529.1 M | **617.8 M** | **14.2x** | hashcat + built-in CPU engine |
+| Word 2003 (RC4/SHA-1) | 56.3 M | 634.1 M | 591.4 M | **545.9 M** | **9.7x** | hashcat + built-in CPU engine |
+| PDF R6 (AES-256) | 23,158 | 159,061 | 144,859 | **150,771** | **6.5x** | hashcat + built-in CPU engine |
+| RAR 5 | 50,812 | 68,383 | 66,539 | **66,201** | **1.30x** | hashcat + built-in CPU engine (AVX2, AVX-512) |
+| TrueCrypt RIPEMD-160 | 260,444 | 332,109 | 305,730 | **327,355** | **1.26x** | hashcat |
+| ZIP classic | 13.39 G | 14.68 G | 14.51 G | **14.61 G** | **1.09x** | hashcat + built-in CPU engine (managed AVX2) |
+| WPA | 531,252 | 456,779 | 448,144 | **566,140** | **1.07x** | hashcat + built-in CPU engine (AVX-512) |
+| RAR 3 | 98,014 | 87,951 (7 chars) | 112,323 (4 chars) | **104,108** (4 chars) | **1.06x** | hashcat + built-in CPU engine (AVX-512) |
+| WinZip AES | 4.15 M | 3.26 M | 3.30 M | **4.18 M** | **1.01x** | hashcat + built-in CPU engine (AVX-512) |
+| PowerPoint 2013+ | 12,704 | 12,392 | 11,830 | 11,999 | 0.94x | hashcat |
+| Word 2007 | 181,756 | 154,338 | 156,984 | 158,927 | 0.87x | hashcat |
+| TrueCrypt Whirlpool | 87,438 | 71,267 | failed | 73,194 | 0.84x | hashcat + built-in CPU engine (scalar) |
+| PDF R3 (128-bit) | 34.6 M | 28.8 M | 25.6 M | 27.7 M | 0.80x | hashcat + built-in CPU engine |
+| TrueCrypt SHA-512 | 590,736 | 507,259 | 447,447 | 450,207 | 0.76x | hashcat |
+
+What each side measured in the 1.8.0 hybrid rows (GPU + CPU): Word 97 569.0 M + 48.7 M, Word 2003
+486.5 M + 59.4 M, PDF R6 96,585 + 54,186, RAR 5 48,143 + 18,058, WPA 436,743 + 129,397, RAR 3
+70,024 + 34,084, ZIP 12.97 G + 1.64 G, WinZip AES 3,160,940 + 1,016,229, TrueCrypt Whirlpool 61,705
++ 11,489, PDF R3 24.0 M + 3.7 M.
+
+- 1.8.0 leads on 9 of the 14 formats. WPA (0.84x to 1.07x) and WinZip AES (0.79x to 1.01x) moved
+  ahead because the built-in CPU engine now runs next to a dedicated GPU by default; these are
+  benchmark rates, not whole-job times. The TrueCrypt Whirlpool row works again.
+- The remaining gaps are formats without a built-in CPU engine (Word 2007, PowerPoint 2013+,
+  TrueCrypt SHA-512), Whirlpool, where the CPU adds 11,489/s to the GPU's 61,705/s, and PDF R3,
+  where hashcat's GPU share alone (24.0 M) is 31% below the commercial total.
+
+### Notes on the 1.7.2 run
 
 What each side measured in the 1.7.2 hybrid rows (GPU + CPU): Word 97 478.0 M + 51.1 M, Word 2003
 531.1 M + 60.4 M, PDF R6 90,971 + 53,888, RAR 5 48,227 + 18,312, RAR 3 76,271 + 36,052, ZIP
