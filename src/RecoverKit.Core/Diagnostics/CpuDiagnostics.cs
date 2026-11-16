@@ -80,6 +80,7 @@ public static class CpuDiagnostics
         report.System["AVX-512 available"] = HasWidePaths.ToString();
         report.System["Logical threads"] = Environment.ProcessorCount.ToString();
         report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
+        report.System["Office 2007 self-test (report process)"] = NativeKernels.WideSelfTestState(9400);
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
         report.System["PBKDF2 SHA-1 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(22000);
@@ -88,11 +89,11 @@ public static class CpuDiagnostics
 
     internal static void WorkerStates(DiagnosticReport report)
     {
-        foreach (int mode in new[] { 12500, 13000, 13600, 22000, 29331 })
+        foreach (int mode in new[] { 9400, 12500, 13000, 13600, 22000, 29331 })
         {
             string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
                 .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
-            string name = mode switch { 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", _ => "Whirlpool" };
+            string name = mode switch { 9400 => "Office 2007", 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", _ => "Whirlpool" };
             report.System[$"{name} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
         }
     }
@@ -177,7 +178,7 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
-            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || mode is 13600 or 22000 && RkNative.Available)
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || mode is 9400 or 13600 or 22000 && RkNative.Available)
             {
                 var wide = WideCpuChecks.Check(mode);
                 return wide with { Cases = wide.Cases + 7 };

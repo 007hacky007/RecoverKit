@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using RecoverKit.Core.Native;
 using RecoverKit.Core.Native.Kernels;
@@ -9,6 +10,7 @@ internal static unsafe class WideCpuChecks
 {
     internal static CpuDiagnostics.CorrectnessResult Check(int mode)
     {
+        if (mode == 9400) return CheckOffice2007();
         if (mode is 13600 or 22000) return CheckPbkdf2Sha1();
         if (mode == 29331) return CheckWhirlpool();
         int cases = 0;
@@ -48,6 +50,42 @@ internal static unsafe class WideCpuChecks
                 if (RkNative.Rar5Search(s, 15, c, p, 7, n, h, n) != n || !hits.SequenceEqual(Enumerable.Range(0, n)))
                     return new(false, cases, "RAR 5 filter lost or reordered matching batch positions.");
             cases += n;
+        }
+        return new(true, cases);
+    }
+
+    private static CpuDiagnostics.CorrectnessResult CheckOffice2007()
+    {
+        const int stride = 512;
+        int n = Math.Max(9, RkNative.Office2007Lanes() + 3), cases = 0;
+        int[] sizes = [0, 2, 14, 54, 56, 110, 128, 256, 512];
+        int[] lengths = Enumerable.Range(0, n).Select(i => sizes[i % sizes.Length]).ToArray();
+        byte[] passwords = new byte[n * stride];
+        for (int i = 0; i < passwords.Length; i += 2)
+        {
+            passwords[i] = (byte)(33 + i * 17);
+            passwords[i + 1] = (byte)(i % 7);
+        }
+        byte[] salt = Convert.FromHexString("e6773b8ca35c5e57d61e2d3a4d634566");
+        byte[] actual = new byte[n * 20];
+        fixed (byte* p = passwords, s = salt, o = actual)
+        fixed (int* lens = lengths)
+            if (RkNative.Office2007Spin(p, stride, lens, n, s, o) != 0)
+                return new(false, cases, "Native Office 2007 rejected the lane check.");
+        Span<byte> digest = stackalloc byte[20];
+        Span<byte> round = stackalloc byte[24];
+        for (int i = 0; i < n; i++)
+        {
+            SHA1.HashData([.. salt, .. passwords.AsSpan(i * stride, lengths[i])], digest);
+            for (int counter = 0; counter < 50000; counter++)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(round, counter);
+                digest.CopyTo(round[4..]);
+                SHA1.HashData(round, digest);
+            }
+            cases++;
+            if (!digest.SequenceEqual(actual.AsSpan(i * 20, 20)))
+                return new(false, cases, $"Office 2007 SHA-1 differs from the reference at batch position {i}, UTF-16LE length {lengths[i]}.");
         }
         return new(true, cases);
     }

@@ -1,0 +1,110 @@
+[
+  {
+    "name": "128-empty",
+    "password": "",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*def0bb8cc8ad7d709308d640620da45c*944070591313356efeb7ace86df078581223c09e",
+    "spin": "a7dafbafcc5c54eec6c44c550b8db8bc9fd1df79"
+  },
+  {
+    "name": "128-ascii",
+    "password": "office-test",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*153e084826c5705627e305c27b5b3142*a03554fdbc9bbc292ca0b0e3c301b5522d6fc62e",
+    "spin": "02d577eb07fca11edb5edf8da2badb2ba9ab01a7"
+  },
+  {
+    "name": "128-unicode",
+    "password": "p\u0159\u00edli\u0161-\ud83d\udd10",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*c2bb2c2e9ed241411914c7df4f4e2f7b*b70be737e2907ad234ea04790653914e64a6cd2e",
+    "spin": "08fedace10034819d9490d72012220cbc0037e21"
+  },
+  {
+    "name": "128-supplementary",
+    "password": "\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*b8e01fc4c4cba267d431cae52b9f8e3d*1868429e9e8761b6bac2943d37aa3242016c9635",
+    "spin": "8bd06ade5c28d0d4403c05a6b7e005f966422735"
+  },
+  {
+    "name": "128-utf8-256",
+    "password": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*debd79da41bd3dcaa6c8db35aff12dc5*3ff056471458e2bd2e53a6a9f0c42afa8dee3edb",
+    "spin": "ac3c9a978e375b573fbf008e9da5f5bea28a09b1"
+  },
+  {
+    "name": "128-utf16-127",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*351304f40858449f732a83869ff0f8e8*fd69b901600c12356de90a564033e1a6a0d9eeaa",
+    "spin": "c0f31f162757a81157db330945274395290ab785"
+  },
+  {
+    "name": "128-utf16-128",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*e37bada4b9f16c11e1b941d51dee712a*da3107677f0cf75389cfdb401edb2dc97d8d0766",
+    "spin": "dad7f25d50c398334f4704c739f28b4fc9cc4b5d"
+  },
+  {
+    "name": "128-utf16-129",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*f4b1b0e432c97be3511bb3e099a2d1f3*8759d2b02bd1752665ffc50eb8a21e129b3a463a",
+    "spin": "44235a0be6a177fbbf5fe7d1a163f468c9c8d683"
+  },
+  {
+    "name": "128-ascii-256",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*128*16*000102030405060708090a0b0c0d0e0f*f3ebb3deb8d6f9a70b55802df7ade0f0*87fd5513a61e02e49267f4f3f417502d0a6289f4",
+    "spin": "d37c6e2dddb006c0fd069f9f469005819dfb68d9"
+  },
+  {
+    "name": "256-empty",
+    "password": "",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*975f1f4d1ae8823f2b3010d5fbd45d3b*c5793e7a154af918d52b66a355ad11b540539704",
+    "spin": "a7dafbafcc5c54eec6c44c550b8db8bc9fd1df79"
+  },
+  {
+    "name": "256-ascii",
+    "password": "office-test",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*b6401b95da0e271b7573348d98bb2d94*c766ef42ed5f58d7e84d7c15828e21798080718f",
+    "spin": "02d577eb07fca11edb5edf8da2badb2ba9ab01a7"
+  },
+  {
+    "name": "256-unicode",
+    "password": "p\u0159\u00edli\u0161-\ud83d\udd10",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*7553a525715de2b8694b861fe99402f8*97d7a64e15f44ecb6503bc8ad270f31025bef8bd",
+    "spin": "08fedace10034819d9490d72012220cbc0037e21"
+  },
+  {
+    "name": "256-supplementary",
+    "password": "\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10\ud83d\udd10",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*afbe2b7e45ea75eec5aec893f46ea59a*79c5d7937c7ed229d60c5f7a0a5f20f8b67591d4",
+    "spin": "8bd06ade5c28d0d4403c05a6b7e005f966422735"
+  },
+  {
+    "name": "256-utf8-256",
+    "password": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*a3b47658eae35dad5857daa68e66795f*3f4fed1f92c53e32b3a286c2e97c5f7299726081",
+    "spin": "ac3c9a978e375b573fbf008e9da5f5bea28a09b1"
+  },
+  {
+    "name": "256-utf16-127",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*95ab8eda50546abda4271ee57e322dcf*1e47970fbecbe010780dc24860e6ab523696a0b7",
+    "spin": "c0f31f162757a81157db330945274395290ab785"
+  },
+  {
+    "name": "256-utf16-128",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*912aa47b1ac5163be7f8e1744bba4125*a6f0169d07215230e6f8700c691ddaf05f18d519",
+    "spin": "dad7f25d50c398334f4704c739f28b4fc9cc4b5d"
+  },
+  {
+    "name": "256-utf16-129",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*5a6583b389de33eb10f6573dd75e04df*b694fd6fa26cbd4ea83dcb5db4b6ed400971cd91",
+    "spin": "44235a0be6a177fbbf5fe7d1a163f468c9c8d683"
+  },
+  {
+    "name": "256-ascii-256",
+    "password": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "hash": "$office$*2007*20*256*16*000102030405060708090a0b0c0d0e0f*9c728b5d835cfd45d660e7b432f3b258*09ba13d8d4b46f5dc0ba229fc571cea2eca6461f",
+    "spin": "d37c6e2dddb006c0fd069f9f469005819dfb68d9"
+  }
+]

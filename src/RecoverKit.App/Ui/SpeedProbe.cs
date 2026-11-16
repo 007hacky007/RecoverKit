@@ -26,7 +26,7 @@ internal static class SpeedProbe
     private static bool NativeEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
         s.UseNativeCpuEngine && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
         && s.PerformanceChoice?.Engine is not ("gpu" or "hybrid")
-        && (mode is not (13600 or 22000) || s.PerformanceChoice?.Engine == "cpu")
+        && (mode is not (9400 or 13600 or 22000) || s.PerformanceChoice?.Engine == "cpu")
         && (HashcatRunner.ActiveGpus(s, devices).Count == 0 || s.Strategy == DeviceStrategy.CpuOnly || s.PerformanceChoice?.Engine == "cpu")
         && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;
 
@@ -34,9 +34,9 @@ internal static class SpeedProbe
         => HybridEligible(ExecutionSettings(s, devices, mode), devices, mode);
 
     internal static bool HybridEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
-        s.UseNativeCpuEngine && s.HybridCpuGpu && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
+        s.UseNativeCpuEngine && s.HybridCpuGpu && (mode != 9400 || NativeKernels.NativeApiVersion > 0) && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
         && s.PerformanceChoice?.Engine is not ("cpu" or "gpu")
-        && (mode is not (13600 or 22000) || s.PerformanceChoice?.Engine == "hybrid" || s.PerformanceStrategyExplicit
+        && (mode is not (9400 or 13600 or 22000) || s.PerformanceChoice?.Engine == "hybrid" || s.PerformanceStrategyExplicit
             || HashcatRunner.ActiveGpus(s, devices).Any(d => !d.IsIntegratedGpu))
         && s.Strategy is DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu && HashcatRunner.ActiveGpus(s, devices).Count > 0
         && (s.PerformanceChoice?.Engine == "hybrid" || !HybridRunner.CpuAddsTooLittle(s, devices, mode))

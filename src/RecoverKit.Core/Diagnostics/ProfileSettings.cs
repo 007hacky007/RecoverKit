@@ -9,9 +9,9 @@ public static class ProfileSettings
     public static Settings ForAttack(Settings preferences, PerformanceProfile profile, IReadOnlyList<BackendDevice> devices, int mode, int length, string hashLine, double candidates = double.PositiveInfinity, bool maskAttack = true)
     {
         var execution = maskAttack ? PerformanceProfiles.Apply(PerformanceProfiles.ForMode(profile, mode, length, "execution"), preferences, devices) : null;
-        // Retain the scheduler's CPU path for tiny jobs, except PBKDF2 SHA-1 GPU-only choices.
+        // Retain the scheduler's CPU path for tiny jobs, except Office 2007 and PBKDF2 SHA-1 GPU-only choices.
         if (execution?.Engine is "gpu" or "hybrid" && NativeKernels.BenchmarkHashes.TryGetValue(mode, out var fixture)
-            && (mode is not (13600 or 22000) || execution.Engine != "gpu")
+            && (mode is not (9400 or 13600 or 22000) || execution.Engine != "gpu")
             && NativeKernels.TryCreate(mode, fixture) is { } kernel
             && candidates / Math.Max(1, kernel.SpeedHint * Environment.ProcessorCount) < preferences.GpuStartupByMode.GetValueOrDefault(mode, 15)) execution = null;
         var cpu = maskAttack ? PerformanceProfiles.Apply(PerformanceProfiles.ForMode(profile, mode, length, "cpu"), preferences, devices) : null;
@@ -129,6 +129,7 @@ public static class ProfileSettings
         }
         if (s.CpuPerformanceChoice is not { Variant: var variant } || !KernelVariants.Supported(mode, variant)) return null;
         if (mode is 17200 or 17210 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_ZIP_PATH"))) return null;
+        if (mode == 9400 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_OFFICE2007_PATH"))) return null;
         if (mode is 13600 or 22000 && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RECOVERKIT_PBKDF2_SHA1_PATH"))) return null;
         return KernelVariants.Select(mode, variant);
     }

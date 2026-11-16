@@ -18,6 +18,7 @@ public static class KernelVariants
     // A new format with existing native and managed paths needs one registration.
     private static readonly IReadOnlyDictionary<int, Registration[]> Registry = new Dictionary<int, Registration[]>
     {
+        [9400] = Office2007Variants,
         [9700] = NativeAndManaged,
         [9800] = NativeAndManaged,
         [10400] = NativeAndManaged,
@@ -38,6 +39,28 @@ public static class KernelVariants
         new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new FeatureSelection()),
         new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => null),
     ];
+
+    private static Registration[] Office2007Variants =>
+    [
+        new("default", () => true, () => null),
+        new("scalar", () => RkNative.Available, () => new Office2007Selection(0)),
+        new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new Office2007Selection(RkNative.Feature.Avx2)),
+        new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new Office2007Selection(RkNative.Feature.Avx512 | RkNative.Feature.Avx2)),
+        new("sha-ni", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.ShaNi), () => new Office2007Selection(RkNative.Feature.ShaNi)),
+        new("neon", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Neon), () => new Office2007Selection(RkNative.Feature.Neon)),
+        new("arm-sha1", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.ArmSha1), () => new Office2007Selection(RkNative.Feature.ArmSha1 | RkNative.Feature.Neon)),
+    ];
+
+    private sealed class Office2007Selection : IDisposable
+    {
+        private readonly RkNative.Feature _saved = RkNative.Features;
+        public Office2007Selection(RkNative.Feature selected)
+        {
+            const RkNative.Feature paths = RkNative.Feature.Avx2 | RkNative.Feature.Avx512 | RkNative.Feature.ShaNi | RkNative.Feature.Neon | RkNative.Feature.ArmSha1;
+            RkNative.LimitFeatures(_saved & (~paths | selected));
+        }
+        public void Dispose() => RkNative.LimitFeatures(_saved);
+    }
 
     private static Registration[] Pbkdf2Sha1Variants =>
     [

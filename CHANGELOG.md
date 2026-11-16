@@ -5,6 +5,11 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- A built-in CPU engine for Office 2007, with scalar, AVX2, AVX-512, SHA-NI, NEON and ARM SHA-1
+  paths. Masks and dictionaries with rules share work with hashcat by default on discrete GPUs;
+  integrated-only systems need an explicit choice or a measured hybrid win.
+
 ### Fixed
 - Split ZIP password recovery works with missing parts when the central directory and one complete
   encrypted entry are available. File details list missing parts, and incomplete entries are skipped.
