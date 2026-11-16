@@ -5,6 +5,13 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Fixed
+- The Dictionary Generator and WPA-PMK Generator no longer report an empty file as saved when
+  hashcat cannot run, for example on a computer without a GPU driver or CPU runtime. They now
+  stop with hashcat's reason and point to Tools > Dependencies.
+- Wordlist library: plain messages when the drive is too small for a list or fills up while it
+  unpacks, sizes in MB and GB instead of bytes, and the list name no longer appears twice.
+
 ## [1.7.0] - 2026-11-16
 
 ### Added

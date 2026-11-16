@@ -66,6 +66,10 @@ public static class CandidateExport
             string? line;
             while ((line = await p.StandardOutput.ReadLineAsync(ct)) is not null)
                 yield return HashcatTool.DecodePlain(line);
+            // hashcat reports a failure (no compute backend, unreadable file, bad rule) only by its exit
+            // code and stderr; without this check the generator would save an empty file as a success.
+            await p.WaitForExitAsync(ct);
+            if (p.ExitCode != 0) throw new IOException(FailureMessage(p.ExitCode, await errTask));
         }
         finally
         {
@@ -73,6 +77,18 @@ public static class CandidateExport
             await pump;
             DebugLog.ProcessText(logId, "stderr", await errTask);
         }
+    }
+
+    internal static string FailureMessage(int exitCode, string stderr)
+    {
+        var lines = stderr.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        string? reason = lines.FirstOrDefault(l => l.StartsWith("ATTENTION!", StringComparison.Ordinal)) is { } attention
+            ? attention["ATTENTION!".Length..].Trim()
+            : lines.FirstOrDefault(l => !l.StartsWith('*'));
+        string text = $"hashcat could not produce the candidates (exit code {exitCode})" + (reason is null ? "." : ": " + reason);
+        if (stderr.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.Ordinal))
+            text += " hashcat needs a GPU driver or the CPU runtime even to list candidates: see Tools > Dependencies.";
+        return text;
     }
 
     /// <summary>Writes all candidates of the steps to a text file. Returns the number of lines.</summary>

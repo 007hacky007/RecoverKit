@@ -74,6 +74,15 @@ public sealed class WordlistDownloadTests : IDisposable
         Assert.Empty(Directory.GetFiles(dir, "*.unpacking"));
     }
 
+    [Theory]
+    [InlineData(28, true)]                       // ENOSPC
+    [InlineData(unchecked((int)0x80070070), true)] // ERROR_DISK_FULL
+    [InlineData(unchecked((int)0x80070027), true)] // ERROR_HANDLE_DISK_FULL
+    [InlineData(unchecked((int)0x80070005), false)] // access denied
+    [InlineData(2, false)]                        // ENOENT
+    public void RecognisesDiskFullErrors(int hresult, bool full)
+        => Assert.Equal(full, WordlistDownloads.DiskFull(new IOException("x", hresult)));
+
     [Fact]
     public async Task RefusesDiskBudgetAndMissingChecksumsBeforeNetwork()
     {

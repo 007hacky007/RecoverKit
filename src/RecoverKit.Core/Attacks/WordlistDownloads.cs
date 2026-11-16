@@ -117,7 +117,7 @@ public sealed class WordlistDownloads
             string extension = Path.GetExtension(url.AbsolutePath).ToLowerInvariant();
             if (extension is not ".gz" and not ".7z") throw new IOException($"{detail.Name}: unsupported download format {extension}.");
             long required = WordlistLibrary.RequiredSpace(detail), free = freeSpace(library);
-            if (free < required) throw new IOException($"{detail.Name}: needs {required:N0} bytes free for download and unpacking; {free:N0} bytes are free.");
+            if (free < required) throw new IOException($"{detail.Name}: needs {Size(required)} free on the library drive to download and unpack it; {Size(free)} is free.");
             part = await library.PreparePartialAsync(detail, ct);
             long offset = new FileInfo(part).Length;
             if (offset > detail.SizeCompressed) { File.Delete(part); offset = 0; }
@@ -162,7 +162,10 @@ public sealed class WordlistDownloads
         }
         catch (Exception ex)
         {
-            job.Error = $"{detail.Name}: {ex.Message}";
+            if (DiskFull(ex))
+                ex = new IOException($"{detail.Name}: the library drive is full. Free some space and click Download again; "
+                    + (part is not null && File.Exists(part) ? "what was already downloaded is kept." : "nothing was kept."), ex);
+            job.Error = ex.Message.StartsWith(detail.Name + ":", StringComparison.Ordinal) ? ex.Message : $"{detail.Name}: {ex.Message}";
             job.Progress = new("Failed", 0, 0);
             complete = () => job.Result.TrySetException(ex is IOException ? ex : new IOException(job.Error, ex));
         }
@@ -175,6 +178,11 @@ public sealed class WordlistDownloads
             finally { Changed?.Invoke(job); }
         }
     }
+
+    // ENOSPC on Unix (28), ERROR_HANDLE_DISK_FULL (39) and ERROR_DISK_FULL (112) on Windows.
+    internal static bool DiskFull(Exception ex) => ex is IOException { HResult: var h } && ((h & 0xFFFF) is 28 or 39 or 112);
+
+    private static string Size(long bytes) => bytes < 1_000_000_000 ? $"{bytes / 1e6:0} MB" : $"{bytes / 1e9:0.#} GB";
 
     private static bool Checksum(string? value) => value is { Length: 32 } && value.All(Uri.IsHexDigit);
     private static Uri DownloadUri(string? value)
