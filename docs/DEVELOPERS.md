@@ -334,6 +334,67 @@ dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
 RECOVERKIT_TEST_HASHCAT=/path/to/hashcat dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~ZipSplitCliTests
 ```
 
+## PDF R3 kernels for hashcat
+
+Modes 10500 (R3/R4, 128-bit) and 10510 (R3, 40-bit password search) ship only pure kernels in
+hashcat 8.0.0. `--hash-info` reports `kernel_type: ["pure"]`; requesting `-O` prints a fallback
+notice. RecoverKit's optimized-kernel decision is correct here. The module password limit is
+0-32 bytes, including for pure kernels. Optimized dictionary splitting and its long-word second
+pass are unchanged. `PdfExtractor` selects 10510 for R3 40-bit and 10500 for R3/R4 128-bit;
+10410 is a key search for R2 and cannot replace either R3 password search.
+
+`Hashcat/Kernels/Pdf/m10500-pure.cl` replaces the 128-bit slow-hash init/loop/compare source.
+These modules have no separate `_a0` or `_a3` sources: the same loop serves masks, dictionaries
+and rules. The replacement removes forced eight-way KSA unrolling. The module already
+precomputes MD5(padding || ID). The original init, MD5 rounds, temporary-buffer
+layout and compare entry point stay in use; `LOOP_POS` and `LOOP_CNT` still select the exact same
+work. There is no partial-round rejection or change to candidate generation. Recovery's existing
+CPU password confirmation checks the full 16-byte PDF U value before accepting a password.
+
+`PdfHashcatKernels` checks the LF-normalized SHA-256 of the original file before installation,
+independently of the ZIP kernels. It keeps originals as `<name>.hashcat`, accepts marked older
+replacements only with verified backups, and refuses unknown sources or corrupt backups.
+`HashcatKernels.EnsureFor` covers recovery and benchmark launches. The replacement is on by default
+only on macOS, the one place it was measured faster (Metal); elsewhere hashcat's kernel stays until
+`bench-pdf` shows a gain. `RECOVERKIT_HASHCAT_PDF_KERNELS=1` opts in; `=0` restores verified
+originals before a run, including after an earlier process installed replacements. Without the
+switch on Windows and Linux, a previously installed replacement is restored the same way. Restoration checks each file independently; a modified
+file is left alone. If the requested replacement cannot be restored, the run stops with an error.
+The same source serves Metal, OpenCL and CUDA. Hashcat's source checksum changes its kernel-cache
+key, so switching or updating kernels needs no cache deletion.
+
+10510 stays on hashcat's original kernel: a prefetched 40-bit KSA prototype improved live trials
+but regressed in `-b` medians and was removed. Other measured alternatives (private or word-sized
+RC4 state, paired streams and specialized MD5) did not justify replacement. The retained 10500
+kernel measured +35.4% in Metal live attacks; OpenCL live throughput was effectively flat. The
+measurements had large outliers, and no NVIDIA gain has been established.
+
+`recoverkit-cli bench-pdf` compares both modes on every GPU backend alias by default. 10510 runs
+stock kernels in both columns as a control. The command copies
+the engine into a temporary folder, alternates original/replacement run order, runs three live
+10-second attacks with the matched benchmark's seven-character `?u?d?s` mask and three `-b`
+measurements, and prints medians plus every run's acceleration, loop and thread counts. It leaves
+the supplied engine and its kernel cache untouched. `--device N[,N]` selects exact backend IDs;
+`--nvidia-backend cuda|opencl` filters NVIDIA aliases. `--out` saves the results. Optional
+`--workload`, `--accel`, `--loops` and `--threads` allow explicit experiments; manual sizes use
+hashcat 8's required `--force`. Recovery's workload and tuning defaults are unchanged.
+
+On the RTX 4060, from a Windows source checkout with .NET 10:
+
+```powershell
+dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+.\src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.exe bench-pdf --hashcat "C:\hashcat-8.0.0\hashcat.exe" --nvidia-backend cuda --seconds 10 --runs 3 --out pdf-cuda.txt
+.\src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.exe bench-pdf --hashcat "C:\hashcat-8.0.0\hashcat.exe" --nvidia-backend opencl --seconds 10 --runs 3 --out pdf-opencl.txt
+$env:RECOVERKIT_TEST_HASHCAT = "C:\hashcat-8.0.0\hashcat.exe"
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~PdfGpuKernelSlowTests
+```
+
+CUDA needs NVRTC available to hashcat. The explicit backend fails when unavailable rather than
+silently measuring a different NVIDIA backend. GPU tests also use a disposable engine copy and
+compare original/replacement hits, rules, bytes, module length rejection, metadata flags, fixtures,
+keyspace, skip/limit and restore positions. They are `Category=Slow` and require
+`RECOVERKIT_TEST_HASHCAT`. Measurements and limits are in `docs/benchmarks/pdf-r3-gpu.txt`.
+
 ## ZIP kernels for hashcat
 
 hashcat compiles its kernels at run time from the `.cl` sources in its `OpenCL/` folder, and the

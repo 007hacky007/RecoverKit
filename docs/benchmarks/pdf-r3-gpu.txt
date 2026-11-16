@@ -1,0 +1,217 @@
+PDF R3 GPU investigation - 2026-11-16
+
+Hardware: Apple M1 Pro, 16 GPU cores. macOS 27.0.1 (26A434).
+hashcat: bundled v8.0.0, Metal 382.5.3; OpenCL 1.2, driver 1.2 1.0.
+No CUDA/NVIDIA GPU is available on this Mac. These results do not establish
+an RTX 4060 gain. The >=30% target is met by the retained 10500 Metal live
+median only, not by OpenCL live or the 40-bit variant.
+
+Decision
+- Keep only the 10500 change: remove RC4_INIT_128_PREFETCH_UNROLL8, letting
+  each backend compiler choose the unrolling. Init, MD5, RC4 helper, compare,
+  module ABI, candidate generation and LOOP_POS/LOOP_CNT stay unchanged.
+- Keep stock 10510. Its prefetched KSA/eight-byte PRGA prototype was removed:
+  live medians improved 16.8%/18.7%, but both -b medians regressed 38.6%.
+- No workload, acceleration, loop, thread, optimized-kernel or profile defaults
+  were changed. Recheck CUDA and OpenCL on the tester's RTX 4060 before release.
+
+Step 1
+hashcat 8.0.0 ships m10500-pure.cl and m10510-pure.cl, not optimized kernels
+or separate a0/a3 variants. Both modules are ATTACK_EXEC_OUTSIDE_KERNEL,
+with 70 logical iterations (50 MD5, 20 RC4), and module_pw_max returns 32.
+--hash-info reports kernel_type ["pure"], lengths 0-32. -O prints
+"Optimized kernel requested, but not available or not required" and falls
+back to pure. HasOptimizedKernel=false is correct in ModeInfoAsync;
+SpeedProbe, MatchedSpeedProbe, RecoverySession and performance profiles
+therefore correctly omit -O. No length-limit or dictionary-splitting fix
+was needed. Generic pure 0-256 limits do not apply to these two modules.
+
+PdfExtractor selects 10500 for R3 RC4-128/R4 AES-128 and 10510 for R3 RC4-40
+password search. 10410's R2 key search is not a replacement. Both modules
+already precompute MD5(padding || ID) on the host. The constant tail of the
+first password MD5 cannot be turned into a precomputed chaining state:
+it follows the password-dependent first block.
+
+Stock exploratory tuning (one 6-second run per cell, H/s; not final medians):
+backend   mode    -w 3       -w 4       -w 3 -O
+Metal     10500   4282408    4258309    4255737
+Metal     10510   5012717    4324802    4660413
+OpenCL    10500   3856602    3827651    4163422
+OpenCL    10510   5487012    5180415    5509052
+-w 4 did not show a consistent gain. -O is the same pure kernel.
+Manual -n/-u/-T are rejected by this hashcat without --force (exit 254).
+Explicit exploratory overrides on 10500, H/s (one run each):
+backend   -u70      -n256 -u35   -T64
+Metal     4820050   4071117      4755161
+OpenCL    4225668   3422167      4285513
+These used --force -w3; unspecified dimensions still autotuned. The RC4
+module requests FIXED_LOCAL_SIZE=32 for GPUs. Observed final launches used
+32 threads, 70 loops, mostly accel 1024, with some lower accel choices.
+Fixed -n1024 -u70 -T32 also had large slow outliers, so pinning sizes is
+not justified by these measurements.
+
+Kernel experiments (6-second exploratory live runs, separate from the
+three-run comparison below):
+- Fixed-size 16-/5-byte MD5 compression: no consistent gain; removed.
+- Bitwise RC4 address arithmetic: no consistent gain; removed.
+- Private byte S box: about 0.63-0.79 MH/s for 10500 and 0.65-0.71 for
+  10510, versus stock generally 4-5 MH/s; removed.
+- Two interleaved RC4 streams per candidate: slower; removed. This was a
+  temporary ILP experiment, not a change to host candidate indexing.
+- Word-sized local S box: about 0.40-0.47 MH/s on Metal and 1.6-1.9 on
+  OpenCL; removed.
+- Separate MD5/RC4 loop ranges: no consistent gain over the smaller
+  retained change; removed.
+- 10500 without forced KSA unrolling: retained after live Metal medians
+  improved 32.7% in exploratory repeats and 35.4% in the comparison below.
+- 10510 prefetched KSA, same stock compared eight bytes: removed after
+  the -b regressions below. Final RecoverKit does not replace this file.
+No early rejection was added. The original module compares eight bytes;
+RecoverKit's recovery confirmation still verifies the complete U value.
+
+Three-run comparison
+Each backend/mode/kernel: three live 10-second attacks and three hashcat
+-b runs. Live target: exactly NativeKernels.BenchmarkHashes[mode], including
+10500's benchmark example. Live mask: -1 ?u?d?s ?1?1?1?1?1?1?1.
+-w3, one explicit backend/device at a time, no CPU recovery engine.
+Normal autotune, self-test enabled; no --force or manual launch sizes.
+Alternating stock/replacement order on successive pairs. An isolated
+engine copy and separate source-keyed kernel cache served the comparison.
+
+Live speeds: median of human status speeds after dropping the first two
+samples; then median across three runs. -b: hashcat's reported speed, then
+median across three runs. Human status precision is retained, not expanded.
+
+                         stock MH/s   candidate MH/s   gain
+Metal  10500 live           5.0500         6.8384        +35.4%
+Metal  10500 -b             1.2689         7.2017       +467.6%
+OpenCL 10500 live           4.1774         4.1125         -1.6%
+OpenCL 10500 -b             4.3426         5.5573        +28.0%
+Metal  10510 live           5.1943         6.0687        +16.8%  removed
+Metal  10510 -b             6.0793         3.7340        -38.6%  removed
+OpenCL 10510 live           2.3105         2.7425        +18.7%  removed
+OpenCL 10510 -b             5.5565         3.4140        -38.6%  removed
+
+Large outliers affect both kernels, including runs with identical printed
+launch sizes. Do not interpret the Metal -b ratio as a reliable 5.7x kernel
+speedup. The raw trials below expose this variance. No cause has been
+established. The final 10510 benchmark runs stock in both columns as a
+control; the 10510 candidate numbers below describe the removed prototype.
+
+Raw trials and launch settings
+#1 Apple M1 Pro Metal, 10500 live: hashcat 5049950, RecoverKit 6838400, gain 1.354x
+  hashcat: 5049950 H/s; Accel:1008 Loops:70 Thr:32 Vec:1
+  hashcat: 5095750 H/s; Accel:1016 Loops:70 Thr:32 Vec:1
+  hashcat: 1230700 H/s; Accel:424 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6838400 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 1366200 H/s; Accel:388 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6899650 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#1 Apple M1 Pro Metal, 10500 -b: hashcat 1268900, RecoverKit 7201700, gain 5.676x
+  hashcat: 1249300 H/s; Accel:408 Loops:70 Thr:32 Vec:1
+  hashcat: 5289900 H/s; Accel:1012 Loops:70 Thr:32 Vec:1
+  hashcat: 1268900 H/s; Accel:432 Loops:70 Thr:32 Vec:1
+  RecoverKit: 7201700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 1714300 H/s; Accel:600 Loops:70 Thr:32 Vec:1
+  RecoverKit: 7204400 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#1 Apple M1 Pro Metal, 10510 live: hashcat 5194300, RecoverKit 6068700, gain 1.168x
+  hashcat: 1361600 H/s; Accel:496 Loops:70 Thr:32 Vec:1
+  hashcat: 5593900 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 5194300 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6068700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6720450 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 3201100 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#1 Apple M1 Pro Metal, 10510 -b: hashcat 6079300, RecoverKit 3734000, gain 0.614x
+  hashcat: 6082700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 6079300 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 3781800 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 3734000 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6073800 H/s; Accel:432 Loops:70 Thr:32 Vec:1
+  RecoverKit: 2869800 H/s; Accel:352 Loops:70 Thr:32 Vec:1
+#2 Apple M1 Pro OpenCL, 10500 live: hashcat 4177350, RecoverKit 4112500, gain 0.984x
+  hashcat: 4227050 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 4177350 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 1005000 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 1754000 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 5027750 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 4112500 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#2 Apple M1 Pro OpenCL, 10500 -b: hashcat 4342600, RecoverKit 5557300, gain 1.280x
+  hashcat: 2717000 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 4476400 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 4342600 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 5557300 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6053700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 2453700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#2 Apple M1 Pro OpenCL, 10510 live: hashcat 2310450, RecoverKit 2742500, gain 1.187x
+  hashcat: 2295900 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 2397700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 2310450 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 2654900 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 2773100 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 2742500 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+#2 Apple M1 Pro OpenCL, 10510 -b: hashcat 5556500, RecoverKit 3414000, gain 0.614x
+  hashcat: 2371700 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 5556500 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  hashcat: 5733800 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 3302500 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 3414000 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+  RecoverKit: 6929200 H/s; Accel:1024 Loops:70 Thr:32 Vec:1
+
+Reproduce on Mac (after Release build):
+dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-pdf --hashcat /path/to/hashcat --seconds 10 --runs 3 --out pdf-mac.txt
+
+Windows PowerShell, from the source checkout:
+dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+.\src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.exe bench-pdf --hashcat "C:\hashcat-8.0.0\hashcat.exe" --nvidia-backend cuda --seconds 10 --runs 3 --out pdf-cuda.txt
+.\src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.exe bench-pdf --hashcat "C:\hashcat-8.0.0\hashcat.exe" --nvidia-backend opencl --seconds 10 --runs 3 --out pdf-opencl.txt
+$env:RECOVERKIT_TEST_HASHCAT = "C:\hashcat-8.0.0\hashcat.exe"
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~PdfGpuKernelSlowTests
+
+Optional experiments: --workload 4, or --accel 1024 --loops 70 --threads 32.
+Manual dimensions cause bench-pdf to pass hashcat's required --force.
+RECOVERKIT_HASHCAT_PDF_KERNELS=0 restores the original 10500 kernel before
+recovery. Unset it before bench-pdf, which deliberately compares both paths.
+The command never changes the supplied engine, its kernel sources, cache
+or saved recovery sessions. Its temporary copy is removed afterwards.
+
+Verification of the final implementation
+- dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false:
+  succeeded, 0 errors, 0 warnings in the final build. An earlier full compile
+  reported the existing CA1416 warning in CandidateExportTests.cs:227; no
+  warnings were introduced by this change.
+- dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false:
+  2008 passed, 0 failed, 0 skipped; 1 minute 28 seconds. The project excludes
+  Category=Stay and Category=Slow from this default command.
+- Explicit --filter FullyQualifiedName~PdfGpuKernelSlowTests with
+  RECOVERKIT_TEST_HASHCAT set: 1 passed, 0 failed, 0 skipped; 59 seconds.
+  Both GPU aliases ran the dictionary/rules matrix (multiple hashes, empty
+  and raw non-ASCII/NUL bytes, lengths through 32, rejected 33/64/256-byte
+  inputs), R3/R4 metadata cases, PDF fixtures, hashcat example masks,
+  exhausted runs, keyspace, skip/limit and actual restore-position reads.
+  10510 exercised the unchanged stock kernel as a control. Opt-out restored
+  the previously installed 10500 source before those comparisons.
+- Final bench-pdf CLI smoke: one 3-second live run and one -b per column,
+  both modes on Metal. The 10510 output identifies the stock control.
+  Source engine PDF bytes and all cache file sizes/mtime values matched
+  snapshots taken before the command.
+- Fresh read-only review checked the kernel against hashcat's original and
+  module ABI; its fallback and mixed-device selection findings were fixed
+  with regression tests.
+Other Stay/Slow suites were not run. CUDA and NVIDIA OpenCL remain untested.
+
+Files changed
+CHANGELOG.md
+docs/DEVELOPERS.md
+docs/benchmarks/pdf-r3-gpu.txt
+src/RecoverKit.Cli/Program.cs
+src/RecoverKit.Core/RecoverKit.Core.csproj
+src/RecoverKit.Core/Hashcat/HashcatKernels.cs
+src/RecoverKit.Core/Hashcat/PdfHashcatKernels.cs
+src/RecoverKit.Core/Hashcat/PdfKernelBenchmark.cs
+src/RecoverKit.Core/Hashcat/Kernels/Pdf/m10500-pure.cl
+tests/RecoverKit.Tests/PdfExtractorTests.cs
+tests/RecoverKit.Tests/PdfGpuKernelTests.cs
+tests/RecoverKit.Tests/PdfGpuKernelSlowTests.cs
+tests/RecoverKit.Tests/PdfKernelBenchmarkTests.cs
+
+All changes are uncommitted. The pre-existing untracked reports directory
+was read for context and left unchanged. No native/ files were changed.

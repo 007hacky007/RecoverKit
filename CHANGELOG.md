@@ -5,6 +5,14 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Changed
+- On macOS, PDF R3/R4 128-bit GPU recovery uses a hashcat 8.0.0 kernel with compiler-selected RC4
+  unrolling: 35% faster on an M1 Pro through Metal. OpenCL on the same Mac was flat and NVIDIA is
+  unmeasured, so Windows and Linux keep hashcat's kernel unless `RECOVERKIT_HASHCAT_PDF_KERNELS=1`
+  is set (`=0` turns it off on macOS). R3 40-bit keeps hashcat's original kernel.
+- `recoverkit-cli bench-pdf` compares stock/replacement PDF kernels in an isolated engine copy,
+  with three-run medians, launch settings and explicit CUDA/OpenCL selection.
+
 ### Fixed
 - Benchmark rows no longer repeat the whole setup: each row lists its hashcat arguments and only
   the settings that differ from the Setup section.
