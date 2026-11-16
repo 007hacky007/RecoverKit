@@ -346,7 +346,8 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                         row.Details["Metric"] = "complete candidates / whole-job elapsed";
                         row.Details["Finite"] = "true";
                         row.Details["Adaptive sampling"] = (!Thorough).ToString();
-                        bool hybridDefault = settings.HybridCpuGpu && (mode is not (13600 or 22000) || settings.PerformanceStrategyExplicit);
+                        bool hybridDefault = settings.HybridCpuGpu && (mode is not (13600 or 22000) || settings.PerformanceStrategyExplicit
+                            || physical.Any(d => !d.IsIntegratedGpu));
                         row.Details["Default"] = (gi == 0 && (hybridDefault ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
                         rows.Add(row);
                         report.Measurements.Add(row);

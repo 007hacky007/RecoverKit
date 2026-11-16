@@ -33,10 +33,11 @@ internal static class SpeedProbe
     public static bool UseHybrid(Settings s, IReadOnlyList<BackendDevice> devices, int mode)
         => HybridEligible(ExecutionSettings(s, devices, mode), devices, mode);
 
-    private static bool HybridEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
+    internal static bool HybridEligible(Settings s, IReadOnlyList<BackendDevice> devices, int mode) =>
         s.UseNativeCpuEngine && s.HybridCpuGpu && string.IsNullOrWhiteSpace(s.ExtraArguments) && NativeKernels.Supports(mode)
         && s.PerformanceChoice?.Engine is not ("cpu" or "gpu")
-        && (mode is not (13600 or 22000) || s.PerformanceChoice?.Engine == "hybrid" || s.PerformanceStrategyExplicit)
+        && (mode is not (13600 or 22000) || s.PerformanceChoice?.Engine == "hybrid" || s.PerformanceStrategyExplicit
+            || HashcatRunner.ActiveGpus(s, devices).Any(d => !d.IsIntegratedGpu))
         && s.Strategy is DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu && HashcatRunner.ActiveGpus(s, devices).Count > 0
         && (s.PerformanceChoice?.Engine == "hybrid" || !HybridRunner.CpuAddsTooLittle(s, devices, mode))
         && NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode]) is not null;

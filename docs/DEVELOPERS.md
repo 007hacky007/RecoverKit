@@ -652,6 +652,11 @@ ESSIDs share PMK derivation. CPU hits use hashcat's PMK/ESSID potfile key for th
 PSK-SHA256 PMKID and unsupported records keep the entire target on hashcat. EAPOL records
 requiring nonce correction (message-pair bit 7 without AP-less bit 4) also stay on hashcat;
 the CPU does not attempt nonce correction. Extra hashcat arguments disable CPU planning.
+Hybrid is the default for both modes when any active GPU is discrete, including a mixed discrete
+and integrated set. With only integrated GPUs, hybrid needs an explicit strategy choice or a
+performance profile selecting hybrid after a measured whole-job win. The existing rule that drops
+a CPU contribution below a quarter of an integrated GPU's speed still applies; a profile selecting
+hybrid overrides that rule. Without a GPU, these modes still need a measured CPU execution win.
 `Pbkdf2Sha1Tests`, `WinZipAesCpuTests`, `WpaCpuTests`, and `Pbkdf2Sha1HybridTests` check
 independent answers, every available native path, partial batches, verifier collisions and
 partition coverage. `Pbkdf2Sha1HashcatTests` is the opt-in GPU/cache integration suite.
@@ -923,6 +928,8 @@ CPU slows the GPU. RAR 3 on an M1 Pro: the GPU ran 8,000-11,000/s next to the CP
 last hybrid attack on a mode measured the CPU below a quarter of hashcat's speed, later attacks on
 that mode run hashcat alone (logged; `HybridRunner.CpuAddsTooLittle`). PDF R6, where the CPU is
 five times faster than this GPU, keeps both.
+WinZip AES and WPA additionally require an explicit strategy choice or a measured hybrid profile
+when every active GPU is integrated. Their default is hybrid when any active GPU is discrete.
 
 Integrated GPU next to a discrete one: it ties up a CPU thread (hashcat's host thread) and shares
 the processor's power budget. Once hashcat reports its speed, an integrated GPU slower than one CPU

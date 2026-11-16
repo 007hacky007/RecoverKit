@@ -327,6 +327,15 @@ GPU it runs next to hashcat on part of the keyspace (hybrid, see below) when "Ru
 GPUs" is on (default) and the strategy is "Keep one CPU thread free for each GPU" (default) or "Use
 all CPU threads"; with "Avoid the CPU" or hybrid off, hashcat runs alone as before.
 
+WinZip AES (13600) and WPA (22000) also use hybrid by default for supported masks and dictionaries
+when any active GPU is discrete, including a mixed discrete and integrated set. If every active
+GPU is integrated, they still need an explicit strategy choice or a performance profile selecting
+hybrid after a measured whole-job win. On an M1 Pro, complete mask jobs took 25-84% longer with
+hybrid despite higher combined live rates; see [the complete-job measurements](benchmarks/pbkdf2-sha1.txt).
+The rule that drops a CPU contribution below a quarter of the integrated GPU's speed still applies
+unless the profile explicitly selects hybrid. CPU-only selection for these modes still requires
+a measured execution win over hashcat's CPU engine.
+
 ## Hybrid CPU + GPU (Apple M1 Pro)
 
 Measured on 2026-11-13 on an Apple M1 Pro (8 performance + 2 efficiency cores, 16-core GPU),

@@ -9,8 +9,9 @@ public static class ProfileSettings
     public static Settings ForAttack(Settings preferences, PerformanceProfile profile, IReadOnlyList<BackendDevice> devices, int mode, int length, string hashLine, double candidates = double.PositiveInfinity, bool maskAttack = true)
     {
         var execution = maskAttack ? PerformanceProfiles.Apply(PerformanceProfiles.ForMode(profile, mode, length, "execution"), preferences, devices) : null;
-        // Retain the scheduler's CPU path for tiny jobs instead of paying measured GPU startup.
+        // Retain the scheduler's CPU path for tiny jobs, except PBKDF2 SHA-1 GPU-only choices.
         if (execution?.Engine is "gpu" or "hybrid" && NativeKernels.BenchmarkHashes.TryGetValue(mode, out var fixture)
+            && (mode is not (13600 or 22000) || execution.Engine != "gpu")
             && NativeKernels.TryCreate(mode, fixture) is { } kernel
             && candidates / Math.Max(1, kernel.SpeedHint * Environment.ProcessorCount) < preferences.GpuStartupByMode.GetValueOrDefault(mode, 15)) execution = null;
         var cpu = maskAttack ? PerformanceProfiles.Apply(PerformanceProfiles.ForMode(profile, mode, length, "cpu"), preferences, devices) : null;

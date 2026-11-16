@@ -118,9 +118,11 @@ public sealed class HybridRunner
     {
         if (settings.PerformanceChoice?.Engine is "cpu" or "gpu") return null;
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
-        if (HashcatRunner.ActiveGpus(settings, devices).Count == 0) return null;
-        // These kernels need a measured whole-job win or an explicit hybrid choice.
-        if (mode is 13600 or 22000 && settings.PerformanceChoice?.Engine != "hybrid" && !settings.PerformanceStrategyExplicit) return null;
+        var gpus = HashcatRunner.ActiveGpus(settings, devices);
+        if (gpus.Count == 0) return null;
+        // Shared power and memory made these kernels slower over complete jobs on integrated GPUs.
+        if (mode is 13600 or 22000 && gpus.All(d => d.IsIntegratedGpu)
+            && settings.PerformanceChoice?.Engine != "hybrid" && !settings.PerformanceStrategyExplicit) return null;
         bool cpuAddsTooLittle = settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode);
         if (mode is 13000 or 12500 or 10700 or 13600 or 22000 or 29331 && settings.UseNativeCpuEngine && credentials is null
             && partial is null && attack.Stdin is null && string.IsNullOrWhiteSpace(settings.ExtraArguments)
