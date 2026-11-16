@@ -5,6 +5,11 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Changed
+- WinZip AES and WPA now use the built-in CPU engine next to hashcat by default when any active
+  GPU is discrete. With only integrated GPUs, hybrid still needs an explicit choice or a measured
+  whole-job win. Performance preferences and measured engine choices still apply.
+
 ## [1.7.2] - 2026-11-16
 
 ### Fixed

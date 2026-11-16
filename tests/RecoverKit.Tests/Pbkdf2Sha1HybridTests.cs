@@ -5,6 +5,7 @@ using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Diagnostics;
 using RecoverKit.Core.Native;
+using RecoverKit.App.Ui;
 using Xunit;
 
 namespace RecoverKit.Tests;
@@ -15,27 +16,120 @@ public sealed class Pbkdf2Sha1HybridTests
     [Theory]
     [InlineData(13600)]
     [InlineData(22000)]
-    public void DefaultsUseHashcatAndMeasuredOrExplicitHybridRemainsAvailable(int mode)
+    public void DefaultsUseHybridWithAnyActiveDiscreteGpu(int mode)
     {
         string hash = NativeKernels.BenchmarkHashes[mode];
-        foreach (bool integrated in new[] { false, true })
+        foreach (var (devices, expected) in new (BackendDevice[], bool)[]
         {
-            BackendDevice[] devices = [new() { Id = 1, Type = "GPU", Unified = integrated }];
+            ([new() { Id = 1, Type = "GPU" }], true),
+            ([new() { Id = 1, Type = "GPU", Unified = true }], false),
+            ([new() { Id = 1, Type = "GPU", Unified = true }, new() { Id = 2, Type = "GPU", Unified = true }], false),
+            ([new() { Id = 1, Type = "GPU", Unified = true }, new() { Id = 2, Type = "GPU" }], true),
+        })
+        {
             foreach (var args in new string[][] { ["-a", "3", "ABCDEFG?d"], ["-a", "0", "words", "-r", "rules"] })
             {
                 var attack = new PreparedAttack { Description = "test" };
                 attack.Args.AddRange(args);
                 var settings = new Settings();
-                Assert.Null(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                AssertEligibility(expected, mode, hash, attack, settings, devices);
                 settings.PerformanceChoice = new PerformanceDecision { Engine = "hybrid" };
-                Assert.NotNull(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                AssertEligibility(true, mode, hash, attack, settings, devices);
                 settings.PerformanceChoice = null;
                 settings.PerformanceStrategyExplicit = true;
-                Assert.NotNull(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                AssertEligibility(true, mode, hash, attack, settings, devices);
                 settings.HybridCpuGpu = false;
-                Assert.Null(HybridRunner.Plan(mode, hash, attack, settings, devices));
+                AssertEligibility(false, mode, hash, attack, settings, devices);
             }
         }
+    }
+
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public void UserOptOutsKeepHashcatAlone(int mode)
+    {
+        BackendDevice[] devices = [new() { Id = 1, Type = "GPU" }];
+        foreach (var settings in new Settings[]
+        {
+            new() { HybridCpuGpu = false },
+            new() { Strategy = DeviceStrategy.FastGpu },
+            new() { Strategy = DeviceStrategy.CpuOnly },
+            new() { UseNativeCpuEngine = false },
+            new() { PerformanceChoice = new PerformanceDecision { Engine = "gpu" } },
+            new() { PerformanceChoice = new PerformanceDecision { Engine = "cpu" } },
+            new() { ExtraArguments = "--force" },
+        })
+        foreach (var args in new string[][] { ["-a", "3", "ABCDEFG?d"], ["-a", "0", "words", "-r", "rules"] })
+        {
+            var attack = new PreparedAttack { Description = "test" };
+            attack.Args.AddRange(args);
+            AssertEligibility(false, mode, NativeKernels.BenchmarkHashes[mode], attack, settings, devices);
+        }
+    }
+
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public void MeasuredGpuChoiceKeepsTinyJobsOnHashcat(int mode)
+    {
+        string hash = NativeKernels.BenchmarkHashes[mode];
+        BackendDevice[] devices = [new() { Id = 1, Key = "gpu", Type = "GPU" }];
+        var profile = new PerformanceProfile
+        {
+            Decisions = [new() { Domain = "execution", Mode = mode, Length = 8, Engine = "gpu", DeviceKeys = ["gpu"] }],
+        };
+        var settings = ProfileSettings.ForAttack(new Settings(), profile, devices, mode, 8, hash, candidates: 1);
+        Assert.Equal("gpu", settings.PerformanceChoice?.Engine);
+        var attack = new PreparedAttack { Description = "test", Args = { "-a", "3", "ABCDEFGH" } };
+        AssertEligibility(false, mode, hash, attack, settings, devices);
+    }
+
+    [Theory]
+    [InlineData(13600)]
+    [InlineData(22000)]
+    public void OnlyActiveGpusDecideTheDefaultAndQuarterSpeedRule(int mode)
+    {
+        BackendDevice[] devices =
+        [
+            new() { Id = 1, Key = "integrated", Type = "GPU", Unified = true },
+            new() { Id = 2, Key = "discrete", Type = "GPU" },
+        ];
+        string hash = NativeKernels.BenchmarkHashes[mode];
+        foreach (var args in new string[][] { ["-a", "3", "ABCDEFG?d"], ["-a", "0", "words", "-r", "rules"] })
+        {
+            var attack = new PreparedAttack { Description = "test" };
+            attack.Args.AddRange(args);
+            var settings = new Settings();
+            settings.CpuSpeedByMode[mode] = 100;
+            settings.GpuSpeedByMode[mode] = 1000;
+            AssertEligibility(true, mode, hash, attack, settings, devices);
+            settings.DisabledDeviceKeys.Add("discrete");
+            AssertEligibility(false, mode, hash, attack, settings, devices);
+            settings.PerformanceStrategyExplicit = true;
+            AssertEligibility(false, mode, hash, attack, settings, devices);
+            settings.CpuSpeedByMode[mode] = 250;
+            AssertEligibility(true, mode, hash, attack, settings, devices);
+            settings.CpuSpeedByMode[mode] = 100;
+            settings.PerformanceChoice = new PerformanceDecision { Engine = "hybrid" };
+            AssertEligibility(true, mode, hash, attack, settings, devices);
+            settings.PerformanceChoice = null;
+            settings.PerformanceStrategyExplicit = false;
+            settings.DisabledDeviceKeys.Clear();
+            settings.GpuPerformanceChoice = new PerformanceDecision { DeviceKeys = ["integrated"] };
+            AssertEligibility(false, mode, hash, attack, settings, devices);
+            settings.GpuPerformanceChoice = new PerformanceDecision { DeviceKeys = ["discrete"] };
+            AssertEligibility(true, mode, hash, attack, settings, devices);
+            settings.DisabledDeviceKeys.Add("discrete");
+            AssertEligibility(false, mode, hash, attack, settings, devices);
+        }
+    }
+
+    private static void AssertEligibility(bool expected, int mode, string hash, PreparedAttack attack,
+        Settings settings, IReadOnlyList<BackendDevice> devices)
+    {
+        Assert.Equal(expected, HybridRunner.Plan(mode, hash, attack, settings, devices) is not null);
+        Assert.Equal(expected, SpeedProbe.HybridEligible(settings, devices, mode));
     }
 
     [Theory]

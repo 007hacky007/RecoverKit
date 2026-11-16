@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\RecoverKit.Core\RecoverKit.Core.csproj" />
+    <Compile Include="../../src/RecoverKit.App/Ui/SpeedProbe.cs" Link="SpeedProbe.cs" />
     <None Update="Fixtures\SevenZip\*.7z" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="Fixtures/KeePass/*" />
     <EmbeddedResource Include="Fixtures/Rar3Kdf/*.rar" />
