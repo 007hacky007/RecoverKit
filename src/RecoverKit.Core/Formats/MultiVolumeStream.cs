@@ -8,7 +8,7 @@ namespace RecoverKit.Core.Formats;
 /// </summary>
 public sealed partial class MultiVolumeStream : Stream
 {
-    private readonly FileStream[] _parts;
+    private readonly FileStream?[] _parts;
     private readonly long[] _starts;
     private long _position;
 
@@ -16,11 +16,76 @@ public sealed partial class MultiVolumeStream : Stream
 
     public bool DiskRelative { get; }
 
+    public bool HasMissingParts => _parts.Any(p => p is null);
+    public int PresentCount => _parts.Count(p => p is not null);
+    internal long PresentLength => _parts.Sum(p => p?.Length ?? 0);
+    internal bool IsPresent(uint disk) => disk < _parts.Length && _parts[disk] is not null;
+
     internal long DiskOffset(uint disk, long offset)
     {
-        if (disk >= _parts.Length || offset < 0 || offset >= _parts[disk].Length)
+        if (disk >= _parts.Length || offset < 0)
             throw new FormatException("ZIP disk number or offset is outside its part.");
+        var part = _parts[disk] ?? throw new MissingZipPartException([Paths[(int)disk]]);
+        if (offset >= part.Length) throw new FormatException("ZIP disk number or offset is outside its part.");
         return checked(_starts[disk] + offset);
+    }
+
+    internal (uint Disk, long Offset) DiskPosition(long position)
+    {
+        int disk = PartAt(position);
+        return ((uint)disk, position - _starts[disk]);
+    }
+
+    internal long AvailableTailStart
+    {
+        get
+        {
+            int disk = _parts.Length - 1;
+            while (disk > 0 && _parts[disk - 1] is not null) disk--;
+            return _starts[disk];
+        }
+    }
+
+    internal void RequireDisks(uint first, uint last)
+    {
+        if (first > last || last >= _parts.Length) throw new FormatException("Invalid ZIP directory disk range.");
+        var missing = Enumerable.Range((int)first, (int)(last - first + 1))
+            .Where(i => _parts[i] is null).Select(i => Paths[i]).ToArray();
+        if (missing.Length > 0) throw new MissingZipPartException(missing);
+    }
+
+    internal void EnsureAvailable(long offset, long count)
+    {
+        if (offset < 0 || count < 0 || offset > Length) throw new FormatException("ZIP entry is outside the archive.");
+        long end = offset + Math.Min(count, Length - offset);
+        var missing = new List<string>();
+        for (int i = PartAt(offset); i < _parts.Length && _starts[i] < end; i++)
+        {
+            if (_parts[i] is not null) continue;
+            missing.Add(Paths[i]);
+            if (DiskRelative) break; // An absent spanned disk's length is unknown; report the first blocker.
+        }
+        if (missing.Count > 0) throw new MissingZipPartException(missing);
+        if (count > Length - offset) throw new FormatException("ZIP entry is truncated.");
+    }
+
+    internal string PartsDescription
+    {
+        get
+        {
+            if (!HasMissingParts)
+                return Paths.Count == 1 ? Path.GetFileName(Paths[0])
+                    : $"{Paths.Count} ({Path.GetFileName(Paths[0])} to {Path.GetFileName(Paths[^1])})";
+            var ranges = new List<string>();
+            for (int i = 0; i < _parts.Length; i++)
+            {
+                if (_parts[i] is not null) continue;
+                int first = i;
+                while (i + 1 < _parts.Length && _parts[i + 1] is null) i++;
+                ranges.Add(first == i ? Path.GetFileName(Paths[i]) : $"{Path.GetFileName(Paths[first])}-{Path.GetFileName(Paths[i])}");
+            }
+            return $"{PresentCount} of {Paths.Count} present (missing: {string.Join(", ", ranges)})";
+        }
     }
 
     internal void ValidateDiskCount(uint count)
@@ -28,19 +93,23 @@ public sealed partial class MultiVolumeStream : Stream
         if (count != _parts.Length) throw new FormatException("ZIP disk count does not match its parts.");
     }
 
-    public MultiVolumeStream(IReadOnlyList<string> paths, bool diskRelative = false)
+    public MultiVolumeStream(IReadOnlyList<string> paths, bool diskRelative = false, long? missingPartSize = null)
     {
         if (paths.Count == 0) throw new ArgumentException("No parts.", nameof(paths));
-        Paths = paths;
+        Paths = paths.ToArray();
         DiskRelative = diskRelative;
-        _parts = new FileStream[paths.Count];
+        _parts = new FileStream?[paths.Count];
         _starts = new long[paths.Count + 1];
         try
         {
             for (int i = 0; i < paths.Count; i++)
             {
-                _parts[i] = new FileStream(paths[i], FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                _starts[i + 1] = _starts[i] + _parts[i].Length;
+                if (File.Exists(paths[i]) || (!diskRelative && missingPartSize is null))
+                    _parts[i] = new FileStream(paths[i], FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                // Missing spanned disks have no known byte length. An unreadable barrier separates
+                // their neighbours; these logical positions are never on-disk archive offsets.
+                long length = _parts[i]?.Length ?? missingPartSize ?? 1;
+                _starts[i + 1] = checked(_starts[i] + length);
             }
         }
         catch
@@ -48,6 +117,15 @@ public sealed partial class MultiVolumeStream : Stream
             foreach (var p in _parts) p?.Dispose();
             throw;
         }
+    }
+
+    private int PartAt(long position)
+    {
+        if (position == Length) return _parts.Length;
+        int i = Array.BinarySearch(_starts, position);
+        if (i < 0) i = ~i - 1;
+        while (i < _parts.Length && _starts[i + 1] <= position) i++;
+        return i;
     }
 
     /// <summary>
@@ -97,11 +175,8 @@ public sealed partial class MultiVolumeStream : Stream
         int total = 0;
         while (buffer.Length > 0 && _position < Length)
         {
-            int i = Array.BinarySearch(_starts, _position);
-            if (i < 0) i = ~i - 1;
-            // Empty parts share a start with the next one; skip to the part that holds the position.
-            while (_starts[i + 1] <= _position) i++;
-            var part = _parts[i];
+            int i = PartAt(_position);
+            var part = _parts[i] ?? throw new MissingZipPartException([Paths[i]]);
             part.Position = _position - _starts[i];
             int n = part.Read(buffer[..(int)Math.Min(buffer.Length, _starts[i + 1] - _position)]);
             if (n == 0) break;
@@ -126,7 +201,14 @@ public sealed partial class MultiVolumeStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) foreach (var p in _parts) p.Dispose();
+        if (disposing) foreach (var p in _parts) p?.Dispose();
         base.Dispose(disposing);
     }
+}
+
+/// <summary>A requested ZIP disk or byte range belongs to an absent volume.</summary>
+public sealed class MissingZipPartException(IReadOnlyList<string> parts) : IOException(
+    $"Required ZIP part(s) missing: {string.Join(", ", parts.Select(Path.GetFileName))}. Put them in the same folder.")
+{
+    public IReadOnlyList<string> Parts { get; } = parts;
 }

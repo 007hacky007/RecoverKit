@@ -30,10 +30,18 @@ public static class FormatDetector
             // A split 7z archive (.7z.001, .002, ...) is read across its parts as one file.
             var parts = MultiVolumeStream.SevenZipParts(path);
             using Stream s = parts is not null ? new MultiVolumeStream(parts) : ZipArchiveSource.Open(path);
-            if (s is MultiVolumeStream volumes) parts = volumes.Paths.ToList();
-            if (parts is not null) d.Add("Parts", parts.Count == 1 ? Path.GetFileName(parts[0]) : $"{parts.Count} ({Path.GetFileName(parts[0])} to {Path.GetFileName(parts[^1])})");
-            d.Add("File size", $"{s.Length:N0} bytes");
+            if (s is MultiVolumeStream volumes) d.Add("Parts", volumes.PartsDescription);
+            d.Add("File size", s is MultiVolumeStream { HasMissingParts: true, DiskRelative: true } partial
+                ? $"{partial.PresentLength:N0} bytes present (total unknown)" : $"{s.Length:N0} bytes");
             if (s.Length == 0) { d.Message = "File is empty."; return d; }
+            // A split ZIP is identified by its opener and end records; its first disk can be absent.
+            if (s is MultiVolumeStream && parts is null)
+            {
+                if (keePassKeyfile is not null)
+                    throw new UnsupportedFormatException("A KeePass keyfile can only be used with a KeePass database.");
+                ZipExtractor.Extract(s, d);
+                return d;
+            }
             var head = Bin.ReadAt(s, 0, 4096);
             if (keePassKeyfile is not null && !KeePassExtractor.IsKeePass(head))
                 throw new UnsupportedFormatException("A KeePass keyfile can only be used with a KeePass database.");

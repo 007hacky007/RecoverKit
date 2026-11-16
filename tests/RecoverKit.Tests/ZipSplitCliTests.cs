@@ -21,7 +21,9 @@ public sealed class ZipSplitCliTests(ITestOutputHelper output)
     [InlineData("infozip.z01")]
     [InlineData("infozip64.zip")]
     [InlineData("7zip-aes.zip.002")]
-    public async Task CliRecoversThePasswordWithHashcat(string fixture)
+    [InlineData("infozip.zip", true)]
+    [InlineData("7zip-aes.zip.002", true)]
+    public async Task CliRecoversThePasswordWithHashcat(string fixture, bool partial = false)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "RecoverKit.sln"))) root = root.Parent;
@@ -32,8 +34,27 @@ public sealed class ZipSplitCliTests(ITestOutputHelper output)
         string home = Directory.CreateTempSubdirectory("rk-split-cli-").FullName;
         try
         {
+            string input = Path.Combine(AppContext.BaseDirectory, "Fixtures", "ZipSplit", fixture);
+            if (partial)
+            {
+                string directory = Directory.CreateDirectory(Path.Combine(home, "archive")).FullName;
+                if (fixture == "infozip.zip")
+                {
+                    input = Path.Combine(directory, fixture);
+                    File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ZipSplit", fixture), input);
+                }
+                else
+                {
+                    var source = Directory.GetFiles(Path.GetDirectoryName(input)!, "7zip-aes.zip.*").Order().SelectMany(File.ReadAllBytes).ToArray();
+                    var archive = ZipSplitTests.WithPadding(source);
+                    int count = (archive.Length + 99) / 100;
+                    for (int i = 0; i < count; i++)
+                        if (i != 1) File.WriteAllBytes(Path.Combine(directory, $"sample.zip.{i + 1:D3}"), archive[(i * 100)..Math.Min(archive.Length, (i + 1) * 100)]);
+                    input = Path.Combine(directory, "sample.zip.004");
+                }
+            }
             var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            foreach (string arg in new[] { cli, "crack", Path.Combine(AppContext.BaseDirectory, "Fixtures", "ZipSplit", fixture),
+            foreach (string arg in new[] { cli, "crack", input,
                 "--hcmask", "?d", "--hashcat", Environment.GetEnvironmentVariable("RECOVERKIT_TEST_HASHCAT")!,
                 "--strategy", "GpuOnly", "--no-hybrid", "--no-potfile", "--no-stay", "--new", "--stop-after", "150" })
                 start.ArgumentList.Add(arg);
