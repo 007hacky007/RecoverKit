@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+- Hybrid benchmarks now retain measured GPU speed from a normal runtime-limit exit and log which engine failed when a rate is unavailable.
+
 ## [1.7.2] - 2026-11-16
 
 ### Fixed

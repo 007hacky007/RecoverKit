@@ -56,12 +56,12 @@ public static class MatchedSpeedProbe
     public static async Task<(double Cpu, double Gpu)> MeasureAsync(HashcatTool tool, Settings settings,
         IReadOnlyList<BackendDevice> devices, int mode, int threads, TimeSpan duration, bool hybrid, CancellationToken ct)
     {
-        if (!await PowerLimitAllowsAsync(settings)) return (0, 0);
+        if (!await PowerLimitAllowsAsync(settings))
+        {
+            DebugLog.Warn($"Matched speed probe, mode {mode}: GPU blocked by power limit; CPU not started, rate 0/s.");
+            return (0, 0);
+        }
         var directory = Directory.CreateTempSubdirectory("rk-speed-probe-").FullName;
-        using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(duration + TimeSpan.FromMinutes(3));
-        Task<double> cpu = Task.FromResult(0d);
         try
         {
             var request = CreateRequest(mode, settings, devices, directory, duration,
@@ -69,38 +69,92 @@ public static class MatchedSpeedProbe
                 && (await tool.ModeInfoAsync(mode))?.HasOptimizedKernel == true);
             DebugLog.RegisterHashes(HashLine(mode));
             await File.WriteAllTextAsync(request.HashFile, HashLine(mode) + "\n", ct);
-            var speeds = new ConcurrentQueue<double>();
             var runner = new HashcatRunner(tool) { KnownDevices = devices };
-            runner.StatusReceived += status =>
+            return await MeasureAsync(mode, duration, (received, token) =>
             {
-                if (status.Status == 3 && status.TotalSpeed > 0) speeds.Enqueue(status.TotalSpeed);
-            };
-            if (hybrid)
-                cpu = Task.Run(() =>
+                runner.StatusReceived += received;
+                return runner.RunAsync(request, token);
+            }, hybrid ? token => NativeKernels.Benchmark(mode, threads, duration, token, LengthFor(mode)) : null, ct);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, true); } catch (IOException) { }
+        }
+    }
+
+    internal static async Task<(double Cpu, double Gpu)> MeasureAsync(int mode, TimeSpan duration,
+        Func<Action<HashcatStatus>, CancellationToken, Task<RunResult>> runGpu,
+        Func<CancellationToken, double>? measureCpu, CancellationToken ct)
+    {
+        using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(duration + TimeSpan.FromMinutes(3));
+        var speeds = new ConcurrentQueue<double>();
+        int statusLines = 0;
+        HashcatStatus? runtimeStatus = null;
+        void Received(HashcatStatus status)
+        {
+            Interlocked.Increment(ref statusLines);
+            if (status.Status == 3 && status.TotalSpeed > 0) speeds.Enqueue(status.TotalSpeed);
+            if (status.Status == 11) Interlocked.Exchange(ref runtimeStatus, status);
+        }
+        Exception? cpuFailure = null;
+        Task<double> cpu = measureCpu is null ? Task.FromResult(0d) : Task.Run(() =>
+        {
+            try
+            {
+                double last = 0;
+                while (!done.IsCancellationRequested)
                 {
-                    double last = 0;
-                    while (!done.IsCancellationRequested)
-                    {
-                        double speed = NativeKernels.Benchmark(mode, threads, duration, done.Token, LengthFor(mode));
-                        // A window cut short when hashcat exits counts only when no full one completed.
-                        if (speed > 0 && (!done.IsCancellationRequested || last == 0)) last = speed;
-                    }
-                    return last;
-                }, CancellationToken.None);
-            RunResult result;
-            try { result = await runner.RunAsync(request, timeout.Token); }
-            finally { done.Cancel(); }
-            double cpuSpeed = await cpu;
-            ct.ThrowIfCancellationRequested();
-            if (result.Outcome == RunOutcome.Error || speeds.Count == 0) return (0, 0);
-            var tail = speeds.Count > 3 ? speeds.Skip(2).Order().ToArray() : speeds.Order().ToArray();
-            return (cpuSpeed, tail[tail.Length / 2]);
+                    double speed = measureCpu(done.Token);
+                    // A window cut short when hashcat exits counts only when no full one completed.
+                    if (speed > 0 && (!done.IsCancellationRequested || last == 0)) last = speed;
+                }
+                return last;
+            }
+            catch (Exception ex)
+            {
+                cpuFailure = ex;
+                DebugLog.Error($"Matched speed probe, mode {mode}, CPU failed", ex);
+                return 0;
+            }
+        }, CancellationToken.None);
+        RunResult? result = null;
+        Exception? gpuFailure = null;
+        double cpuSpeed;
+        try { result = await runGpu(Received, timeout.Token); }
+        catch (Exception ex)
+        {
+            gpuFailure = ex;
+            if (!ct.IsCancellationRequested) DebugLog.Error($"Matched speed probe, mode {mode}, GPU failed", ex);
         }
         finally
         {
             done.Cancel();
-            await cpu;
-            try { Directory.Delete(directory, true); } catch (IOException) { }
+            cpuSpeed = await cpu;
         }
+        ct.ThrowIfCancellationRequested();
+        double gpuSpeed = 0;
+        if (result is not null && result.Outcome != RunOutcome.Error && !timeout.IsCancellationRequested)
+        {
+            if (speeds.Count > 0)
+            {
+                var tail = speeds.Count > 3 ? speeds.Skip(2).Order().ToArray() : speeds.Order().ToArray();
+                gpuSpeed = tail[tail.Length / 2];
+            }
+            // Use completed work from a normal runtime exit, keeping the event's guard-adjusted speed.
+            else if (result is { Outcome: RunOutcome.Aborted, ExitCode: 4, LastStatus.Status: 11 }
+                && runtimeStatus is { TotalSpeed: > 0 } final
+                && final.ProgressDone > final.Rejected)
+                gpuSpeed = final.TotalSpeed;
+        }
+        string summary = $"Matched speed probe, mode {mode}: GPU {(gpuSpeed > 0 ? "measured" : "failed")}, rate {gpuSpeed:F3}/s, " +
+            $"hashcat outcome {result?.Outcome.ToString() ?? "exception"}, exit {result?.ExitCode.ToString() ?? "unavailable"}, " +
+            $"error: {result?.Error ?? gpuFailure?.Message ?? "none"}, status lines {statusLines}, running speed samples {speeds.Count}, " +
+            $"last status {result?.LastStatus?.Status.ToString() ?? "none"}, timeout {timeout.IsCancellationRequested}; " +
+            $"CPU {(measureCpu is null ? "disabled" : cpuSpeed > 0 ? "measured" : "failed")}, rate {cpuSpeed:F3}/s, exception: {cpuFailure?.Message ?? "none"}.";
+        if (gpuSpeed <= 0 || measureCpu is not null && cpuSpeed <= 0) DebugLog.Warn(summary);
+        else DebugLog.Info(summary);
+        return gpuSpeed > 0 ? (cpuSpeed, gpuSpeed) : (0, 0);
     }
 }
