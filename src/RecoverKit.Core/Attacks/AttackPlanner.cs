@@ -14,6 +14,7 @@ public sealed class PlannerContext
     public string? HashcatDir { get; init; }
     public HashcatTool? Hashcat { get; init; }
     public string? DefaultDictionary { get; init; }
+    public Func<IReadOnlyList<string>>? DeviceArguments { get; init; }
 }
 
 /// <summary>An attack translated into hashcat arguments, optionally fed from a CPU generator via stdin.</summary>
@@ -54,8 +55,8 @@ public static class AttackPlanner
                 var tool = ctx.Hashcat ?? throw new AttackPlanException("hashcat is needed for this streamed rules pass.");
                 prepared.Args.Clear();
                 prepared.Args.AddRange(["-a", "0"]);
-                prepared.Stdin = () => RuleRescue.Candidates(pass, tool, CancellationToken.None);
-                prepared.CancellableStdin = ct => RuleRescue.Candidates(pass, tool, ct);
+                prepared.Stdin = () => RuleRescue.Candidates(pass, tool, CancellationToken.None, deviceArguments: ctx.DeviceArguments?.Invoke());
+                prepared.CancellableStdin = ct => RuleRescue.Candidates(pass, tool, ct, deviceArguments: ctx.DeviceArguments?.Invoke());
                 prepared.StdinTotalIsUpperBound = true;
                 prepared.Notes.Add("This rules pass is streamed. Its progress total is an upper bound; after a stop it restarts from the beginning without skipping candidates.");
             }

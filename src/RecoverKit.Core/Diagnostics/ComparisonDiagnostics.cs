@@ -27,13 +27,16 @@ public sealed partial class DetailedBenchmarkRunner
     {
         var timer = Stopwatch.StartNew();
         bool optimized = settings.OptimizedKernels && (await local.ModeInfoAsync(file.Mode, 3, ct))?.HasOptimizedKernel == true;
+        using var invocation = new BenchmarkSetup.Invocation(local);
         double speed = await new ZipKernelBenchmark(local) { Seconds = Thorough ? Math.Max(3, Seconds) : 3, Mask = BenchmarkTestFiles.Mask,
-            Charset1 = BenchmarkTestFiles.Charset, Optimized = optimized, Priority = settings.Priority, BoundedTuning = !Thorough }
+            Charset1 = BenchmarkTestFiles.Charset, Optimized = optimized, Priority = settings.Priority, Workload = settings.Workload, ExtraArguments = settings.ExtraArguments, BoundedTuning = !Thorough }
             .MeasureAsync(new(file.FileName, file.Mode, file.Hash), device, variant, ct);
-        return new() { Section = "comparison", Step = file.FileName, Mode = file.Mode, Target = file.FileName, Length = 7,
+        var row = new DiagnosticMeasurement { Section = "comparison", Step = file.FileName, Mode = file.Mode, Target = file.FileName, Length = 7,
             Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Speed = speed, Correct = speed > 0, Repeat = repeat,
             ElapsedSeconds = timer.Elapsed.TotalSeconds, Error = speed > 0 ? null : "No valid comparison rate reported",
             Details = new() { ["Test file"] = file.FileName, ["Attack"] = BenchmarkTestFiles.Attack, ["Optimized"] = optimized.ToString(), ["Metric"] = "Live candidates/second on the exported target, excluding startup" } };
+        BenchmarkSetup.AddExecution(row.Details, settings, devices, invocation);
+        return row;
     }
 
     private void AddComparisonSteps(DiagnosticPlan plan, HashcatTool local, DiagnosticReport report, CancellationToken ct)

@@ -107,7 +107,7 @@ public sealed class Pbkdf2Sha1HybridTests
             settings.DisabledDeviceKeys.Add("discrete");
             AssertEligibility(false, mode, hash, attack, settings, devices);
             settings.PerformanceStrategyExplicit = true;
-            AssertEligibility(false, mode, hash, attack, settings, devices);
+            AssertEligibility(true, mode, hash, attack, settings, devices);
             settings.CpuSpeedByMode[mode] = 250;
             AssertEligibility(true, mode, hash, attack, settings, devices);
             settings.CpuSpeedByMode[mode] = 100;
@@ -117,7 +117,11 @@ public sealed class Pbkdf2Sha1HybridTests
             settings.PerformanceStrategyExplicit = false;
             settings.DisabledDeviceKeys.Clear();
             settings.GpuPerformanceChoice = new PerformanceDecision { DeviceKeys = ["integrated"] };
+            // An old integrated-only profile cannot bypass automatic dedicated-GPU selection.
+            AssertEligibility(true, mode, hash, attack, settings, devices);
+            settings.DeviceSelectionExplicit = true;
             AssertEligibility(false, mode, hash, attack, settings, devices);
+            settings.DeviceSelectionExplicit = false;
             settings.GpuPerformanceChoice = new PerformanceDecision { DeviceKeys = ["discrete"] };
             AssertEligibility(true, mode, hash, attack, settings, devices);
             settings.DisabledDeviceKeys.Add("discrete");

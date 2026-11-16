@@ -63,15 +63,18 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 }
             }
             report.System["Test plan"] = Thorough ? "Thorough" : "Default (short windows and adaptive repeats)";
+            CompleteSetup(report);
             report.System["Elapsed.preparation.seconds"] = clock.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture);
             if (selected.Contains("system")) plan.Add("system", "System and devices", 5, () => SystemAsync(local, report, ct));
             if (selected.Contains("cpu")) CpuDiagnostics.AddSteps(plan, report, settings, Thorough, ct);
-            bool gpuAllowed = local is not null && HashcatRunner.ActiveGpus(settings, devices).Count > 0 && await PowerLimitSatisfiedAsync();
+            bool gpuAllowed = local is not null && HashcatRunner.NvidiaBackendError(settings, devices) is null
+                && HashcatRunner.ActiveGpus(settings, devices).Count > 0 && await PowerLimitSatisfiedAsync();
             foreach (string section in selected.Where(s => s is "gpu" or "zip" or "hybrid"))
             {
                 if (!gpuAllowed || section is "gpu" or "zip" && (settings.GpuTempGuard || settings.GpuDutyPercent < 100))
                 {
-                    report.Measurements.Add(new() { Section = section, Step = "GPU availability and limits", Error = "GPU tests skipped: engine/devices unavailable, all GPUs disabled, or configured power/pause/duty limits prevent this benchmark." });
+                    report.Measurements.Add(new() { Section = section, Step = "GPU availability and limits", Error = HashcatRunner.NvidiaBackendError(settings, devices)
+                        ?? "GPU tests skipped: engine/devices unavailable, all GPUs disabled, or configured power/pause/duty limits prevent this benchmark." });
                     continue;
                 }
                 if (section == "gpu") { AddGpuSteps(plan, local!, report, ct); AddComparisonSteps(plan, local!, report, ct); }
@@ -85,6 +88,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         finally
         {
             report.Cancelled |= ct.IsCancellationRequested;
+            CompleteSetup(report);
             pulse.Change(Timeout.Infinite, Timeout.Infinite);
             foreach (var section in plan.Steps.GroupBy(s => s.Section))
                 report.System[$"Elapsed.{section.Key}.seconds"] = section.Sum(s => s.ElapsedSeconds).ToString("F2", CultureInfo.InvariantCulture);
@@ -104,6 +108,19 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
             { report.Summary.Add("The report is available, but this computer's performance profile could not be saved."); }
         }
         return report;
+    }
+
+    private void CompleteSetup(DiagnosticReport report)
+    {
+        report.Setup = BenchmarkSetup.Lines(tool, settings, devices);
+        report.Setup.Add("Detailed measurements exercise individual engines, variants and thread counts; each row records its actual execution settings. CPU correctness and path sweeps run independently of the recovery engine preference.");
+        foreach (var row in report.Measurements.Where(r => r.Engine == "cpu" && !r.Details.ContainsKey("Engine")))
+        {
+            row.Details["Engine"] = $"built-in CPU engine, {row.Threads} threads, {row.Details.GetValueOrDefault("actual path", row.Variant)}";
+            row.Details["hashcat arguments"] = "none";
+            row.Details["CPU worker priority"] = NativeRunner.ThreadPriorityFor(settings.Priority).ToString();
+            row.Details["Diagnostic override"] = "CPU variant and worker count measured independently of recovery engine preferences and extra arguments.";
+        }
     }
 
     private async Task SystemAsync(HashcatTool? systemTool, DiagnosticReport report, CancellationToken ct, bool shortPlan = false)
@@ -146,7 +163,8 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
     private IEnumerable<BackendDevice> AllowedGpuDevices()
     {
         var active = HashcatRunner.ActiveGpus(settings, devices).Select(d => GpuProfileSelection.FamilyKey(d.Key, devices)).ToHashSet();
-        return devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d) && active.Contains(GpuProfileSelection.FamilyKey(d.Key, devices)));
+        return devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d) && active.Contains(GpuProfileSelection.FamilyKey(d.Key, devices))
+            && HashcatRunner.ResolveGpu(settings, d, devices).Id == d.Id);
     }
 
     private void AddGpuSteps(DiagnosticPlan plan, HashcatTool local, DiagnosticReport report, CancellationToken ct)
@@ -164,6 +182,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                     var row = new DiagnosticMeasurement { Section = "gpu", Step = label, Mode = mode, Target = $"hashcat built-in example mode {mode}", Length = 0, Engine = "gpu", Variant = pure ? "pure" : "default", DeviceKey = dev.Key, Backend = dev.Backend, Repeat = repeat };
                     try
                     {
+                        using var invocation = new BenchmarkSetup.Invocation(local);
                         if (mode is 17200 or 17210)
                         {
                             HashcatKernels.EnsureFor(local, mode);
@@ -171,8 +190,9 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                         }
                         var args = new List<string> { pure ? "-B" : "-b", "-m", mode.ToString(), "-d", dev.Id.ToString(), "-w", settings.Workload.ToString(), "--potfile-disable", "--restore-disable", "--logfile-disable", "--session", "rk-diagnostic-bench" };
                         if (!Thorough) args.AddRange(["--runtime", "3"]);
+                        args.AddRange(settings.ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(a => a is not ("-O" or "--optimized-kernel-enable")));
                         using var tuning = Thorough ? null : DiagnosticGpuTuning.Apply(local, [dev]);
-                    var (code, output, error) = await local.RunAsync(args, TimeSpan.FromSeconds(Thorough ? 240 : 45), ct: ct, priority: settings.Priority, redactOutput: true);
+                        var (code, output, error) = await local.RunAsync(args, TimeSpan.FromSeconds(Thorough ? 240 : 45), ct: ct, priority: settings.Priority, redactOutput: true);
                         var parsed = ParseBenchmark(output + "\n" + error);
                         row.Speed = parsed.Speed;
                         foreach (var detail in parsed.Details) row.Details[detail.Key] = detail.Value;
@@ -191,6 +211,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                             row.Details["Kernel type source"] = "module capabilities and requested benchmark option";
                         }
                         row.Details["Comparability"] = "Benchmark rate only; never added to CPU fixture rates or used to choose CPU versus GPU.";
+                        BenchmarkSetup.AddExecution(row.Details, settings, devices, invocation);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested) { row.Error = SafeError(ex); }
                     row.ElapsedSeconds = clock.Elapsed.TotalSeconds;
@@ -262,11 +283,13 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 {
                     var device = Device(sample.Mode);
                     var timer = Stopwatch.StartNew();
-                    double speed = await new ZipKernelBenchmark(local) { Seconds = Thorough ? Math.Max(6, Seconds) : Seconds, Mask = BenchmarkTestFiles.Mask, Charset1 = BenchmarkTestFiles.Charset, Priority = settings.Priority, BoundedTuning = !Thorough }.MeasureAsync(sample, device, variant, ct);
+                    using var invocation = new BenchmarkSetup.Invocation(local);
+                    double speed = await new ZipKernelBenchmark(local) { Seconds = Thorough ? Math.Max(6, Seconds) : Seconds, Mask = BenchmarkTestFiles.Mask, Charset1 = BenchmarkTestFiles.Charset, Priority = settings.Priority, Workload = settings.Workload, ExtraArguments = settings.ExtraArguments, BoundedTuning = !Thorough }.MeasureAsync(sample, device, variant, ct);
                     var row = new DiagnosticMeasurement { Section = "zip", Step = sample.Label, Mode = sample.Mode, Target = "synthetic ZIP " + sample.Label,
                         Length = 7, Engine = "gpu", Variant = variant, DeviceKey = device.Key, Backend = device.Backend, Repeat = repeat,
                         Speed = speed, ElapsedSeconds = timer.Elapsed.TotalSeconds, Correct = speed > 0, Error = speed > 0 ? null : "No benchmark rate reported.",
                         Details = ComparisonDetails(sample) };
+                    BenchmarkSetup.AddExecution(row.Details, settings, devices, invocation);
                     rows.Add(row);
                     report.Measurements.Add(row);
                 }

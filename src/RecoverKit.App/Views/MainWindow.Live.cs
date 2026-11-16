@@ -23,6 +23,7 @@ public sealed partial class MainWindow
     private readonly TextBlock _ringPct = new() { FontSize = 24, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, FontFeatures = Ui.Styles.TabularDigits };
     private readonly TextBlock _ringSub = new() { FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center, MaxWidth = 104, TextWrapping = TextWrapping.Wrap, FontFeatures = Ui.Styles.TabularDigits };
     private readonly WrapPanel _chips = new() { ItemSpacing = 6, LineSpacing = 6 };
+    private readonly TextBlock _liveDevices = L.Text("", dim: true, wrap: true);
     private readonly Border _thermalBanner = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 7), IsVisible = false, BorderThickness = new Thickness(1) };
     private readonly TextBlock _thermalText = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold, FontSize = 12.5 };
     private readonly Border _ticker = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 8), BorderThickness = new Thickness(1) };
@@ -77,7 +78,7 @@ public sealed partial class MainWindow
         DockPanel.SetDock(_sparkSpeed, Dock.Right);
         sparkHead.Children.Add(_sparkSpeed);
         sparkHead.Children.Add(new TextBlock { Text = "Speed, last 60 s", FontSize = 11, Foreground = Palette.DimBrush });
-        var right = new StackPanel { Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Children = { _chips, _thermalBanner, _ticker, new StackPanel { Children = { sparkHead, _spark } } } };
+        var right = new StackPanel { Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Children = { _chips, _liveDevices, _thermalBanner, _ticker, new StackPanel { Children = { sparkHead, _spark } } } };
 
         _live = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 18, Margin = new Thickness(16, 14, 16, 10), IsVisible = false };
         _live.Children.Add(ringHost);
@@ -171,6 +172,7 @@ public sealed partial class MainWindow
         _ringSub.Text = "starting...";
         _tickerText.Text = "starting...";
         _sparkSpeed.Text = "";
+        _liveDevices.Text = "Waiting for the running devices...";
         _spark.Clear();
         _lastSample = DateTime.MinValue;
         BuildChips();
@@ -210,12 +212,15 @@ public sealed partial class MainWindow
         }
         ToolTip.SetTip(_ring, description);
         _tickerText.Text = "starting...";
+        _liveDevices.Text = "Waiting for the running devices...";
         BuildChips();
     }
 
     private void UpdateLive(HashcatStatus s)
     {
         if (!_liveActive) return;
+        if (s.Devices.Count > 0)
+            _liveDevices.Text = "Running on: " + string.Join("; ", s.Devices.Select(d => d.Name.Length > 0 ? d.Name : $"Device #{d.Id}")) + ".";
         _ring.Value = Math.Clamp(s.Fraction, 0, 1);
         double speed = s.TotalSpeed;
         _tickerText.Text = TryingText(s);

@@ -15,6 +15,8 @@ public enum DeviceStrategy
     CpuOnly,      // "Don't use GPU threads": -D 1
 }
 
+public enum NvidiaBackend { Automatic, Cuda, OpenCl }
+
 public enum ProcessPriority { Idle, BelowNormal, Normal, High }
 
 /// <summary>User preferences, stored as JSON in the per-user application data folder.</summary>
@@ -29,6 +31,9 @@ public sealed class Settings
     /// leave the wrong GPU out.
     /// </summary>
     public List<string> DisabledDeviceKeys { get; set; } = new();
+    public NvidiaBackend NvidiaBackend { get; set; } = NvidiaBackend.Automatic;
+    /// <summary>Device ticks were edited, including explicitly enabling every GPU.</summary>
+    public bool DeviceSelectionExplicit { get; set; }
     public DeviceStrategy Strategy { get; set; } = DeviceStrategy.GpuOnly;
     public ProcessPriority Priority { get; set; } = ProcessPriority.Idle;   // the recommended default
     public int MaxCpuThreads { get; set; }                    // OpenCL CPU worker threads; 0 = one per logical processor

@@ -6,17 +6,31 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
+- NVIDIA backend selection in Preferences and the CLI (`--nvidia-backend auto|cuda|opencl`)
+  for recovery and benchmarks. Automatic keeps CUDA unless a kernel-build failure needs the
+  existing OpenCL fallback; explicit CUDA or OpenCL takes priority over measured backend choices.
+- Benchmark reports include the engine setup, resolved GPU backends, driver versions and limits.
+  On macOS, CLI recovery and native benchmarks print the setup before running.
 - Split ZIP archives (.z01, .z02, ..., .zip and .zip.001, .zip.002, ...) open directly,
   including ZIP64: RecoverKit reads the parts in place without joining them. Open any part
   with all the others in the same folder; a missing part is named. ZipCrypto and WinZip AES
   password recovery work across parts. Stay fast key search is unavailable for split ZIPs.
 
 ### Changed
+- Automatic GPU selection leaves integrated GPUs idle when an enabled dedicated GPU is available.
+  A computer with only integrated GPUs still uses them. Explicit device selections and CPU/GPU
+  strategies keep their choices, including device selections saved by earlier versions.
+- The ZIP kernel benchmark uses the selected physical GPUs and NVIDIA backend. Run it once with
+  `--nvidia-backend cuda` and once with `--nvidia-backend opencl` to compare the two backends.
 - WinZip AES and WPA now use the built-in CPU engine next to hashcat by default when any active
   GPU is discrete. With only integrated GPUs, hybrid still needs an explicit choice or a measured
   whole-job win. Performance preferences and measured engine choices still apply.
 
 ### Fixed
+- Quick hashcat benchmarks pass the extra arguments from Preferences, while filtering the
+  optimized-kernel flags as recovery runs do. Reports show the arguments used for each row.
+- GPU selection and benchmark labels use the resolved backend device, including its OpenCL ID
+  after CUDA fallback, so a CUDA device is no longer reported when the run uses its OpenCL alias.
 - The benchmark keeps hashcat's measured speed when hashcat stops at its time limit before sending
   a running status, so a CPU + GPU row no longer shows "not supported on this device" for that
   reason. The debug log names the side that failed when a benchmark rate is unavailable.

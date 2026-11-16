@@ -6,7 +6,7 @@ namespace RecoverKit.Core.Hashcat;
 /// <summary>
 /// Runs NVIDIA GPUs through OpenCL instead of CUDA after a CUDA kernel failed to build on this PC (for
 /// example a CUDA Toolkit newer than the driver). Remembered until the NVIDIA driver or RecoverKit
-/// changes, so a fixed setup gets CUDA back without a setting to find.
+/// changes. An explicit NVIDIA backend preference overrides this automatic fallback.
 /// </summary>
 public static class CudaFallback
 {

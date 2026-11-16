@@ -38,19 +38,34 @@ public sealed class FiniteDiagnosticWorkerTests
     }
 
     [Fact]
-    public void RequestContainsOnlySyntheticWorkloadAndNumericPreferences()
+    public void RequestContainsSyntheticWorkloadAndExecutionPreferences()
     {
-        var settings = new Settings { ExtraArguments = "PRIVATE-EXTRA", DefaultDictionary = "PRIVATE-DICTIONARY", DataPath = "PRIVATE-DATA", ExecuteOnSuccess = "PRIVATE-COMMAND",
+        var settings = new Settings { ExtraArguments = "--force --kernel-loops 17", NvidiaBackend = NvidiaBackend.OpenCl, DefaultDictionary = "PRIVATE-DICTIONARY", DataPath = "PRIVATE-DATA", ExecuteOnSuccess = "PRIVATE-COMMAND",
             GpuTempGuard = true, GpuTempLimit = 81, GpuDutyPercent = 50, Workload = 2, Priority = ProcessPriority.BelowNormal, GpuPowerLimit = true, GpuPowerWatts = new() { [0] = 100 } };
         var request = FiniteDiagnosticWorker.BuildRequest("isolated-engine", settings, [], 13000, 7, 5, 8);
         string json = JsonSerializer.Serialize(request);
         Assert.DoesNotContain("PRIVATE", json);
-        Assert.DoesNotContain("ExtraArguments", json);
+        Assert.Equal("--force --kernel-loops 17", request.Limits.ExtraArguments);
+        Assert.Equal(NvidiaBackend.OpenCl, request.Limits.NvidiaBackend);
         Assert.DoesNotContain("Dictionary", json);
         Assert.Equal(81, request.Limits.GpuTempLimit);
         Assert.Equal(50, request.Limits.GpuDutyPercent);
         Assert.Equal(100, request.Limits.GpuPowerWatts[0]);
         Assert.Equal(7, request.Count);
+    }
+
+    [Fact]
+    public async Task ExtraArgumentsSkipFiniteNativeAndHybridJobs()
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-finite-extra-").FullName;
+        try
+        {
+            var request = FiniteDiagnosticWorker.BuildRequest("unused", new Settings { ExtraArguments = "--force" }, [], 13000, -1, 5, 1);
+            var result = await FiniteDiagnosticWorker.RunJobAsync(request, dir);
+            Assert.Contains("extra arguments disable", result.Error);
+            Assert.False(result.Correct);
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [Fact]

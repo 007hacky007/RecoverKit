@@ -37,7 +37,7 @@ internal static class RuleRescue
     private static extern bool GetDiskFreeSpaceEx(string path, out ulong available, out ulong total, out ulong free);
 
     internal static async Task<AttackSpec?> PlanAsync(AttackSpec spec, PreparedAttack attack, HashModeInfo info,
-        HashcatTool tool, string path, Action<string>? log, CancellationToken ct)
+        HashcatTool tool, string path, Action<string>? log, CancellationToken ct, IReadOnlyList<string>? deviceArguments = null)
     {
         if (attack.Args.Count <= 3 || info.PasswordLenMin <= 1 && info.PasswordLenMax >= 256) return null;
         if (info.Mode is 22000 or 22001 && PmkTable.TryOpen(attack.Args[2]) is not null) return null;
@@ -58,10 +58,10 @@ internal static class RuleRescue
             log?.Invoke("Cached word lengths: no words need the expanded rules pass.");
             return null;
         }
-        pass.SelectedWords = await Task.Run(() => SelectWords(pass, tool, log, ct), ct);
+        pass.SelectedWords = await Task.Run(() => SelectWords(pass, tool, log, ct, deviceArguments), ct);
         if (pass.SelectedWords == 0) { File.Delete(pass.RuleInputPath); return null; }
         pass.RuleInputHash = await DictionaryKernelPlanner.HashAsync(pass.RuleInputPath, ct);
-        await ChooseOutputAsync(pass, tool, path, log, ct);
+        await ChooseOutputAsync(pass, tool, path, log, ct, deviceArguments: deviceArguments);
         if (!pass.StreamRules && pass.Words == 0)
         {
             File.Delete(pass.RuleInputPath);
@@ -73,13 +73,14 @@ internal static class RuleRescue
         return result;
     }
 
-    internal static async Task PrepareAsync(DictionaryKernelPass pass, HashcatTool? tool, Action<string>? log, CancellationToken ct)
+    internal static async Task PrepareAsync(DictionaryKernelPass pass, HashcatTool? tool, Action<string>? log, CancellationToken ct,
+        IReadOnlyList<string>? deviceArguments = null)
     {
         if (pass.RuleInputPath is null || pass.SelectedWords <= 0 || pass.RuleInputHash is null)
             throw new InvalidDataException("This saved rules pass predates size limits. Start a new attack.");
         if (!File.Exists(pass.RuleInputPath) || await DictionaryKernelPlanner.HashAsync(pass.RuleInputPath, ct) != pass.RuleInputHash)
         {
-            long count = await Task.Run(() => SelectWords(pass, tool ?? throw new InvalidDataException("hashcat is needed to rebuild this rules pass."), log, ct), ct);
+            long count = await Task.Run(() => SelectWords(pass, tool ?? throw new InvalidDataException("hashcat is needed to rebuild this rules pass."), log, ct, deviceArguments), ct);
             if (count != pass.SelectedWords || await DictionaryKernelPlanner.HashAsync(pass.RuleInputPath, ct) != pass.RuleInputHash)
                 throw new InvalidDataException("The saved out-of-range words could not be rebuilt identically.");
         }
@@ -87,7 +88,8 @@ internal static class RuleRescue
             throw new InvalidDataException("The saved rules pass is incomplete. Start a new attack.");
         if (!pass.StreamRules && pass.TailPath is { } tail
             && (!File.Exists(tail) || await DictionaryKernelPlanner.HashAsync(tail, ct) != pass.TailHash))
-            await ChooseOutputAsync(pass, tool ?? throw new InvalidDataException("hashcat is needed to rebuild this rules pass."), tail, log, ct, rebuilding: true);
+            await ChooseOutputAsync(pass, tool ?? throw new InvalidDataException("hashcat is needed to rebuild this rules pass."), tail, log, ct,
+                rebuilding: true, deviceArguments: deviceArguments);
     }
 
     private static long RuleCount(DictionaryKernelPass pass)
@@ -97,7 +99,7 @@ internal static class RuleRescue
     }
 
     private static async Task ChooseOutputAsync(DictionaryKernelPass pass, HashcatTool tool, string path,
-        Action<string>? log, CancellationToken ct, bool rebuilding = false)
+        Action<string>? log, CancellationToken ct, bool rebuilding = false, IReadOnlyList<string>? deviceArguments = null)
     {
         long rules = RuleCount(pass);
         BigInteger upper = (BigInteger)pass.SelectedWords * rules;
@@ -121,7 +123,7 @@ internal static class RuleRescue
             {
                 long count = 0;
                 using var writer = new StreamWriter(temporary, false, new UTF8Encoding(false)) { NewLine = "\n" };
-                foreach (string candidate in Candidates(pass, tool, ct, log))
+                foreach (string candidate in Candidates(pass, tool, ct, log, deviceArguments))
                 {
                     if (count >= upper) throw new InvalidDataException("Rule output exceeded its estimated candidate bound.");
                     writer.WriteLine(candidate);
@@ -142,7 +144,8 @@ internal static class RuleRescue
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    private static long SelectWords(DictionaryKernelPass pass, HashcatTool tool, Action<string>? log, CancellationToken ct)
+    private static long SelectWords(DictionaryKernelPass pass, HashcatTool tool, Action<string>? log, CancellationToken ct,
+        IReadOnlyList<string>? deviceArguments = null)
     {
         DictionaryKernelPlanner.ValidateInputs(pass);
         log?.Invoke($"Selecting dictionary words outside {pass.Minimum}-{pass.Threshold} bytes ...");
@@ -156,7 +159,7 @@ internal static class RuleRescue
             {
                 IEnumerable<byte[]> words = pass.ManagedWords
                     ? Wordlists.ReadWords(pass.Source!.Path, pass.InputMinimum, pass.InputMaximum, ct).Select(PasswordConfirmation.PlainBytes)
-                    : ReadWords(tool, ["--stdout", "--quiet", "-a", "0", pass.Source!.Path], ct);
+                    : ReadWords(tool, ["--stdout", "--quiet", "-a", "0", pass.Source!.Path, .. deviceArguments ?? []], ct);
                 foreach (byte[] word in words)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -208,11 +211,13 @@ internal static class RuleRescue
         return line;
     }
 
-    internal static IEnumerable<string> Candidates(DictionaryKernelPass pass, HashcatTool tool, CancellationToken ct, Action<string>? log = null)
+    internal static IEnumerable<string> Candidates(DictionaryKernelPass pass, HashcatTool tool, CancellationToken ct, Action<string>? log = null,
+        IReadOnlyList<string>? deviceArguments = null)
     {
         DictionaryKernelPlanner.ValidateInputs(pass);
         var args = new List<string> { "--stdout", "--quiet", "-a", "0", pass.RuleInputPath! };
         foreach (var rule in pass.Rules) args.AddRange(["-r", rule.Path]);
+        if (deviceArguments is not null) args.AddRange(deviceArguments);
         foreach (byte[] bytes in ReadWords(tool, args, ct, log))
             if (bytes.Length >= pass.Minimum && bytes.Length <= pass.Threshold)
                 yield return PasswordConfirmation.HexPlain(bytes);

@@ -446,7 +446,7 @@ public class HybridTests
         runner.StatusReceived += statuses.Enqueue;
         await runner.RunAsync(new HybridPlan(new RecordingKernel(rig.Seen, null), Space), "hash", rig.Request(), new FakeGpu(rig.Seen, null, 1), CancellationToken.None);
         Assert.NotEmpty(statuses);
-        Assert.All(statuses, s => Assert.Contains(s.Devices, d => d.Name == "CPU (built-in engine)"));
+        Assert.All(statuses, s => Assert.Contains(s.Devices, d => d.Name.StartsWith("CPU (built-in engine, ", StringComparison.Ordinal) && d.Name.Contains("threads", StringComparison.Ordinal)));
         Assert.Contains(statuses, s => s.Devices.Any(d => d.Name == "Fake GPU") && s.Devices.Count == 2);
         foreach (var s in statuses) Assert.InRange(s.ProgressDone, 0, s.ProgressTotal);
         var last5 = statuses.Where(s => s.MaskLength == 5).ToList();
@@ -520,7 +520,8 @@ public class HybridTests
             new() { Id = 3, Type = "CPU", Name = "CPU" },
         };
         int n = Environment.ProcessorCount;
-        Assert.Equal(Math.Max(1, n - 2), HybridRunner.CpuThreads(new Settings(), devs, hashcatRunning: true));
+        Assert.Equal(Math.Max(1, n - 1), HybridRunner.CpuThreads(new Settings(), devs, hashcatRunning: true));
+        Assert.Equal(Math.Max(1, n - 2), HybridRunner.CpuThreads(new Settings { DeviceSelectionExplicit = true }, devs, hashcatRunning: true));
         Assert.Equal(Math.Max(1, n - 1), HybridRunner.CpuThreads(new Settings(), devs, true, excluded: [2]));
         Assert.Equal(n, HybridRunner.CpuThreads(new Settings(), devs, hashcatRunning: false));
         Assert.Equal(n, HybridRunner.CpuThreads(new Settings { Strategy = DeviceStrategy.GpuAndCpu }, devs, true));

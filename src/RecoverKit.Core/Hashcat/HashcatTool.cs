@@ -75,6 +75,9 @@ public sealed partial class HashcatTool
     /// <summary>CPU worker threads for the OpenCL CPU runtime (0 = one per logical processor).</summary>
     public int MaxCpuThreads { get; set; }
 
+    /// <summary>Arguments prepared for a process, including retries. Consumers must redact private values before reporting.</summary>
+    public event Action<IReadOnlyList<string>>? ArgumentsStarting;
+
     private readonly Dictionary<(string Version, int Mode, int AttackMode), HashModeInfo?> _modeInfo = new();
 
     internal static HashcatTool ForExe(string exe) => new(exe);
@@ -267,6 +270,7 @@ public sealed partial class HashcatTool
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        ArgumentsStarting?.Invoke(psi.ArgumentList.ToArray());
         CpuRuntime.ApplyTo(psi, MaxCpuThreads);
         NvrtcRuntime.ApplyTo(psi);
         return psi;
@@ -519,7 +523,7 @@ public sealed partial class HashcatTool
         return code == 0 && long.TryParse(last, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var k) && k > 0 ? k : null;
     }
 
-    public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct, bool optimizedKernels = true)
+    public async Task<double> BenchmarkAsync(int mode, IEnumerable<string> deviceArgs, CancellationToken ct, bool optimizedKernels = true, ProcessPriority? priority = null)
     {
         HashcatKernels.EnsureFor(this, mode);
         // hashcat 8: -b benchmarks the optimized kernel where a mode has one, -B the pure one, and it
@@ -528,7 +532,7 @@ public sealed partial class HashcatTool
         var args = new List<string> { MajorVersion >= 8 && !optimized ? "-B" : "-b", "-m", mode.ToString(), "--machine-readable", "--quiet" };
         if (optimized) args.Add("-O");
         args.AddRange(deviceArgs.Where(a => a is not ("-O" or "--optimized-kernel-enable")));
-        var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct);
+        var (_, o, _) = await RunAsync(args, TimeSpan.FromMinutes(10), ct: ct, priority: priority);
         double total = 0;
         foreach (var line in o.Split('\n'))
         {
@@ -542,7 +546,8 @@ public sealed partial class HashcatTool
     // ---------------------------------------------------------------- rules preview / potfile
 
     /// <summary>Applies rules to words with hashcat --stdout (exact hashcat rule semantics).</summary>
-    public async Task<List<string>> ApplyRulesAsync(IEnumerable<string> words, string rules, CancellationToken ct)
+    public async Task<List<string>> ApplyRulesAsync(IEnumerable<string> words, string rules, CancellationToken ct,
+        IReadOnlyList<string>? deviceArguments = null)
     {
         var dir = System.IO.Directory.CreateTempSubdirectory("rk-rules").FullName;
         try
@@ -551,7 +556,7 @@ public sealed partial class HashcatTool
             var rf = Path.Combine(dir, "test.rule");
             await File.WriteAllTextAsync(wf, string.Join('\n', words) + "\n", new UTF8Encoding(false), ct);
             await File.WriteAllTextAsync(rf, rules.Replace("\r\n", "\n"), new UTF8Encoding(false), ct);
-            var (_, o, _) = await RunAsync(["--stdout", wf, "-r", rf, "--quiet"], TimeSpan.FromSeconds(20), ct: ct);
+            var (_, o, _) = await RunAsync(["--stdout", wf, "-r", rf, "--quiet", .. deviceArguments ?? []], TimeSpan.FromSeconds(20), ct: ct);
             return o.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
         }
         finally

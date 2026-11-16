@@ -20,6 +20,7 @@ public sealed class RulesEditorWindow : Window
 
     private readonly HashcatTool _hashcat;
     private readonly Settings _settings;
+    private readonly IReadOnlyList<BackendDevice> _devices;
     private readonly TextBox _editor = new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = Mono, FontSize = 13 };
     private readonly TextBox _result = new() { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.NoWrap, FontFamily = Mono, FontSize = 13 };
     private readonly TextBox[] _words = new TextBox[4];
@@ -43,10 +44,11 @@ public sealed class RulesEditorWindow : Window
         "r\n" +
         "d\n";
 
-    public RulesEditorWindow(HashcatTool hashcat, Settings settings)
+    public RulesEditorWindow(HashcatTool hashcat, Settings settings, IReadOnlyList<BackendDevice>? devices = null)
     {
         _hashcat = hashcat;
         _settings = settings;
+        _devices = devices ?? [];
         Title = "Rules Editor";
         Icon = Icons.AppIcon();
         Width = 720;
@@ -123,7 +125,7 @@ public sealed class RulesEditorWindow : Window
         int ruleCount = rules.Replace("\r", "").Split('\n').Count(l => l.Trim().Length > 0 && !l.StartsWith('#'));
         try
         {
-            var outp = await _hashcat.ApplyRulesAsync(words, rules, cts.Token);
+            var outp = await _hashcat.ApplyRulesAsync(words, rules, cts.Token, HashcatRunner.DeviceArguments(_settings, _devices));
             if (cts.IsCancellationRequested) return;
             _result.Text = string.Join("\n", outp);
             int expected = ruleCount * words.Count;
@@ -132,7 +134,7 @@ public sealed class RulesEditorWindow : Window
                 : $"{ruleCount} rule(s), {outp.Count} candidate(s) - some rules are invalid or rejected words and were skipped by hashcat";
             _state.Foreground = outp.Count == expected ? Palette.DimBrush : Palette.WarningBrush;
         }
-        catch (Exception ex) when (ex is TimeoutException or IOException or OperationCanceledException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is TimeoutException or IOException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception)
         {
             if (!cts.IsCancellationRequested) { _state.Text = ex.Message; _state.Foreground = Palette.ErrorBrush; }
         }

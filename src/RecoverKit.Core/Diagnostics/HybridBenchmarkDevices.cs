@@ -29,6 +29,7 @@ public static class HybridBenchmarkDevices
         {
             string family = GpuProfileSelection.FamilyKey(current.Key, devices);
             var allowed = devices.Where(d => d.IsGpu && !HashcatRunner.IsDisabled(settings, d)
+                && HashcatRunner.ResolveGpu(settings, d, devices).Key == d.Key
                 && GpuProfileSelection.FamilyKey(d.Key, devices) == family).ToList();
             PerformanceDecision? choice = null;
             if (rows.Count > 0)

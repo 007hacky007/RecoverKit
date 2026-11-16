@@ -20,6 +20,8 @@ public sealed class PreferencesWindow : Window
     private readonly DeviceStrategy _loadedStrategy;
     private bool _threadsEdited;
     private bool _strategyEdited;
+    private bool _devicesEdited;
+    private bool _syncingDevices;
     private readonly CheckBox _automaticCalibration = Check("Measure the fastest method automatically");
     private readonly TextBlock _profileStatus = L.Text("", dim: true, wrap: true);
     private readonly HashcatTool? _hashcat;
@@ -44,8 +46,12 @@ public sealed class PreferencesWindow : Window
     private readonly CheckBox _hybrid = Check("Run it next to the GPUs: share masks and supported file dictionaries between CPU and GPUs");
     private readonly CheckBox _hashcatCpu = Check("For other formats, also give hashcat the CPU next to the GPUs (OpenCL CPU runtime)");
     private readonly TextBox _extra = new();
+    private readonly TextBlock _extraDeviceWarning = L.Text("Extra device arguments change backend numbering or override the selected devices. Use GPU > NVIDIA GPU backend and the device checkboxes instead.", wrap: true);
     private readonly StackPanel _gpuList = new() { Spacing = 2 };
-    private readonly List<(CheckBox Box, BackendDevice Device)> _gpuChecks = new();
+    private readonly List<(CheckBox Box, BackendDevice Device, TextBlock Label)> _gpuChecks = new();
+    private readonly ComboBox _nvidiaBackend = new() { ItemsSource = new[] { "Automatic", "CUDA", "OpenCL" }, MinWidth = 180 };
+    private readonly TextBlock _selectionSummary = L.Text("", dim: true, wrap: true);
+    private readonly TextBlock _cudaWarning = L.Text("", wrap: true);
     private readonly Slider _workload = new() { Minimum = 1, Maximum = 4, TickFrequency = 1, IsSnapToTickEnabled = true, TickPlacement = Avalonia.Controls.TickPlacement.BottomRight };
     private readonly TextBlock _backendLabel = L.Text("", dim: true);
     private static readonly (string Text, int Percent)[] Duties =
@@ -136,8 +142,12 @@ public sealed class PreferencesWindow : Window
         WordlistDownloads.Shared.Changed += _wordlistChanged;
         Closed += (_, _) => WordlistDownloads.Shared.Changed -= _wordlistChanged;
         _ = RefreshDefaultDictionaryAsync();
-        _maxThreads.ValueChanged += (_, _) => _threadsEdited = true;
-        _strategy.SelectionChanged += (_, _) => _strategyEdited = true;
+        _maxThreads.ValueChanged += (_, _) => { _threadsEdited = true; RefreshDeviceSelection(); };
+        _strategy.SelectionChanged += (_, _) => { _strategyEdited = true; RefreshDeviceSelection(); };
+        _nvidiaBackend.SelectionChanged += (_, _) => RefreshDeviceSelection();
+        foreach (var box in new[] { _native, _hybrid, _hashcatCpu })
+            box.IsCheckedChanged += (_, _) => RefreshDeviceSelection();
+        _extra.TextChanged += (_, _) => RefreshDeviceSelection();
         // Apply stays disabled until something changes.
         TrackChanges(tabs, () => _apply.IsEnabled = true);
     }
@@ -154,7 +164,9 @@ public sealed class PreferencesWindow : Window
         {
             switch (c)
             {
-                case CheckBox cb: cb.IsCheckedChanged += (_, _) => changed(); break;
+                case CheckBox cb:
+                    if (!_gpuChecks.Any(g => ReferenceEquals(g.Box, cb))) cb.IsCheckedChanged += (_, _) => changed();
+                    break;
                 case ComboBox co: co.SelectionChanged += (_, _) => changed(); break;
                 case NumericUpDown nu: nu.ValueChanged += (_, _) => changed(); break;
                 case Slider sl: sl.ValueChanged += (_, _) => changed(); break;
@@ -203,6 +215,9 @@ public sealed class PreferencesWindow : Window
         hc.Put(L.Column(4, _hashcatCpu, cpuNote), 4, 0, 2);
         hc.Put(L.Text("Extra hashcat arguments"), 5, 0);
         hc.Put(_extra, 5, 1);
+        _extraDeviceWarning.Foreground = Palette.WarningBrush;
+        _extraDeviceWarning.FontSize = 12;
+        hc.Put(_extraDeviceWarning, 6, 0, 2);
         _native.IsCheckedChanged += (_, _) => _hybrid.IsEnabled = _native.IsChecked == true;
 
         return L.Column(16,
@@ -264,7 +279,13 @@ public sealed class PreferencesWindow : Window
         var header = L.Grid("2*,*,*,*", columnSpacing: 8);
         string[] cols = ["GPU name", "Compute units", "Frequency", "Memory"];
         for (int i = 0; i < cols.Length; i++) header.Put(L.Text(cols[i], dim: true, bold: true), 0, i);
-        var list = L.Column(6, header, new Border { Height = 1, Background = Palette.LineBrush }, _gpuList);
+        var list = L.Column(6, header, new Border { Height = 1, Background = Palette.LineBrush }, _gpuList, _selectionSummary);
+        _nvidiaBackend.IsEnabled = !Platform.IsMac;
+        _cudaWarning.Foreground = Palette.WarningBrush;
+        _cudaWarning.FontSize = 12;
+        var backend = L.Column(6, _nvidiaBackend,
+            L.Text(Platform.IsMac ? "Unavailable on macOS: Apple GPUs use Metal or OpenCL."
+                : "Automatic prefers CUDA; a recorded CUDA failure selects OpenCL.", dim: true, wrap: true), _cudaWarning);
 
         var labels = L.Grid("*,*");
         labels.Put(L.Text("Lag free display", dim: true), 0, 0);
@@ -283,6 +304,7 @@ public sealed class PreferencesWindow : Window
 
         return L.Column(16,
             L.Group("Devices", list),
+            L.Group("NVIDIA GPU backend", backend),
             L.Group("GPU load", LoadBox(labels)),
             L.Group("GPU temperature", TemperatureBox()),
             _powerGroup = L.Group("GPU power limit (NVIDIA)", PowerBox()),
@@ -530,6 +552,7 @@ public sealed class PreferencesWindow : Window
     private void LoadValues()
     {
         _strategy.SelectedIndex = (int)_s.Strategy;
+        _nvidiaBackend.SelectedIndex = (int)_s.NvidiaBackend;
         _automaticCalibration.IsChecked = _s.AutomaticPerformanceCalibration;
         _priority.SelectedIndex = (int)_s.Priority;
         // 0 means "one per logical processor"; show the number it resolves to.
@@ -570,6 +593,7 @@ public sealed class PreferencesWindow : Window
 
     private void FillDevices()
     {
+        var selection = SelectionSettings();
         // GPUs only: the processor is configured on the Performance tab
         // (strategy, thread count), and the workload slider only governs GPU kernels.
         _gpuList.Children.Clear();
@@ -578,24 +602,105 @@ public sealed class PreferencesWindow : Window
         foreach (var d in gpus)
         {
             var row = L.Grid("2*,*,*,*", columnSpacing: 8);
-            var cb = new CheckBox { Content = new TextBlock { Text = d.Name + (d.IsIntegratedGpu ? " (integrated)" : ""), TextTrimming = TextTrimming.CharacterEllipsis }, IsChecked = !HashcatRunner.IsDisabled(_s, d) };
-            cb.IsCheckedChanged += (_, _) => _gpuChanged?.Invoke();
+            var label = new TextBlock { TextWrapping = TextWrapping.Wrap };
+            var cb = new CheckBox { Content = label, IsChecked = !HashcatRunner.IsDisabled(selection, d) };
+            cb.IsCheckedChanged += (_, _) =>
+            {
+                if (_syncingDevices) return;
+                _devicesEdited = true;
+                RefreshDeviceSelection();
+                _gpuChanged?.Invoke();
+            };
             row.Put(cb, 0, 0);
             row.Put(L.Text(d.Processors > 0 ? d.Processors.ToString() : "n/a"), 0, 1);
             row.Put(L.Text(d.ClockMhz > 0 ? $"{d.ClockMhz} MHz" : "n/a"), 0, 2);
             row.Put(L.Text(d.MemoryMb > 0 ? $"{d.MemoryMb} MB" : "n/a"), 0, 3);
             _gpuList.Children.Add(row);
-            _gpuChecks.Add((cb, d));
+            _gpuChecks.Add((cb, d, label));
         }
         if (gpus.Count == 0) _gpuList.Children.Add(L.Text("No compatible GPU devices detected.", dim: true));
         _workload.IsEnabled = _duty.IsEnabled = gpus.Count > 0;
         _backendLabel.Text = gpus.Count == 0 ? ""
             : string.Join(", ", gpus.Select(d => d.Backend + (d.BackendVersion.Length > 0 ? " " + d.BackendVersion : "")).Distinct());
+        RefreshDeviceSelection();
+    }
+
+    private Settings SelectionSettings() => new()
+    {
+        NvidiaBackend = (NvidiaBackend)Math.Max(0, _nvidiaBackend.SelectedIndex),
+        Strategy = (DeviceStrategy)Math.Max(0, _strategy.SelectedIndex),
+        PerformanceStrategyExplicit = _s.PerformanceStrategyExplicit || _strategyEdited,
+        DeviceSelectionExplicit = _s.DeviceSelectionExplicit || _devicesEdited,
+        DisabledDevices = _devicesEdited ? _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Device.Id).ToList() : _s.DisabledDevices.ToList(),
+        DisabledDeviceKeys = _devicesEdited ? _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Device.Key).ToList() : _s.DisabledDeviceKeys.ToList(),
+        MaxCpuThreads = _maxThreads.Value >= _maxThreads.Maximum ? 0 : _maxThreads.IntValue(),
+        UseNativeCpuEngine = _native.IsChecked == true,
+        HybridCpuGpu = _hybrid.IsChecked == true,
+        HashcatCpuWithGpu = _hashcatCpu.IsChecked == true,
+        ExtraArguments = _extra.Text ?? "",
+    };
+
+    private void RefreshDeviceSelection()
+    {
+        var selection = SelectionSettings();
+        _syncingDevices = true;
+        try
+        {
+            foreach (var (box, device, label) in _gpuChecks)
+            {
+                bool automatic = HashcatRunner.IsAutomaticallyExcluded(selection, device, _devices);
+                if (!_devicesEdited) box.IsChecked = !HashcatRunner.IsDisabled(selection, device) && !automatic;
+                string backend = DisplayGpu(selection, device, _devices).Backend;
+                label.Text = device.Name + (device.IsIntegratedGpu ? " (integrated)" : "")
+                    + (automatic ? " - not used: integrated GPU next to a dedicated GPU" : backend.Length > 0 ? $" ({backend})" : "");
+            }
+        }
+        finally { _syncingDevices = false; }
+        _selectionSummary.Text = SelectionSummary(selection, _devices);
+        _selectionSummary.Foreground = HashcatRunner.NvidiaBackendError(selection, _devices) is null ? Palette.DimBrush : Palette.WarningBrush;
+        _extraDeviceWarning.IsVisible = HashcatRunner.HasDeviceOverrides(selection.ExtraArguments);
+        string? reason = CudaFallback.Reason(_devices);
+        _cudaWarning.IsVisible = reason is not null;
+        _cudaWarning.Text = reason is null ? "" : selection.NvidiaBackend == NvidiaBackend.Cuda
+            ? "Recorded CUDA failure: " + reason + " Forced CUDA will retry CUDA and can fail again."
+            : "Recorded CUDA failure: " + reason + " NVIDIA GPUs use OpenCL in Automatic mode.";
+    }
+
+    internal static string SelectionSummary(Settings selection, IReadOnlyList<BackendDevice> devices)
+    {
+        if (HashcatRunner.NvidiaBackendError(selection, devices) is { } error) return "Attacks use: unavailable. " + error;
+        var gpus = selection.Strategy == DeviceStrategy.CpuOnly ? [] : HashcatRunner.ActiveGpus(selection, devices);
+        var parts = gpus.Select(d => DisplayGpu(selection, d, devices)).Select(d => d.Name + (d.Backend.Length > 0 ? $" ({d.Backend})" : "")).ToList();
+        bool extra = !string.IsNullOrWhiteSpace(selection.ExtraArguments);
+        bool native = selection.UseNativeCpuEngine && !extra && (gpus.Count == 0 || selection.HybridCpuGpu && selection.Strategy != DeviceStrategy.FastGpu);
+        if (native)
+        {
+            int threads = HybridRunner.CpuThreads(selection, devices, gpus.Count > 0);
+            parts.Add($"built-in CPU engine: {threads} {(threads == 1 ? "thread" : "threads")} where supported");
+        }
+        if (gpus.Count == 0 || selection.Strategy == DeviceStrategy.GpuAndCpu || selection.HashcatCpuWithGpu && selection.Strategy == DeviceStrategy.GpuOnly)
+        {
+            bool cpu = devices.Any(d => !d.IsSkippedAlias && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+            parts.Add(cpu ? "hashcat CPU (OpenCL)" + (native ? " for other formats" : "")
+                : native && gpus.Count == 0 ? "other formats need a CPU OpenCL runtime" : "no hashcat CPU device available; install a CPU OpenCL runtime");
+        }
+        return "Attacks use: " + (parts.Count == 0 ? "none" : string.Join("; ", parts)) + "."
+            + (extra ? " Extra arguments disable the built-in CPU engine and hybrid execution." : "")
+            + (HashcatRunner.HasDeviceOverrides(selection.ExtraArguments) ? " Extra arguments can change this selection." : "");
+    }
+
+    private static BackendDevice DisplayGpu(Settings selection, BackendDevice device, IReadOnlyList<BackendDevice> devices)
+    {
+        var resolved = HashcatRunner.ResolveGpu(selection, device, devices);
+        return Platform.IsMac && !resolved.IsMetal
+            ? devices.FirstOrDefault(d => d.IsMetal && (d.AliasOf == resolved.Id || resolved.AliasOf == d.Id)) ?? resolved
+            : resolved;
     }
 
     private void Apply()
     {
         _s.Strategy = (DeviceStrategy)Math.Max(0, _strategy.SelectedIndex);
+        _s.NvidiaBackend = (NvidiaBackend)Math.Max(0, _nvidiaBackend.SelectedIndex);
         if (_strategyEdited || _s.Strategy != _loadedStrategy) _s.PerformanceStrategyExplicit = true;
         if (_threadsEdited) _s.PerformanceThreadsExplicit = true;
         _s.AutomaticPerformanceCalibration = _automaticCalibration.IsChecked == true;
@@ -618,9 +723,13 @@ public sealed class PreferencesWindow : Window
         _s.GpuTempLimit = _tempLimit.IntValue();
         _s.GpuTempHysteresis = _tempHysteresis.IntValue();
         _s.PreventScreensaver = _screensaver.IsChecked == true;
-        var off = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Device).ToList();
-        _s.DisabledDevices = off.Select(d => d.Id).ToList();
-        _s.DisabledDeviceKeys = off.Select(d => d.Key).ToList();
+        if (_devicesEdited)
+        {
+            var off = _gpuChecks.Where(g => g.Box.IsChecked != true).Select(g => g.Device).ToList();
+            _s.DisabledDevices = off.Select(d => d.Id).ToList();
+            _s.DisabledDeviceKeys = off.Select(d => d.Key).ToList();
+            _s.DeviceSelectionExplicit = true;
+        }
         _s.UseExternalScenarioFile = _useScenario.IsChecked == true;
         _s.ExternalScenarioFile = Null(_scenarioFile.Text);
         var hp = Null(_hashcatPath.Text);

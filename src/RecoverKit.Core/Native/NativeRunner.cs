@@ -51,7 +51,8 @@ public sealed class NativeRunner
     public async Task<RunResult> RunAsync(NativeKernel kernel, MaskSpace space, string hashLine, RunRequest r, CancellationToken ct)
     {
         var s = r.Settings;
-        if (r.Mode == 29331) { NativeKernels.ConfigureWhirlpool(s); NativeKernels.ResetCpuPath(r.Mode); }
+        if (r.Mode == 29331) NativeKernels.ConfigureWhirlpool(s);
+        NativeKernels.ResetCpuPath(r.Mode);
         string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
         NativeResumePoint? resume = null;
         if (r.Restore && File.Exists(restoreFile))
@@ -81,7 +82,7 @@ public sealed class NativeRunner
                 ProgressTotal = p.Total,
                 TimeStart = new DateTimeOffset(p.Started).ToUnixTimeSeconds(),   // per length, as progress is per length
                 TotalHashes = 1,
-                Devices = [new DeviceSpeed { Id = 0, Name = r.Mode == 29331 ? $"CPU (built-in engine, {NativeKernels.CpuPath(r.Mode, actualOnly: true)})" : "CPU (built-in engine)", Type = "CPU", Speed = p.Speed }],
+                Devices = [new DeviceSpeed { Id = 0, Name = $"CPU (built-in engine, {NativeKernels.CpuPath(r.Mode, actualOnly: true)}, {threads} threads)", Type = "CPU", Speed = p.Speed }],
             };
             StatusReceived?.Invoke(last);
         };
@@ -161,7 +162,7 @@ public sealed class NativeRunner
     /// 1,800/s at "below normal", and PDF R6 next to hashcat from 58,000 to 25,000-40,000/s at "lowest".
     /// There the engine runs at normal priority and macOS shares the cores between applications.
     /// </summary>
-    internal static ThreadPriority ThreadPriorityFor(ProcessPriority p) => OperatingSystem.IsMacOS() && p != ProcessPriority.High ? ThreadPriority.Normal : p switch
+    public static ThreadPriority ThreadPriorityFor(ProcessPriority p) => OperatingSystem.IsMacOS() && p != ProcessPriority.High ? ThreadPriority.Normal : p switch
     {
         ProcessPriority.Idle => ThreadPriority.Lowest,
         ProcessPriority.BelowNormal => ThreadPriority.BelowNormal,

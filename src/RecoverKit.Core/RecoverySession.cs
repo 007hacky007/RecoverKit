@@ -116,6 +116,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         HashcatDir = tool?.Directory,
         Hashcat = tool,
         DefaultDictionary = settings.DefaultDictionary,
+        DeviceArguments = () => HashcatRunner.DeviceArguments(settings, Devices),
     };
 
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
@@ -283,7 +284,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         }
         try { await DictionaryKernelPlanner.PrepareSessionAsync(state, target, tool, settings, Devices, PlannerContext, message => Log?.Invoke(LogKind.Info, message), ct); }
         catch (OperationCanceledException) { state.Save(settings); return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped }); }
-        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException)
         { deleteSession = true; return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }); }
         var runner = new HashcatRunner(tool) { KnownDevices = Devices };
         runner.StatusReceived += s => Status?.Invoke(s);
@@ -319,11 +320,12 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
             PreparedAttack attack;
             try
             {
-                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, message => Log?.Invoke(LogKind.Info, message), ct, settings.ExtraArguments, tool);
+                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, message => Log?.Invoke(LogKind.Info, message), ct, settings.ExtraArguments, tool,
+                    spec.DictionaryKernel is { RuleExpanded: true } ? HashcatRunner.DeviceArguments(settings, Devices) : null);
                 attack = AttackPlanner.Prepare(spec, target, PlannerContext);
             }
             catch (OperationCanceledException) { state.Save(settings); return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Stopped }); }
-            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException)
             { deleteSession = true; return await FinishAsync(new SessionResult { Outcome = SessionOutcome.Error, Error = ex.Message }); }
             catch (AttackPlanException ex)
             {

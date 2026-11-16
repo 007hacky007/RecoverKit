@@ -83,7 +83,8 @@ internal static class DictionaryKernelPlanner
                 foreach (var group in infos.GroupBy(info => (info.PasswordLenMin, info.PasswordLenMax)))
                 {
                     var bounds = group.First();
-                    if (await RuleLengthPassAsync(spec, attack, bounds, tool, tail + $".rules-{bounds.Mode}", log, ct) is not { } extra) continue;
+                    if (await RuleLengthPassAsync(spec, attack, bounds, tool, tail + $".rules-{bounds.Mode}", log, ct,
+                        HashcatRunner.DeviceArguments(effective, devices)) is not { } extra) continue;
                     extra.DictionaryKernel!.Modes = group.Select(info => info.Mode).ToList();
                     rescued.Add(extra);
                 }
@@ -119,7 +120,8 @@ internal static class DictionaryKernelPlanner
 
     }
 
-    public static async Task PreparePassAsync(DictionaryKernelPass? pass, Action<string>? log, CancellationToken ct, string? extraArguments = null, HashcatTool? tool = null)
+    public static async Task PreparePassAsync(DictionaryKernelPass? pass, Action<string>? log, CancellationToken ct, string? extraArguments = null,
+        HashcatTool? tool = null, IReadOnlyList<string>? deviceArguments = null)
     {
         if (pass?.Source is null) return;
         if (!string.IsNullOrWhiteSpace(extraArguments))
@@ -127,7 +129,7 @@ internal static class DictionaryKernelPlanner
         ValidateInputs(pass);
         if (pass.RuleExpanded)
         {
-            await RuleRescue.PrepareAsync(pass, tool, log, ct);
+            await RuleRescue.PrepareAsync(pass, tool, log, ct, deviceArguments);
             return;
         }
         if (pass.TailPath is { } tail && (!File.Exists(tail) || await HashAsync(tail, ct) != pass.TailHash))
@@ -139,8 +141,8 @@ internal static class DictionaryKernelPlanner
     }
 
     internal static Task<AttackSpec?> RuleLengthPassAsync(AttackSpec spec, PreparedAttack attack, HashModeInfo info,
-        HashcatTool tool, string tailPath, Action<string>? log, CancellationToken ct)
-        => RuleRescue.PlanAsync(spec, attack, info, tool, tailPath, log, ct);
+        HashcatTool tool, string tailPath, Action<string>? log, CancellationToken ct, IReadOnlyList<string>? deviceArguments = null)
+        => RuleRescue.PlanAsync(spec, attack, info, tool, tailPath, log, ct, deviceArguments);
 
     internal static (double Pure, double Optimized) Rates(int mode, Settings settings)
     {

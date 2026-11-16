@@ -48,7 +48,7 @@ public static class PerformanceProfiles
         string.Join(";", devices.OrderBy(d => d.Key).Select(d => $"{d.Key}:{d.Name}:{d.Backend}:{d.BackendVersion}:{d.DriverVersion}")));
     public static string PolicyFingerprint(Settings settings, string domain) => Digest(domain == "cpu"
         ? $"{settings.Priority}|{settings.MaxCpuThreads}|{settings.PerformanceThreadsExplicit}"
-        : $"{settings.Priority}|{settings.MaxCpuThreads}|{settings.Workload}|{settings.OptimizedKernels}|{settings.Strategy}|{settings.UseNativeCpuEngine}|{settings.HybridCpuGpu}|{settings.GpuTempGuard}|{settings.GpuTempLimit}|{settings.GpuTempHysteresis}|{settings.GpuDutyPercent}|{settings.GpuPowerLimit}|" + string.Join(';', settings.GpuPowerWatts.OrderBy(p => p.Key).Select(p => $"{p.Key}:{p.Value}")) + "|" + string.Join(';', settings.DisabledDeviceKeys.Order()) + "|" + string.Join(';', settings.DisabledDevices.Order()));
+        : $"{settings.Priority}|{settings.MaxCpuThreads}|{settings.Workload}|{settings.OptimizedKernels}|{settings.NvidiaBackend}|{settings.DeviceSelectionExplicit}|{settings.Strategy}|{settings.UseNativeCpuEngine}|{settings.HybridCpuGpu}|{settings.GpuTempGuard}|{settings.GpuTempLimit}|{settings.GpuTempHysteresis}|{settings.GpuDutyPercent}|{settings.GpuPowerLimit}|" + string.Join(';', settings.GpuPowerWatts.OrderBy(p => p.Key).Select(p => $"{p.Key}:{p.Value}")) + "|" + string.Join(';', settings.DisabledDeviceKeys.Order()) + "|" + string.Join(';', settings.DisabledDevices.Order()));
     public static string BuildConfiguration => System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(Settings).Assembly)?.Configuration ?? "unknown";
     public static string AppVersion => (System.Reflection.Assembly.GetEntryAssembly() ?? typeof(Settings).Assembly).GetName().Version?.ToString() ?? "unknown";
     private static string CpuSoftwareVersion => $"{AppVersion}|{BuildConfiguration}|{Environment.Version}";
@@ -142,6 +142,9 @@ public static class PerformanceProfiles
         if (decision is null || !string.IsNullOrWhiteSpace(settings.ExtraArguments)) return null;
         if (decision.Policy.Length > 0 && decision.Policy != PolicyFingerprint(settings, decision.Domain)) return null;
         if (decision.DeviceKeys.Any(k => !devices.Any(d => d.Key == k && !HashcatRunner.IsDisabled(settings, d)))) return null;
+        if (decision.DeviceKeys.Any(k => devices.FirstOrDefault(d => d.Key == k) is { IsGpu: true } d
+            && (HashcatRunner.IsAutomaticallyExcluded(settings, d, devices)
+                || HashcatRunner.ResolveGpu(settings, d, devices).Key != d.Key))) return null;
         if (decision.Domain == "cpu")
         {
             if (!settings.UseNativeCpuEngine) return null;

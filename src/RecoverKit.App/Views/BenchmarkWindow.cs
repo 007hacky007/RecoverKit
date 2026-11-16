@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
+using RecoverKit.Core.Diagnostics;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Native;
 
@@ -73,6 +74,7 @@ public sealed class BenchmarkWindow : Window
     private readonly Dictionary<int, string> _engines = new();
     private readonly Dictionary<int, List<string>> _details = new();
     private string? _whirlpoolPaths;
+    private List<string> _setup = [];
     private readonly CancellationTokenSource _cts = new();
     private readonly string _cpu = Platform.CpuName();
     private DateTime _started, _finished;
@@ -132,13 +134,10 @@ public sealed class BenchmarkWindow : Window
         if (d is null) return lines;
         if (d.Length > 0) lines.Add($"Test passwords: {d.Length} characters");
         if (speed > 0 && d.Cpu > 0 && d.Gpu > 0) lines.Add($"Measured separately: GPU {d.Gpu:N0}, CPU {d.Cpu:N0}");
+        lines.AddRange(d.Execution.Select(DiagnosticHtml.Scrub));
+        lines.Add("hashcat arguments (device and tuning flags; targets, paths and unrecognized options omitted): " + (d.Arguments.Length == 0 ? "none (built-in CPU or measurement not started)" : d.Arguments));
         return lines;
     }
-
-    private IEnumerable<string> GpuNames() => _devices.Where(d => !d.IsSkippedAlias && d.Type.Contains("GPU", StringComparison.OrdinalIgnoreCase))
-        .Select(d => HashcatRunner.RunningBackend(d, _devices) is var running && running != d.Backend
-            ? $"#{d.Id} {d.Name} ({running}; CUDA could not build hashcat's kernels on this PC)"
-            : $"#{d.Id} {d.Name} ({d.Backend})");
 
     private void Add(string s, bool bold = false)
     {
@@ -159,8 +158,9 @@ public sealed class BenchmarkWindow : Window
         Add(VersionLine);
         Add($"Benchmark started: {_started:F}");
         Add(CpuLine);
-        var gpus = GpuNames().ToList();
-        Add(gpus.Count == 0 ? "GPU devices not detected." : "GPU devices: " + string.Join(", ", gpus));
+        Add("Setup", bold: true);
+        _setup = BenchmarkSetup.Lines(_hashcat, _settings, _devices);
+        foreach (string line in _setup) Add(line);
         Add("");
     }
 
@@ -178,19 +178,12 @@ public sealed class BenchmarkWindow : Window
                 _step.Text = $"Step {i + 1} of {Entries.Length}";
                 _progress.Text = e.Type;
                 // Same engine choice as a real attack: the built-in CPU kernels when no GPU is used.
-                bool native = SpeedProbe.UseNative(_settings, _devices, e.Mode);
                 double speed;
-                string? cpuPath = null;
                 SpeedProbe.Details? details = null;
-                try { (speed, native) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token, path => cpuPath = path, d => details = d); }
+                try { (speed, _) = await SpeedProbe.MeasureAsync(_hashcat, _settings, _devices, e.Mode, TimeSpan.FromSeconds(8), _cts.Token, measuredWith: d => details = d); }
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
-                string cpuEngine = cpuPath is null ? "built-in CPU engine" : $"built-in CPU engine, {cpuPath}";
-                string backends = HashcatRunner.GpuBackends(_settings, _devices);
-                string gpu = backends.Length > 0 ? $"GPU ({backends})" : "GPU";
-                _engines[e.Mode] = native ? cpuEngine
-                    : cpuPath is not null || SpeedProbe.UseHybrid(_settings, _devices, e.Mode) ? $"hashcat on the {gpu} + {cpuEngine}"
-                    : GpuNames().Any() ? $"hashcat, {gpu}" : "hashcat, CPU (OpenCL)";
+                _engines[e.Mode] = details?.Engine ?? "measurement did not complete; engine unavailable";
                 _details[e.Mode] = DetailLines(details, speed);
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;
@@ -240,8 +233,7 @@ public sealed class BenchmarkWindow : Window
           .Append(H(VersionLine)).Append("<br>")
           .Append(H($"Benchmark started: {_started:F}")).Append("<br>")
           .Append(H(CpuLine)).Append("<br>");
-        var gpus = GpuNames().ToList();
-        sb.Append(H(gpus.Count == 0 ? "GPU devices not detected." : "GPU devices: " + string.Join(", ", gpus))).Append("</p>");
+        sb.Append("</p><h2>Setup</h2><p>").Append(string.Join("<br>", _setup.Select(H))).Append("</p>");
         foreach (var (e, s) in _results)
         {
             sb.Append("<p>Type: ").Append(H(e.Type)).Append("<br>Protection: ").Append(H(e.Protection))

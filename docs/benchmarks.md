@@ -305,14 +305,15 @@ recoverkit-cli install-hashcat
 recoverkit-cli bench-zip
 ```
 
-`bench-zip` lists the devices, then runs every entry size on every device (CUDA, OpenCL and
-Metal aliases separately) with hashcat's kernel, RecoverKit's kernel and RecoverKit's kernel with
-the amplifier cache, 10 seconds each, and prints a table per device. `--device 1`
-limits it to one device, `--seconds 20` makes the runs longer, `--quick` leaves out the
+`bench-zip` lists the devices, then runs every entry size on the selected physical GPUs with
+hashcat's kernel, RecoverKit's kernel and RecoverKit's kernel with the amplifier cache,
+10 seconds each, and prints a table per device. `--device 1` selects one physical GPU by its
+listed backend ID, `--seconds 20` makes the runs longer, `--quick` leaves out the
 amplifier-cache column. The GUI's Tools > Benchmark row "ZIP/Classic" (`hashcat -b -m 17210`) uses
 RecoverKit's kernel too. On Windows, an NVIDIA GPU appears as a CUDA device only after
 Tools > Dependencies (or with the CUDA Toolkit installed); run
-`bench-zip` before and after to compare OpenCL and CUDA.
+`bench-zip --nvidia-backend cuda` and `bench-zip --nvidia-backend opencl` to compare backends.
+The backend option resolves an NVIDIA `--device` ID to the matching CUDA or OpenCL device.
 
 ## When the built-in engine runs
 
@@ -579,5 +580,22 @@ together: 1.31x the commercial product's 50,812/s.
 - CLI: `RecoverKit.Cli bench-native` (built-in kernels), `RecoverKit.Cli bench-prims`
   (MD5/SHA-1/RC4 primitives) and `RecoverKit.Cli bench-zip` (ZIP GPU kernels, hashcat's against
   RecoverKit's, per device).
+- NVIDIA: `recoverkit-cli bench-full --nvidia-backend cuda --out cuda.html` and
+  `recoverkit-cli bench-full --nvidia-backend opencl --out opencl.html` compare the same report
+  through each backend. The option also applies to `crack` and `bench-zip`; `auto` keeps CUDA
+  when available and permits the existing OpenCL fallback after a CUDA kernel-build failure.
+  Explicit CUDA or OpenCL takes priority over saved backend measurements and does not change
+  the saved preference.
+- Automatic GPU selection uses each physical GPU once and leaves integrated GPUs idle when an
+  enabled dedicated GPU exists. Explicit device selections and CPU/GPU strategies remain in
+  effect. Reports list the selected devices, actual backend and engine setup; compare these
+  before comparing rates. On macOS, `crack` and `bench-native` print the setup once at startup.
+- The Setup block records RecoverKit and hashcat versions, NVIDIA driver and CUDA versions when
+  known, every GPU and whether it is used, the NVIDIA backend preference and resolution, device
+  strategy, built-in CPU and hybrid switches, CPU threads, workload, optimized kernels, process
+  priority, temperature guard, duty cycle, power limits and applied performance choices.
+  Extra hashcat arguments are recorded verbatim, with a note that they disable the built-in CPU
+  engine. Each measured row names its actual engines and backends and records the hashcat device,
+  workload, kernel and tuning arguments. Row arguments omit hashes, targets and file paths.
 - To compare machines, compare the saved HTML files row by row; the report shows which engine
   produced each row. Enable the debug log (Preferences > Other) if numbers look wrong.
