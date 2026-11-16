@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-16
+
 ### Added
 - NVIDIA backend selection in Preferences and the CLI (`--nvidia-backend auto|cuda|opencl`)
   for recovery and benchmarks. Automatic keeps CUDA unless a kernel-build failure needs the
@@ -27,6 +29,8 @@ All notable changes to RecoverKit. Downloads are on the
   whole-job win. Performance preferences and measured engine choices still apply.
 
 ### Fixed
+- Starting an update now quits RecoverKit so the installer can run. Before, the window closed but
+  the process kept running and the update waited for it.
 - Quick hashcat benchmarks pass the extra arguments from Preferences, while filtering the
   optimized-kernel flags as recovery runs do. Reports show the arguments used for each row.
 - GPU selection and benchmark labels use the resolved backend device, including its OpenCL ID
@@ -379,6 +383,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.8.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.8.0
 [1.7.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.2
 [1.7.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.1
 [1.7.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.0
