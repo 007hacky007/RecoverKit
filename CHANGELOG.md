@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-16
+
 ### Fixed
 - The Dictionary Generator and WPA-PMK Generator no longer report an empty file as saved when
   hashcat cannot run, for example on a computer without a GPU driver or CPU runtime. They now
@@ -338,6 +340,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.7.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.1
 [1.7.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.0
 [1.6.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.2
 [1.6.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.1
