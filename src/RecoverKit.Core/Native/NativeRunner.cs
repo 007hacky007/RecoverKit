@@ -37,7 +37,7 @@ public sealed class NativeRunner
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
         // A CPU variant timing alone does not establish a win over hashcat's CPU engine.
-        if (!ignoreGpu && mode is 13600 or 22000 && settings.PerformanceChoice?.Engine != "cpu") return null;
+        if (!ignoreGpu && mode is 9400 or 13600 or 22000 && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         // hashcat searches every network; our CPU runners stop on their first hit.
         if (lines.Length != 1) return null;
@@ -110,7 +110,7 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = await RecordFoundAsync(s, MatchedHashLine(kernel, hashLine, result.Password!), result.Password!, r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
+                var pw = await RecordFoundAsync(s, MatchedHashLine(kernel, hashLine, result.Password!), result.Password!, r.Mode == 9400 || r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
                 TryDelete(restoreFile);
                 return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
@@ -132,6 +132,11 @@ public sealed class NativeRunner
     /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
     internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw, string? confirmedCache = null)
     {
+        if (hashLine.TrimStart().StartsWith("$office$*2007*", StringComparison.Ordinal))
+        {
+            if (!s.DontUsePasswordCache) await PasswordConfirmation.AppendAsync(confirmedCache ?? s.PotfilePath, hashLine, pw);
+            return HybridRunner.DictionaryPlain(pw);
+        }
         string plain = Printable(pw) ? Encoding.Latin1.GetString(pw) : PasswordConfirmation.HexPlain(pw);
         // A confirmed password goes to the request's cache as hash:$HEX[...] (see PasswordConfirmation).
         if (confirmedCache is not null)

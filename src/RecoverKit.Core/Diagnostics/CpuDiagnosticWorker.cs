@@ -75,7 +75,7 @@ public static class CpuDiagnosticWorker
 
     internal static WorkerResult EnforcePath(WorkerResult result, string variant)
     {
-        if (variant is not ("scalar" or "avx2" or "avx512" or "neon" or "arm-sha1")) return result;
+        if (variant is not ("scalar" or "avx2" or "avx512" or "sha-ni" or "neon" or "arm-sha1")) return result;
         string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").Replace(" ", "").ToLowerInvariant();
         if (actual == variant.Replace("-", "") && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
         string reason = result.SelfTestState switch
@@ -110,6 +110,8 @@ public static class CpuDiagnosticWorker
             directory = Directory.CreateTempSubdirectory("rk-cpu-worker-").FullName;
             string output = Path.Combine(directory, "result.json");
             var start = SelfStartInfo();
+            if (Math.Abs(mode) == 9400 && variant != "default")
+                start.Environment["RECOVERKIT_OFFICE2007_PATH"] = variant;
             if (Math.Abs(mode) is 13600 or 22000 && variant != "default")
                 start.Environment["RECOVERKIT_PBKDF2_SHA1_PATH"] = variant;
             foreach (var arg in new[] { Command, mode.ToString(CultureInfo.InvariantCulture), variant, threads.ToString(CultureInfo.InvariantCulture), priority.ToString(),

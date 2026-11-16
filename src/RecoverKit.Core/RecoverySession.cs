@@ -122,6 +122,15 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
+        if (target.Modes.Count == 1 && target.Modes[0] == 9400)
+        {
+            var kernels = target.HashLines.Split('\n').Select(Native.Kernels.Office2007Kernel.TryParse).OfType<Native.Kernels.Office2007Kernel>().ToArray();
+            if (kernels.Length > 0)
+            {
+                var confirm = target.ConfirmPassword;
+                target.ConfirmPassword = password => kernels.Any(kernel => kernel.Verify(password)) && (confirm?.Invoke(password) ?? true);
+            }
+        }
         if (target.SevenZipCpu is not null) return await RunSevenZipCpuAsync(target, filePath, steps, resume, ct);
         if (target.Rar3File is not null)
             return await RunRar3FileAsync(target, filePath, steps, resume, ct);
@@ -136,11 +145,11 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         {
             foreach (var mode in target.Modes)
             {
-                bool dictionaryBytes = mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 && target.VolumeCredentials is null
+                bool preserveBytes = mode == 9400 || mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 && target.VolumeCredentials is null
                     && steps.Any(step => step.Kind == AttackKind.Dictionary);
                 var cached = target.ConfirmPassword is { } confirm
-                    ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm, dictionaryBytes)
-                    : dictionaryBytes ? (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
+                    ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm, preserveBytes)
+                    : preserveBytes ? (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
                         .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList()
                     : await tool.ShowAsync(mode, hashFile, potfile, target.VolumeCredentials);
                 if (cached.Count > 0 && IsMultiNetworkWpa(target))

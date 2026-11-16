@@ -5,6 +5,11 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- A built-in CPU engine for Office 2007, with scalar, AVX2, AVX-512, SHA-NI, NEON and ARM SHA-1
+  paths. Masks and dictionaries with rules share work with hashcat by default on discrete GPUs;
+  integrated-only systems need an explicit choice or a measured hybrid win.
+
 ### Fixed
 - Benchmark rows no longer repeat the whole setup: each row lists its hashcat arguments and only
   the settings that differ from the Setup section.

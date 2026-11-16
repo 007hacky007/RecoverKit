@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 16;
+    private const int RequiredVersion = 17;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -46,6 +46,22 @@ internal static unsafe partial class RkNative
     /// <summary>Clears observed RAR, PBKDF2-SHA1 or Whirlpool paths before a CPU probe.</summary>
     [LibraryImport(Lib, EntryPoint = "rk_reset_executed_paths")]
     public static partial void ResetExecutedPaths(int mode);
+
+    /// <summary>UTF-16LE candidates to the 20-byte SHA-1 state after 50000 Office 2007 spins.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_office2007_spin")]
+    public static partial int Office2007Spin(byte* pws, int stride, int* lens, int n, byte* salt, byte* hashes);
+
+    [LibraryImport(Lib, EntryPoint = "rk_office2007_selected_path")]
+    public static partial int Office2007SelectedPath();
+
+    [LibraryImport(Lib, EntryPoint = "rk_office2007_lanes")]
+    public static partial int Office2007Lanes();
+
+    [LibraryImport(Lib, EntryPoint = "rk_office2007_selftest_state")]
+    public static partial int Office2007SelfTestState();
+
+    [LibraryImport(Lib, EntryPoint = "rk_office2007_executed_paths")]
+    public static partial int Office2007ExecutedPaths();
 
     [LibraryImport(Lib, EntryPoint = "rk_office97_search")]
     public static partial int Office97Search(byte* salt16, byte* enc32, byte* pws, int len, int n, int* hits, int maxHits);

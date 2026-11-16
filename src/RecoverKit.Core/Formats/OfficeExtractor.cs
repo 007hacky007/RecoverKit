@@ -127,6 +127,8 @@ public static class OfficeExtractor
             Speed = SpeedClass.Slow,
             Utf16Password = true,
         };
+        if (Native.Kernels.Office2007Kernel.TryParse(d.Target.HashLines) is { } kernel)
+            d.Target.ConfirmPassword = password => kernel.Verify(password);
     }
 
     private static void ExtractWord(CompoundFile cf, Detection d)

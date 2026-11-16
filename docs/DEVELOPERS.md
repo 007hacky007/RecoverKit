@@ -696,6 +696,24 @@ arm64 with the SHA-256 instructions, 8 interleaved streams of SHA256H/H2 are use
 `rk_pbkdf2_sha256` export takes candidates of different lengths and any salt, iteration count
 and output length; `Pbkdf2Sha256Tests` checks it against .NET on every path the CPU has.
 
+Office 2007 (`Office2007Kernel`, mode 9400, native API 17) implements ECMA-376 Standard
+Encryption with 50,000 SHA-1 iterations and AES-128/256 verifier checks. Candidate bytes use hashcat 8's UTF-8-to-UTF-16LE mapping; the input limit is 256 bytes. This
+includes its F4 90..BF four-byte edge case, which emits raw surrogate units. Other invalid
+UTF-8 and longer dictionary candidates stay with hashcat through the deferred wordlist.
+The native `rk_office2007_spin` export returns the 20-byte spin digest for each UTF-16LE input;
+key expansion and AES checks are managed. Every hit passes an independent .NET SHA-1/AES check.
+AVX2 (8 lanes), AVX-512 (16), SHA-NI (2 interleaved streams), NEON (4 lanes) and ARM SHA-1
+(4 streams) self-test before use and report the path that actually executed. A failed guard
+falls back to scalar. Automatic x64 dispatch chooses AVX-512, then SHA-NI, then AVX2; arm64
+chooses ARM SHA-1, then NEON. `RECOVERKIT_OFFICE2007_AVX512=0` disables that wide path. `RECOVERKIT_OFFICE2007_PATH=scalar|avx2|avx512|sha-ni|neon|arm-sha1`
+selects a path for comparison; unsupported requests fall back safely. This selector is separate
+from `RECOVERKIT_PBKDF2_SHA1_PATH`. Diagnostics reject fallback timings and compare native
+spin digests with .NET across partial batches and UTF-16LE password lengths through 512 bytes.
+Office 2007 appears in CPU diagnostics, wide vector comparisons and finite hybrid benchmarks.
+Hybrid uses the same discrete-GPU defaults and measured CPU-only gate as WinZip AES and WPA.
+`Office2007HybridTests` covers planning, exact path checks, UTF-8 dictionary partitioning and
+resume checkpoints. Office 2010/2013 and newer encryption modes continue to use hashcat.
+
 PBKDF2-HMAC-SHA1 (native API 16, `native/pbkdf2_sha1.h`) shares the same 16-lane batch
 bound. It reuses scalar SHA-1 for HMAC setup and U1, then runs the fixed 20-byte HMAC loop
 on AVX-512 (16 lanes), AVX2 (8), NEON (8), interleaved ARM SHA-1 instructions (8), or scalar.
@@ -850,9 +868,9 @@ builds; its first comment gives build commands.
 
 ## Hybrid CPU + GPU
 
-File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for RAR 5
-(13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600), WPA (22000),
-and TrueCrypt Whirlpool (29331).
+File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for Office
+2007 (9400), RAR 5 (13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600),
+WPA (22000) and TrueCrypt Whirlpool (29331).
 `DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
 through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
 `$HEX[...]` output. Binary recovered passwords retain `$HEX[...]` when UTF-8 text would lose bytes.
@@ -992,8 +1010,8 @@ CPU slows the GPU. RAR 3 on an M1 Pro: the GPU ran 8,000-11,000/s next to the CP
 last hybrid attack on a mode measured the CPU below a quarter of hashcat's speed, later attacks on
 that mode run hashcat alone (logged; `HybridRunner.CpuAddsTooLittle`). PDF R6, where the CPU is
 five times faster than this GPU, keeps both.
-WinZip AES and WPA additionally require an explicit strategy choice or a measured hybrid profile
-when every active GPU is integrated. Their default is hybrid when any active GPU is discrete.
+Office 2007, WinZip AES and WPA additionally require an explicit strategy choice or a measured
+hybrid profile when every active GPU is integrated. Their default is hybrid when any active GPU is discrete.
 
 Integrated GPU next to a discrete one: it ties up a CPU thread (hashcat's host thread) and shares
 the processor's power budget. Once hashcat reports its speed, an integrated GPU slower than one CPU

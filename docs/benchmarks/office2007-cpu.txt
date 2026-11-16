@@ -1,0 +1,223 @@
+Office 2007 CPU engine: verification and measurements, 2026-11-16
+
+Scope
+
+Native API 17 adds Office 2007 Standard Encryption (9400), AES-128/256,
+SHA-1 and 50000 spins. Hashcat 8.0.0 accepts 128/256-bit keys, rejects 192,
+and reports only a pure kernel with password lengths 0-256 input bytes.
+Native passwords are UTF-16LE, up to 512 bytes after conversion.
+Changes are uncommitted. ZIP format code and other worktrees were not changed.
+
+References
+
+Hashcat 8.0.0 module_09400.c and OpenCL/m09400-pure.cl were checked against
+an existing local 8.0.0 source/binary distribution. The independent reference
+was msoffcrypto-tool/msoffcrypto/method/ecma376_standard.py:
+  https://github.com/hashcat/hashcat/blob/v8.0.0/src/modules/module_09400.c
+  https://github.com/hashcat/hashcat/blob/v8.0.0/OpenCL/m09400-pure.cl
+  https://github.com/nolze/msoffcrypto-tool/blob/master/msoffcrypto/method/ecma376_standard.py
+The independent encrypted DOCX fixture and its license/provenance are under
+  tests/RecoverKit.Tests/Fixtures/Office/
+Python hashlib and cryptography generate 128/256-bit known answers, including
+empty passwords, Unicode, supplementary characters and 256-byte input limits.
+
+Implementation and defaults
+
+Scalar: one candidate. AVX2: 8 lanes. AVX-512: 16 lanes. SHA-NI: 2 interleaved
+streams. NEON: 4 lanes. ARM SHA-1: 4 interleaved streams. Each accelerated
+path passes independent full-50000-spin answers before use, otherwise scalar
+handles its candidates. Unsupported explicit selectors also fall back safely.
+  RECOVERKIT_OFFICE2007_PATH=scalar|avx2|avx512|sha-ni|neon|arm-sha1
+  RECOVERKIT_OFFICE2007_AVX512=0
+Automatic x64 priority: AVX-512, SHA-NI, AVX2, scalar. Automatic arm64 priority:
+ARM SHA-1, NEON, scalar. The x64 ordering is not a measured Zen 5 preference;
+the Windows commands below compare SHA-NI and AVX-512 on the tester's CPU.
+
+Every native hit is re-derived and checked with .NET SHA-1 and AES. Office
+GPU hits and cached hits also pass managed confirmation. Password byte handling
+matches hashcat, including its F4 90..BF four-byte UTF-8 edge case; these emit
+raw surrogate units. Other invalid or overlong dictionary inputs are deferred
+to hashcat. HEX-looking literal passwords and raw bytes keep their exact cache
+and result representation. Rules remain hashcat --stdout's responsibility.
+Missing/old native libraries retain the managed Office reference worker.
+
+Hybrid defaults match 13600/22000: enabled beside an active discrete GPU;
+integrated-only GPUs require an explicit choice or a measured hybrid winner.
+CPU-only selection requires a measured execution winner over hashcat's CPU.
+No Ryzen/RTX throughput or hybrid speed gain is claimed from these Mac results.
+
+M1 Pro measurements
+
+Apple M1 Pro, 10 logical threads. macOS, .NET 10.0.401, native API 17.
+Each row contains three separate CLI processes, alternating scalar/NEON/ARM
+SHA-1 within each thread count. Rates are candidates/s; medians use the three
+rounded rates printed by the CLI. Seven-byte benchmark candidates, published
+hashcat AES-128 target, no matches. A one-second warmup is excluded.
+The CLI initializes the selected Office guard before starting worker threads;
+each accelerated output below reported exactly the requested path and passed.
+
+Command:
+  RECOVERKIT_HOME=/private/tmp/rk-office2007-cpu/home RECOVERKIT_OFFICE2007_PATH=PATH dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-native --mode 9400 --threads THREADS --seconds 4 --length 7
+
+Threads  Path         Round 1  Round 2  Round 3  Median  Range
+      1  scalar           229      273      226     229  226-273
+      1  NEON             432      431      440     432  431-440
+      1  ARM SHA-1        773      755      659     755  659-773
+      8  scalar          1150      437      742     742  437-1150
+      8  NEON            1214     1409     1537    1409  1214-1537
+      8  ARM SHA-1       1479     2003     2696    2003  1479-2696
+     10  scalar          1080     1589     1295    1295  1080-1589
+     10  NEON            2505     2527     2559    2527  2505-2559
+     10  ARM SHA-1       3741     4180     4367    4180  3741-4367
+
+This was a shared, active host. Other CPU/GPU work and background processes
+were present; none were stopped. The 8-thread spread especially reflects
+contention, not a stable thread-scaling curve. These are observed wall-clock
+rates under that load, not idle-machine capacity. ARM SHA-1 was the fastest
+path at all measured thread counts. No capacity estimate replaces a result.
+An earlier run before the decoder edge fix produced different multi-thread
+rates under changing host load; it is not mixed into these final-code medians.
+Raw final outputs and cpu-results.json are in /private/tmp/rk-office2007-cpu/.
+
+GPU context, measured separately in a private copy of existing hashcat 8.0.0:
+  hashcat -b -m 9400
+  Apple M1 Pro GPU, 16 compute units, Apple OpenCL 1.2, pure kernel
+  35182 H/s, 31.56 ms, Accel 2320, Loops 1021, Threads 64, Vec 1
+The automatic hashcat benchmark skipped its Metal alias. It reported that
+optimized mode 9400 was unavailable and fell back to pure. This is a standalone
+GPU rate, not a measured hybrid total. The Mac's integrated GPU remains GPU-only
+by default. Do not add these separate CPU and GPU rates to claim a hybrid win.
+
+Verification
+
+sh native/build.sh
+  Both win-x64 and osx-arm64 built, with no compiler warnings.
+dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  Final solution build: 0 warnings, 0 errors.
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false
+  2070 passed, 0 failed, 0 skipped in 1 m 21 s (final rerun).
+  The project's default filter excludes Category=Slow and Category=Stay.
+  Office hashcat tests are run separately below, explicitly selected.
+
+The test runner required local sockets outside the sandbox. Cold test compilation
+showed the existing CA1416 warning in CandidateExportTests.cs; no new warning
+remains. Native rebuild and .NET verification used the installed compiler/cache;
+no new runtime or dependency was installed.
+
+RECOVERKIT_TEST_HASHCAT pointed to a private copy of the existing hashcat 8.0.0.
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter FullyQualifiedName~Office2007HashcatTests
+  15 passed, 0 failed, 0 skipped in 1 m 32 s. Real GPU checks include both AES
+  strengths, Unicode, empty and 256-byte passwords, hashcat's raw F4 edge,
+  dictionary rules, found-by-CPU and found-by-GPU, resume and cache round trips.
+  Mac recovery jobs used Metal; the standalone -b context above used OpenCL.
+
+Scalar/NEON/ARM SHA-1 passed independent native checks and managed differential
+tests on this Mac, including random salts, variable lengths, output canaries,
+partial lanes, empty passwords, UTF-8 masks/dictionaries, long inputs and AES
+128/256. SHA-NI/AVX-512 are unavailable here. The independent DOCX was extracted
+and verified through both the managed reference and the native worker.
+
+The first default suite exposed a changed table row order and an API-16 test
+assertion; preserving the existing row order and updating the API assertion
+resolved all 16 failures. Review regressions first reproduced UTF-8 F4 rejection,
+HEX-looking password corruption and missing GPU confirmation; they now pass.
+Initial real-hashcat jobs recovered correctly but two device-winner assertions
+lost to the CPU because their entire dictionary fit in one CPU batch. The final
+GPU-winner fixtures put the early hit outside the first 65536-word CPU batch.
+This changes the fixture, not production scheduling.
+
+Windows tester commands (PowerShell, repository root)
+
+Use the newly built Windows rknative.dll beside the CLI. Use an existing
+hashcat 8.0.0 installation. Select a fresh private settings directory:
+
+  $env:RECOVERKIT_HOME = Join-Path $env:TEMP 'rk-office2007-cpu'
+  $env:RECOVERKIT_TEST_HASHCAT = 'C:\bench\hashcat\hashcat.exe'
+  dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~Office2007HashcatTests'
+
+Three fresh-process samples per native path, at one and sixteen threads:
+
+  foreach ($threads in 1,16) {
+    foreach ($round in 1..3) {
+      foreach ($path in 'scalar','avx2','avx512','sha-ni') {
+        $env:RECOVERKIT_OFFICE2007_PATH = $path
+        dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-native --mode 9400 --threads $threads --seconds 10 --length 7
+      }
+    }
+  }
+  Remove-Item Env:\RECOVERKIT_OFFICE2007_PATH
+  & $env:RECOVERKIT_TEST_HASHCAT -b -m 9400
+
+Check API 17, the exact executed path and guard passed for each accelerated
+sample. A requested unsupported/failed path prints its actual fallback; exclude
+that rate from the requested-path comparison. Compare medians and ranges for
+SHA-NI and AVX-512 on Zen 5. These instructions do not assume either wins.
+
+In the app, open Tools > Benchmark > Quick benchmark and record the
+Microsoft Word 2007 row with the built-in CPU engine and hybrid enabled.
+With the RTX selected, the row should use GPU + CPU and show the separate CPU
+and GPU samples. Repeat with hybrid disabled in Preferences > Performance.
+These quick samples are separate engine timings, not a complete-job speedup.
+Use Tools > Benchmark > Detailed performance test with CPU and hybrid sections
+and Thorough for repeated path comparisons and complete finite hybrid jobs:
+
+  dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-full --hashcat $env:RECOVERKIT_TEST_HASHCAT --sections system,cpu,gpu,hybrid --thorough --out (Join-Path $env:RECOVERKIT_HOME 'office2007.html')
+
+The report should include Office 2007 in CPU comparisons, the AVX2/AVX-512
+wide table and finite hybrid jobs. Save the report and native CLI outputs.
+The quick row uses an AES-128 example; also test the actual AES-256 document
+in GPU-only and hybrid recovery, including startup and CPU tail time.
+
+Limits
+
+Available Windows VM: Xeon E5-2620 v4, features AVX2 + AES-NI. Scalar and AVX2
+native correctness checks passed there against 17 independent hashlib answers,
+including partial groups and empty/long inputs. Unsupported SHA-NI/AVX-512
+requests safely selected scalar. No VM software or runtime was installed.
+SHA-NI and AVX-512 execution and Ryzen/RTX performance remain unmeasured because
+the available hardware does not provide those instructions. Their runtime
+known-answer guards and independent managed hit confirmation remain enabled.
+
+Changed files
+
+  CHANGELOG.md
+  README.md
+  docs/DEVELOPERS.md
+  docs/benchmarks/office2007-cpu.txt
+  native/office2007.h
+  native/office2007_crypto.h
+  native/office2007_lanes.h
+  native/office2007_selftest.h
+  native/rknative.c
+  src/RecoverKit.App/Ui/SpeedProbe.cs
+  src/RecoverKit.App/Views/PreferencesWindow.cs
+  src/RecoverKit.Cli/Program.cs
+  src/RecoverKit.Core/Diagnostics/CpuDiagnosticWorker.cs
+  src/RecoverKit.Core/Diagnostics/CpuDiagnostics.cs
+  src/RecoverKit.Core/Diagnostics/DetailedBenchmarkRunner.cs
+  src/RecoverKit.Core/Diagnostics/KernelVariants.cs
+  src/RecoverKit.Core/Diagnostics/PerformanceProfiles.cs
+  src/RecoverKit.Core/Diagnostics/ProfileSettings.cs
+  src/RecoverKit.Core/Diagnostics/ShortDiagnosticPlan.cs
+  src/RecoverKit.Core/Diagnostics/WideCpuChecks.cs
+  src/RecoverKit.Core/Diagnostics/WideVectorPaths.cs
+  src/RecoverKit.Core/Formats/OfficeExtractor.cs
+  src/RecoverKit.Core/Hashcat/HashcatRunner.cs
+  src/RecoverKit.Core/Native/HybridRunner.cs
+  src/RecoverKit.Core/Native/Kernels/Office2007Kernel.cs
+  src/RecoverKit.Core/Native/NativeKernels.cs
+  src/RecoverKit.Core/Native/NativeRunner.cs
+  src/RecoverKit.Core/Native/RkNative.cs
+  src/RecoverKit.Core/RecoverySession.cs
+  tests/RecoverKit.Tests/Fixtures/Office/LICENSE-msoffcrypto.txt
+  tests/RecoverKit.Tests/Fixtures/Office/README-msoffcrypto.txt
+  tests/RecoverKit.Tests/Fixtures/Office/ecma376standard_password.docx
+  tests/RecoverKit.Tests/Fixtures/Office/generate-standard-vectors.py
+  tests/RecoverKit.Tests/Fixtures/Office/standard-vectors.json
+  tests/RecoverKit.Tests/Office2007CpuTests.cs
+  tests/RecoverKit.Tests/Office2007HashcatTests.cs
+  tests/RecoverKit.Tests/Office2007HybridTests.cs
+  tests/RecoverKit.Tests/Office2007RegistrationTests.cs
+  tests/RecoverKit.Tests/WpaCpuTests.cs
