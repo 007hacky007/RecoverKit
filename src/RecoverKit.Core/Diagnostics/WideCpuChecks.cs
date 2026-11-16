@@ -10,6 +10,7 @@ internal static unsafe class WideCpuChecks
     internal static CpuDiagnostics.CorrectnessResult Check(int mode)
     {
         if (mode is 13600 or 22000) return CheckPbkdf2Sha1();
+        if (TrueCryptSha512Kernel.SupportsMode(mode)) return CheckPbkdf2Sha512();
         if (mode == 29331) return CheckWhirlpool();
         int cases = 0;
         int width = mode == 12500 ? RkNative.Rar3Lanes() : RkNative.Pbkdf2Sha256Lanes();
@@ -92,6 +93,34 @@ internal static unsafe class WideCpuChecks
                     if (!expected.AsSpan(expected.Length - 20).SequenceEqual(actual.AsSpan(i * 20, 20)))
                         return new(false, cases, $"PBKDF2 SHA-1 block {block} differs from the reference at batch position {i}.");
                 }
+            }
+        }
+        return new(true, cases);
+    }
+
+    private static CpuDiagnostics.CorrectnessResult CheckPbkdf2Sha512()
+    {
+        const int stride = 129;
+        int n = Math.Max(9, RkNative.Pbkdf2Sha512Lanes() + 3), cases = 0;
+        int[] sizes = [0, 1, 7, 63, 64, 111, 127, 128, 129];
+        int[] lengths = Enumerable.Range(0, n).Select(i => sizes[i % sizes.Length]).ToArray();
+        byte[] passwords = new byte[n * stride];
+        new Random(29321).NextBytes(passwords);
+        foreach (int saltLength in new[] { 0, 64, 108, 112, 128 })
+        foreach (int dkLength in new[] { 64, 128, 192 })
+        {
+            byte[] salt = Enumerable.Range(0, saltLength).Select(i => (byte)(i * 7)).ToArray();
+            byte[] actual = new byte[n * dkLength];
+            fixed (byte* p = passwords, s = salt, o = actual)
+            fixed (int* lens = lengths)
+                if (RkNative.Pbkdf2Sha512(p, stride, lens, n, s, salt.Length, 17, o, dkLength) != n)
+                    return new(false, cases, "Native PBKDF2 SHA-512 rejected the lane check.");
+            for (int i = 0; i < n; i++)
+            {
+                var expected = Rfc2898DeriveBytes.Pbkdf2(passwords.AsSpan(i * stride, lengths[i]), salt, 17, HashAlgorithmName.SHA512, dkLength);
+                cases++;
+                if (!expected.AsSpan().SequenceEqual(actual.AsSpan(i * dkLength, dkLength)))
+                    return new(false, cases, $"PBKDF2 SHA-512 differs at batch position {i}, password length {lengths[i]}, salt length {saltLength}, output length {dkLength}.");
             }
         }
         return new(true, cases);

@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -47,7 +48,7 @@ public static class CpuDiagnosticWorker
                     if (seconds is -1 or 1)
                     {
                         var kernel = NativeKernels.TryCreate(Math.Abs(mode), NativeKernels.BenchmarkHashes[mode])!;
-                        var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", length))])!;
+                        var space = MaskSpace.FromHashcatArgs(NativeKernels.BenchmarkMaskArguments(mode, length))!;
                         using var sample = new CancellationTokenSource(TimeSpan.FromMilliseconds(seconds == 1 ? 1500 : 650));
                         var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = NativeRunner.ThreadPriorityFor(priority), ProgressInterval = TimeSpan.FromMilliseconds(100) };
                         long warmupDone = 0;
@@ -75,7 +76,7 @@ public static class CpuDiagnosticWorker
 
     internal static WorkerResult EnforcePath(WorkerResult result, string variant)
     {
-        if (variant is not ("scalar" or "avx2" or "avx512" or "neon" or "arm-sha1")) return result;
+        if (variant is not ("scalar" or "avx2" or "avx512" or "neon" or "arm-sha1" or "arm-sha512")) return result;
         string actual = result.ActualPath.Replace("native ", "", StringComparison.OrdinalIgnoreCase).Replace("-", "").Replace(" ", "").ToLowerInvariant();
         if (actual == variant.Replace("-", "") && (variant != "avx512" || result.SelfTestState is not ("not run" or "failed" or "switched off"))) return result;
         string reason = result.SelfTestState switch
@@ -112,6 +113,8 @@ public static class CpuDiagnosticWorker
             var start = SelfStartInfo();
             if (Math.Abs(mode) is 13600 or 22000 && variant != "default")
                 start.Environment["RECOVERKIT_PBKDF2_SHA1_PATH"] = variant;
+            if (TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode)) && variant is not ("default" or "managed"))
+                start.Environment["RECOVERKIT_PBKDF2_SHA512_PATH"] = variant;
             foreach (var arg in new[] { Command, mode.ToString(CultureInfo.InvariantCulture), variant, threads.ToString(CultureInfo.InvariantCulture), priority.ToString(),
                 repeat.ToString(CultureInfo.InvariantCulture), length.ToString(CultureInfo.InvariantCulture), seconds.ToString(CultureInfo.InvariantCulture), output }) start.ArgumentList.Add(arg);
             return await RunProcessAsync(start, output, TimeSpan.FromSeconds(seconds + 30), ct);

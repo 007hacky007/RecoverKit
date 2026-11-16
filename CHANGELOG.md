@@ -5,6 +5,12 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- Built-in CPU recovery for TrueCrypt and VeraCrypt PBKDF2-SHA512 headers, including cipher
+  cascades, hidden headers, masks and rule dictionaries. It runs next to hashcat by default on
+  discrete GPUs; integrated-only systems retain hashcat unless hybrid is explicitly selected or
+  measured faster. Keyfiles and custom PIM jobs stay on hashcat.
+
 ### Fixed
 - Benchmark rows no longer repeat the whole setup: each row lists its hashcat arguments and only
   the settings that differ from the Setup section.

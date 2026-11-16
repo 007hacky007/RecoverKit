@@ -1,5 +1,6 @@
 using System.Runtime.Intrinsics;
 using RecoverKit.Core.Native;
+using RecoverKit.Core.Native.Kernels;
 
 namespace RecoverKit.Core.Diagnostics;
 
@@ -49,6 +50,28 @@ public static class KernelVariants
         new("arm-sha1", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.ArmSha1), () => new Sha1Selection(RkNative.Feature.ArmSha1 | RkNative.Feature.Neon)),
     ];
 
+    private static Registration[] Pbkdf2Sha512Variants =>
+    [
+        new("default", () => true, () => null),
+        new("managed", () => true, SelectManaged),
+        new("scalar", () => RkNative.Available, () => new Sha512Selection(0)),
+        new("avx2", () => WideSupported("avx2", RkNative.Available, RkNative.Features), () => new Sha512Selection(RkNative.Feature.Avx2)),
+        new("avx512", () => WideSupported("avx512", RkNative.Available, RkNative.Features), () => new Sha512Selection(RkNative.Feature.Avx512 | RkNative.Feature.Avx2)),
+        new("neon", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.Neon), () => new Sha512Selection(RkNative.Feature.Neon)),
+        new("arm-sha512", () => RkNative.Available && RkNative.Features.HasFlag(RkNative.Feature.ArmSha512), () => new Sha512Selection(RkNative.Feature.ArmSha512 | RkNative.Feature.Neon)),
+    ];
+
+    private sealed class Sha512Selection : IDisposable
+    {
+        private readonly RkNative.Feature _saved = RkNative.Features;
+        public Sha512Selection(RkNative.Feature selected)
+        {
+            const RkNative.Feature paths = RkNative.Feature.Avx2 | RkNative.Feature.Avx512 | RkNative.Feature.Neon | RkNative.Feature.ArmSha512;
+            RkNative.LimitFeatures(_saved & (~paths | selected));
+        }
+        public void Dispose() => RkNative.LimitFeatures(_saved);
+    }
+
     private sealed class Sha1Selection : IDisposable
     {
         private readonly RkNative.Feature _saved = RkNative.Features;
@@ -86,6 +109,8 @@ public static class KernelVariants
         mode = Math.Abs(mode);
         if (mode is 17200 or 17210)
             return CpuDiagnostics.Variants.Select(v => new Variant(v.Name, v.Supported)).ToArray();
+        if (TrueCryptSha512Kernel.SupportsMode(mode))
+            return Pbkdf2Sha512Variants.Select(v => new Variant(v.Name, v.Supported())).ToArray();
         if (Registry.TryGetValue(mode, out var registrations))
             return registrations.Select(v => new Variant(v.Name, v.Supported())).ToArray();
         return [new("default", NativeKernels.Supports(mode))];
@@ -98,6 +123,7 @@ public static class KernelVariants
         mode = Math.Abs(mode);
         if (!Supported(mode, variant)) return null;
         if (mode is 17200 or 17210) return CpuDiagnostics.UseZipVariant(variant);
+        if (TrueCryptSha512Kernel.SupportsMode(mode)) return Pbkdf2Sha512Variants.First(v => v.Name == variant).Select();
         return Registry.TryGetValue(mode, out var registrations) ? registrations.First(v => v.Name == variant).Select() : null;
     }
 

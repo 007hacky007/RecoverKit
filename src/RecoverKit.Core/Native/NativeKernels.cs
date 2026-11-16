@@ -10,6 +10,7 @@ public static class NativeKernels
     /// <summary>Creates the kernel for a hashcat mode and hash line, or null if the format is not built in.</summary>
     public static NativeKernel? TryCreate(int mode, string hashLine, ZipPartialTarget? partial = null) => mode switch
     {
+        _ when TrueCryptSha512Kernel.SupportsMode(mode) => TrueCryptSha512Kernel.TryParse(mode, hashLine),
         29331 when RkNative.Available => TrueCryptWhirlpoolKernel.TryParse(hashLine),
         17200 or 17210 => ZipCryptoKernel.TryParse(hashLine, partial),
         // The native library's vector paths (AVX2 / NEON) run these regardless of .NET's vector support.
@@ -48,8 +49,10 @@ public static class NativeKernels
     public static string CpuPath(int mode, bool actualOnly = false)
     {
         if (Math.Abs(mode) is 17200 or 17210) return ZipCryptoPath;
+        if (!RkNative.Available && TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode))) return "managed scalar";
         if (!RkNative.Available) return System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated ? "managed AVX2" : "managed scalar";
-        int observed = Math.Abs(mode) switch
+        bool sha512 = TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode));
+        int observed = sha512 ? RkNative.Pbkdf2Sha512ExecutedPaths() : Math.Abs(mode) switch
         {
             12500 => RkNative.Rar3ExecutedPaths(),
             13000 => RkNative.Pbkdf2Sha256ExecutedPaths(),
@@ -59,15 +62,21 @@ public static class NativeKernels
         };
         if (observed != 0)
         {
-            if (Math.Abs(mode) is 13600 or 22000 && observed == 1) return "native scalar";
+            if ((sha512 || Math.Abs(mode) is 13600 or 22000) && observed == 1) return "native scalar";
             if (Math.Abs(mode) == 29331)
                 return observed == 4 ? "native AVX-512" : observed == 1 ? "native scalar" : "native AVX-512 + native scalar";
-            var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256"), (32, "native ARM SHA-1") }
+            var names = new[] { (1, "scalar fallback"), (2, "native AVX2"), (4, "native AVX-512"), (8, "native NEON"), (16, "native ARM SHA-256"), (32, "native ARM SHA-1"), (64, "native ARM SHA-512") }
                 .Where(p => (observed & p.Item1) != 0).Select(p => p.Item2);
             return string.Join(" + ", names);
         }
-        if (actualOnly && Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331) return "not run";
+        if (actualOnly && (sha512 || Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331)) return "not run";
         var f = RkNative.Features;
+        if (sha512)
+            return RkNative.Pbkdf2Sha512Path() switch
+            {
+                2 => "native AVX2", 4 => "native AVX-512", 8 => "native NEON",
+                64 => "native ARM SHA-512", _ => "native scalar",
+            };
         if (Math.Abs(mode) == 29331)
             return RkNative.WhirlpoolLanes() == 8 ? "native AVX-512" : "native scalar";
         if (Math.Abs(mode) == 12500)
@@ -91,7 +100,7 @@ public static class NativeKernels
     }
 
     public static string WideSelfTestState(int mode) => Math.Abs(mode) is 17200 or 17210 ? "no native guard; diagnostic check only"
-        : !RkNative.Available ? "not run" : (Math.Abs(mode) switch
+        : !RkNative.Available ? "not run" : (TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode)) ? RkNative.Pbkdf2Sha512SelfTestState() : Math.Abs(mode) switch
         {
             12500 => RkNative.Rar3SelfTestState(),
             13000 => RkNative.Pbkdf2Sha256SelfTestState(),
@@ -124,6 +133,18 @@ public static class NativeKernels
         [17200] = ZipCryptoSample.Extract(ZipCryptoSample.Archive(
             [new("synthetic.dat", ZipCryptoSample.Text(1024, new Random(17200)), true)], "hashcat"u8, new Random(17200))).HashLines,
         [17210] = "$pkzip2$1*1*2*0*29*1d*972eca9f*0*0*0*29*5220*5220*b3118b537bee6e1d72a8f76e6050fed3dca090b2ffbcade89854b9278e640b3abe76b02ac2a710c944*$/pkzip2$",
+        [6221] = TrueCryptSha512Kernel.BenchmarkHash(6221),
+        [6222] = TrueCryptSha512Kernel.BenchmarkHash(6222),
+        [6223] = TrueCryptSha512Kernel.BenchmarkHash(6223),
+        [13721] = TrueCryptSha512Kernel.BenchmarkHash(13721),
+        [13722] = TrueCryptSha512Kernel.BenchmarkHash(13722),
+        [13723] = TrueCryptSha512Kernel.BenchmarkHash(13723),
+        [29321] = TrueCryptSha512Kernel.BenchmarkHash(29321),
+        [29322] = TrueCryptSha512Kernel.BenchmarkHash(29322),
+        [29323] = TrueCryptSha512Kernel.BenchmarkHash(29323),
+        [29421] = TrueCryptSha512Kernel.BenchmarkHash(29421),
+        [29422] = TrueCryptSha512Kernel.BenchmarkHash(29422),
+        [29423] = TrueCryptSha512Kernel.BenchmarkHash(29423),
         [29331] = "$truecrypt$cf53d4153414b63285e701e52c2d99e148c6ccc4508132f82cb41862d0a0ac9ea16274285ac261c339c1508eec9fea54c33e382458662913678f2a88a84959a6$78e238973985ec670d50252677430587ee28b72bfa5edfb2f79c40b734ba8a54a3662642a6ab067e75f41154688ad4adb5d6decd891462dd537188195a51e06fa5baf22b69d0f472cfeeae77ab9a90091731863af1d8b5b380da179fa7d5227ef031732b1ae06e0fe34c0b28b7a64eac34e5a08e09d7001394b3afc804ac69bf819cdd2d383fe96a721f7c683628da8e529d84bdaa68d702573d8f7ef26f75d1bd5c91efa88cb33b1e9c006b87981c55ed3b8063ab7068f8e99b128bc56ea3e883efa55d6f340b2681e50405d91f5f6d76cdbeac404944164d329d3ee01311de0bc6547310f126b5a4c0e9fb74825f91faefa60b7ac828819d4544c1872ff5041e61d5cf093553f427358b2181046376d7b876e1bccf0774d5d251b7c922c214bb5c70c715165d028e1dca73e7adeca3396d77f6e597a10dd4c58f37fdbbdc1d04cd8890ba4c5025776a88a349bb925add13193becf1ca10fe32536db0c0b06a1ef799fb692e304b3716ca5a8a80859c4012ca3e06701b46b5a32f4d10e285a0cdaf6c24e0d98139e7f306e52503c9b503aa28f1fbbb236284907068074fcb3e267e3c4aab2bd3b79b24a7a08106bb55850fa2bb8e2f6d9919a6743cb822c164",
         [9700] = "$oldoffice$0*55045061647456688860411218030058*e7e24d163fbd743992d4b8892bf3f2f7*493410dbc832557d3fe1870ace8397e2",
         [9800] = "$oldoffice$3*83328705222323020515404251156288*2855956a165ff6511bc7f4cd77b9e101*941861655e73a09c40f7b1e9dfd0c256ed285acd",
@@ -200,6 +221,15 @@ public static class NativeKernels
         return res;
     }
 
+    internal static string[] BenchmarkMaskArguments(int mode, int length)
+    {
+        // A VeraCrypt prefix with 69 suffixes can take tens of seconds before publishing progress.
+        // Keep its last position small while retaining a large keyspace and full SIMD prefix groups.
+        if (mode is >= 29421 and <= 29423 or >= 13721 and <= 13723)
+            return ["-a", "3", "-1", "?u?d?s", "-2", "AB", string.Concat(Enumerable.Repeat("?1", length - 1)) + "?2"];
+        return ["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", length))];
+    }
+
     /// <summary>
     /// Measures a kernel's speed (candidates/s) on all threads with a mask that does not contain the
     /// password, after a short warm-up.
@@ -211,7 +241,7 @@ public static class NativeKernels
         // matches "hashcat"/"zq7" and is far too large to finish. Length matters for RAR3 (cost ~ 2L+11).
         // RAR 3's cost grows with the password length; 4 characters is the usual benchmark sample for it.
         if (length <= 0) length = Math.Abs(mode) == 12500 ? 4 : Math.Abs(mode) == 22000 ? 8 : 7;
-        var space = MaskSpace.FromHashcatArgs(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", Math.Clamp(length, 3, 16)))])!;
+        var space = MaskSpace.FromHashcatArgs(BenchmarkMaskArguments(mode, Math.Clamp(length, 3, 16)))!;
         var started = Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var engine = new NativeEngine(kernel, space) { Threads = threads, Priority = priority, ProgressInterval = TimeSpan.FromSeconds(0.5) };

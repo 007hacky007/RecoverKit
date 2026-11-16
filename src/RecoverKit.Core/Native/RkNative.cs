@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 16;
+    private const int RequiredVersion = 17;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -137,6 +137,26 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha1_executed_paths")]
     public static partial int Pbkdf2Sha1ExecutedPaths();
+
+    /// <summary>PBKDF2-HMAC-SHA512; returns n on success, -1 for invalid arguments.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha512")]
+    public static partial int Pbkdf2Sha512(byte* pws, int stride, int* lens, int n, byte* salt, int saltLen, uint iterations, byte* dk, int dkLen);
+
+    /// <summary>Candidates per group: 8 AVX-512, 4 AVX2, 2 NEON or ARM SHA-512, 1 scalar.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha512_lanes")]
+    public static partial int Pbkdf2Sha512Lanes();
+
+    /// <summary>Selected path bit after its guard, including scalar fallback.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha512_path")]
+    public static partial int Pbkdf2Sha512Path();
+
+    /// <summary>Selected accelerated path guard: 0 not run, 1 passed, 2 failed.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha512_selftest_state")]
+    public static partial int Pbkdf2Sha512SelfTestState();
+
+    /// <summary>Executed path bits: scalar 1, AVX2 2, AVX-512 4, NEON 8, ARM SHA-512 64.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_pbkdf2_sha512_executed_paths")]
+    public static partial int Pbkdf2Sha512ExecutedPaths();
 
     [LibraryImport(Lib, EntryPoint = "rk_rar5_search")]
     public static partial int Rar5Search(byte* salt16, int lg2, byte* check8, byte* pws, int len, int n, int* hits, int maxHits);

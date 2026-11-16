@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -160,7 +161,7 @@ public static class PerformanceProfiles
     }
 
     public static bool ShouldCalibrate(Settings s, int mode, double candidates, double speed) => s.AutomaticPerformanceCalibration
-        && mode is not (13600 or 22000)
+        && mode is not (13600 or 22000) && !TrueCryptSha512Kernel.SupportsMode(mode)
         && NativeKernels.Supports(mode) && candidates > 0 && speed > 0 && candidates / speed >= 12
         && s.Strategy == DeviceStrategy.GpuOnly && !s.PerformanceStrategyExplicit && !s.PerformanceThreadsExplicit && s.MaxCpuThreads == 0
         && s.UseNativeCpuEngine && string.IsNullOrWhiteSpace(s.ExtraArguments);

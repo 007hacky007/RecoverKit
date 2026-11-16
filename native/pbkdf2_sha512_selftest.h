@@ -1,0 +1,43 @@
+/* Fixed Python hashlib PBKDF2-HMAC-SHA512 answers, including HMAC key boundaries. */
+static const int S5_TEST_LENGTHS[8] = { 0, 1, 7, 64, 111, 127, 128, 129 };
+static const uint64_t S5_TEST_ANSWERS[2][8][8] = {
+    {
+        { UINT64_C(0xd51e03b5897ad5eb), UINT64_C(0xacfcdbfa4cd158be), UINT64_C(0xb83221f0c8fdb049), UINT64_C(0xede9e810951dd5c8), UINT64_C(0x7b52776b06f18903), UINT64_C(0x9cfa024dd4a396ec), UINT64_C(0x03f29363de126537), UINT64_C(0xfa0bc576cc70dcbb) },
+        { UINT64_C(0xab1f0ac51f013a5e), UINT64_C(0xba15a523108bec5d), UINT64_C(0xe8e7eaf7628f098b), UINT64_C(0x813186f543074620), UINT64_C(0x09218e08bc703b12), UINT64_C(0xfcb8549f8cacf54a), UINT64_C(0x41129588cf10c8a2), UINT64_C(0x85bd1759edf34204) },
+        { UINT64_C(0x32b557e7405c1684), UINT64_C(0x51ba47542c0bee50), UINT64_C(0x3d51ea14567ec14c), UINT64_C(0x467391cef08a140d), UINT64_C(0x6021147c20f4e4ad), UINT64_C(0xaafdfa186db01d6b), UINT64_C(0xcd75f3e74509b133), UINT64_C(0x4839b2fcb97eea1f) },
+        { UINT64_C(0xd0c8ee2dff38f8b0), UINT64_C(0x7f1069f579c2728c), UINT64_C(0x189737918974e5d0), UINT64_C(0xaf29871736395a7c), UINT64_C(0x589c8c0f589ca217), UINT64_C(0x48605c3b5fbe404f), UINT64_C(0x27dee665adfe7c6b), UINT64_C(0x9341bb93cf07105d) },
+        { UINT64_C(0x4c07988887b98d59), UINT64_C(0xf157ce306121a203), UINT64_C(0x446f9ad8d83379ab), UINT64_C(0x2547045d6bdb3bf9), UINT64_C(0x3f9e3d3e43f39802), UINT64_C(0xc88e2c5043142c5d), UINT64_C(0xc5be8d176fe67276), UINT64_C(0x087c41de02d52429) },
+        { UINT64_C(0x1d8a562134737020), UINT64_C(0xcac1d1407e557f89), UINT64_C(0x32ece30d86307af2), UINT64_C(0xc33804f06225af00), UINT64_C(0xc56d27076cb09d18), UINT64_C(0xdac174adc7b0675e), UINT64_C(0xe750791e3315657c), UINT64_C(0xc4369d07e4d1870c) },
+        { UINT64_C(0xe15c2996b982ee00), UINT64_C(0x499331925498f3ff), UINT64_C(0xafc6c9938fc62ced), UINT64_C(0x7df749bee9c792d6), UINT64_C(0xa6a61941e3fd4480), UINT64_C(0xbb4c4512e7c14e77), UINT64_C(0xb5c0b1218d0f1075), UINT64_C(0xfededbad2d67e579) },
+        { UINT64_C(0xf2e343ef53cabd57), UINT64_C(0x3ec099e2f149d0fb), UINT64_C(0x060795dffdf0a307), UINT64_C(0x675c61014a6a19ea), UINT64_C(0x59cb6869f496803e), UINT64_C(0xfdb3070089d938b1), UINT64_C(0x8c9fbbb033736140), UINT64_C(0xdbb4e7aa91b8d6d6) },
+    },
+    {
+        { UINT64_C(0xfb584c7c351b201b), UINT64_C(0x7a8acc5d99383337), UINT64_C(0x6bbbfd4cb973432d), UINT64_C(0x1dd0e8b9c3a544af), UINT64_C(0x3c5d48050f880123), UINT64_C(0x2cb9aa4198e66556), UINT64_C(0x1f0207ed707cc5b9), UINT64_C(0x574523031ba6c425) },
+        { UINT64_C(0x5b1eec5115586d82), UINT64_C(0x1580c4a73107ceb5), UINT64_C(0x833134d5faaed4eb), UINT64_C(0x36d07de6d1cd0f6e), UINT64_C(0x6e826ab24e147fc7), UINT64_C(0x0183862597a85884), UINT64_C(0x0b01d194c8429b6b), UINT64_C(0x619a504f3d9f0111) },
+        { UINT64_C(0xa1e654838eccb927), UINT64_C(0x77a1b338405a7950), UINT64_C(0x82e792f13b9c11e2), UINT64_C(0x68c6f233e973319d), UINT64_C(0x467be4f2f325cd89), UINT64_C(0xc71bd985e5e6ea9b), UINT64_C(0x0e3796d907c00c9d), UINT64_C(0x7e67eecb64202c00) },
+        { UINT64_C(0x8baf63a07c1d4245), UINT64_C(0x624125c3425540c9), UINT64_C(0x17ae107344a7e87e), UINT64_C(0x827783deaa13e964), UINT64_C(0x2127f9024f5edc4d), UINT64_C(0x6154eb9fb6a5deb8), UINT64_C(0x0e06f3bed068ffc1), UINT64_C(0x3368bf1b41db3786) },
+        { UINT64_C(0xb349e7b804e52bb2), UINT64_C(0xc4bd8a7f0ab295cd), UINT64_C(0xd38b8eb52fe81348), UINT64_C(0x1ac3df9eb28447bc), UINT64_C(0x6d7ceb2e70079ad8), UINT64_C(0x62ba9e63ddab14cc), UINT64_C(0xefce19317924a64c), UINT64_C(0xfe11072f4e7239a9) },
+        { UINT64_C(0x8c710392c0e84f0d), UINT64_C(0xe3243db2dd7fd781), UINT64_C(0x5cdebbe482c68f7b), UINT64_C(0x594d89b660b4a60d), UINT64_C(0x35eb7cfe18fd5730), UINT64_C(0x1a3224f1a59f0f2e), UINT64_C(0x4781342050d51470), UINT64_C(0x38597eb1742a42be) },
+        { UINT64_C(0x6097d188069184ff), UINT64_C(0x45d49659b24b7c78), UINT64_C(0x240add4a45ac04da), UINT64_C(0x7383134a6291aaef), UINT64_C(0x2a574a4527c9f791), UINT64_C(0x4c655711ca5f4b26), UINT64_C(0x1a2a93450088fee6), UINT64_C(0x9c0122cd7be240be) },
+        { UINT64_C(0x794d5a16313b707f), UINT64_C(0x94982f1e019ae523), UINT64_C(0xa76f5e9ebc208600), UINT64_C(0x8d727cfa39a7ff15), UINT64_C(0x9d2af8f5c5fc6409), UINT64_C(0x7b59cfe99a37a95e), UINT64_C(0x37dca80a18a0ae8f), UINT64_C(0x91ee17e3ebc6097e) },
+    },
+};
+
+static int pbkdf2_sha512_selftest(pbkdf2_sha512_iter_fn iterate, int lanes)
+{
+    uint8_t pw[129], salt[64];
+    uint64_t ist[8][8], ost[8][8], u[8][8];
+    for (int j = 0; j < 64; j++) salt[j] = (uint8_t)j;
+    for (int b = 0; b < 2; b++)
+    {
+        for (int l = 0; l < 8; l++)
+        {
+            for (int q = 0; q < S5_TEST_LENGTHS[l]; q++) pw[q] = (uint8_t)(0x21 + (l * 17 + q * 7) % 94);
+            hmac_sha512_states(pw, (size_t)S5_TEST_LENGTHS[l], ist[l], ost[l]);
+            pbkdf2_sha512_u1(ist[l], ost[l], salt, 64, b ? 3 : 1, u[l]);
+        }
+        for (int l = 0; l < 8; l += lanes) iterate(ist + l, ost + l, u + l, 7);
+        if (memcmp(u, S5_TEST_ANSWERS[b], sizeof u) != 0) return 0;
+    }
+    return 1;
+}

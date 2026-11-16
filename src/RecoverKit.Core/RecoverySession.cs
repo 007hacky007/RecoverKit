@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -136,9 +137,10 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         {
             foreach (var mode in target.Modes)
             {
-                bool dictionaryBytes = mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 && target.VolumeCredentials is null
+                bool dictionaryBytes = (mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && target.VolumeCredentials is null
                     && steps.Any(step => step.Kind == AttackKind.Dictionary);
-                var cached = target.ConfirmPassword is { } confirm
+                var cached = TrueCryptSha512Kernel.ConfirmHits(mode, target.HashLines, target.VolumeCredentials,
+                    settings.ExtraArguments, target.ConfirmPassword) is { } confirm
                     ? await ConfirmedCacheAsync(mode, hashFile, potfile, target, confirm, dictionaryBytes)
                     : dictionaryBytes ? (await tool.ShowRawAsync(mode, hashFile, potfile, preserveBom: true))
                         .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList()
@@ -192,8 +194,10 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         if (rejected > 0)
         {
             DebugLog.Info($"Password cache: {rejected} cached password(s) rejected by the confirmation check");
-            Log?.Invoke(LogKind.Warning, $"Ignored {rejected} cached password(s) for this archive: they open the attacked file " +
-                                         "but not the archive's other encrypted files (false positives).");
+            Log?.Invoke(LogKind.Warning, TrueCryptSha512Kernel.SupportsMode(mode)
+                ? $"Ignored {rejected} cached password(s) that failed the volume header check."
+                : $"Ignored {rejected} cached password(s) for this archive: they open the attacked file " +
+                  "but not the archive's other encrypted files (false positives).");
         }
         return confirmed;
     }
@@ -550,7 +554,8 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
                     PasswordCachePath = retainNetworks ? networkPotfile : potfile,
                     SessionPasswordCache = retainNetworks,
                     Guard = HashcatRunner.GuardFor(runSettings, Devices),
-                    ConfirmPassword = pmkTable is null ? target.ConfirmPassword : null,
+                    ConfirmPassword = pmkTable is null ? TrueCryptSha512Kernel.ConfirmHits(mode, target.HashLines,
+                        target.VolumeCredentials, runSettings.ExtraArguments, target.ConfirmPassword) : null,
                     RequiresPartialZipKernel = target.ZipPartial is not null,
                     ZipCheckBytes = checkBytes && nativePlan is null && !cpuDictionary ? target.ZipCheckBytes : null,
                 };

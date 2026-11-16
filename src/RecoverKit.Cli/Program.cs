@@ -90,7 +90,8 @@ try
             settings.ExtraArguments = "";
             int seconds = int.TryParse(Opt(argv, "--seconds"), out var se) ? se : 6;
             int length = int.TryParse(Opt(argv, "--length"), out var le) ? le : 0;
-            var modes = Opt(argv, "--mode") is { } m ? [int.Parse(m)] : RecoverKit.Core.Native.NativeKernels.BenchmarkHashes.Keys.ToArray();
+            var modes = Opt(argv, "--mode") is { } m ? [int.Parse(m)] : RecoverKit.Core.Native.NativeKernels.BenchmarkHashes.Keys
+                .Where(mode => mode >= 29300 || !RecoverKit.Core.Native.Kernels.TrueCryptSha512Kernel.SupportsMode(mode)).ToArray();
             // --managed: skip the native library; --force-vector: run the managed vector kernels even without hardware Vector256.
             if (argv.Contains("--managed")) RecoverKit.Core.Native.RkNative.Disabled = true;
             if (argv.Contains("--force-vector")) RecoverKit.Core.Native.NativeKernels.ForceVectorKernels = true;
@@ -106,9 +107,15 @@ try
             foreach (var mode in modes)
             {
                 RecoverKit.Core.Native.NativeKernels.ResetCpuPath(mode);
-                void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length, RecoverKit.Core.Native.NativeRunner.ThreadPriorityFor(settings.Priority)):N0} p/s" +
+                void Measure()
+                {
+                    string rate = RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length,
+                        RecoverKit.Core.Native.NativeRunner.ThreadPriorityFor(settings.Priority))
+                        .ToString(Math.Abs(mode) is >= 29421 and <= 29423 or >= 13721 and <= 13723 ? "N2" : "N0");
+                    Console.WriteLine($"mode {mode,6}: {rate} p/s" +
                     (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" :
-                        Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331 ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
+                        (Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331 || RecoverKit.Core.Native.Kernels.TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode))) ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
+                }
                 Measure();
                 // Include the experimental native row on CPUs whose default stays managed.
                 if (Math.Abs(mode) is 17200 or 17210 && RecoverKit.Core.Native.RkNative.Available &&

@@ -266,10 +266,13 @@ quickest guesses.
   its built-in default password "VelvetSweatshop", which other programs then ask for. RecoverKit
   recognizes this (and empty passwords) instantly and can save a normal copy of .xlsx files; for
   old .xls files it shows the password.
-- **CPU and GPU together:** brute-force and mask attacks on ZIP, Office 97-2003, PDF, RAR 3 and
-  TrueCrypt (Whirlpool) use all your GPUs and the processor at the same time, each on its own part
-  of the passwords. Dictionary attacks (with or without rules) on RAR 5, RAR 3, current PDF files and
-  TrueCrypt (Whirlpool) share the word list the same way. Preferences > Performance can turn this off.
+- **CPU and GPU together:** brute-force and mask attacks on ZIP, Office 97-2003, PDF, RAR 3,
+  TrueCrypt Whirlpool and TrueCrypt/VeraCrypt SHA-512 can share passwords between hashcat and the
+  built-in CPU engine. Dictionary attacks with rules also share work on RAR 5, RAR 3, current PDF,
+  WinZip AES, WPA and these volume formats. SHA-512 volumes use hybrid by default with a discrete
+  GPU; integrated-only systems keep hashcat unless hybrid is explicitly chosen or measured faster.
+  SHA-512 supports single ciphers and cascades, including hidden headers. Keyfiles and custom PIM
+  jobs stay on hashcat. Preferences > Performance can turn hybrid off.
 - Not supported yet: LibreOffice files using the newest Argon2 encryption.
 
 ## For developers
