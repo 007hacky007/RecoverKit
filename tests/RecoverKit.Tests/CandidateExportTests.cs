@@ -46,6 +46,57 @@ public sealed class CandidateExportTests
         finally { Directory.Delete(dir, true); }
     }
 
+    [Theory]
+    [InlineData(0, "printf 'b2\\na1\\n'", false)]
+    [InlineData(0, "", false)]
+    [InlineData(255, "echo 'ATTENTION! No OpenCL, HIP or CUDA compatible platform found.' >&2", true)]
+    [InlineData(2, "echo 'bad dictionary' >&2", false)]
+    [InlineData(255, "printf 'partial\\n'; echo 'ATTENTION! No OpenCL, HIP or CUDA compatible platform found.' >&2", false)]
+    [InlineData(255, "printf '\\n'; echo 'ATTENTION! No OpenCL, HIP or CUDA compatible platform found.' >&2", false)]
+    public async Task CombinatorFallsBackOnlyForNoBackendBeforeAnyOutput(int exitCode, string body, bool fallback)
+    {
+        // HashcatTool uses UseShellExecute=false, so Windows cannot run a .cmd stand-in directly.
+        if (OperatingSystem.IsWindows()) return;
+        string dir = Directory.CreateTempSubdirectory("rk-export-combinator").FullName;
+        try
+        {
+            var tool = FakeHashcat(dir, "echo run >> runs.txt\n" + body + $"\nexit {exitCode}");
+            File.WriteAllText(Path.Combine(dir, "left.txt"), "a\nb\n");
+            File.WriteAllText(Path.Combine(dir, "right.txt"), "1\n2\n");
+            var step = ExportCandidatesTests.Step("-a", "1", "left.txt", "right.txt");
+            string path = Path.Combine(dir, "out.txt");
+            var progress = new Counts();
+            if (exitCode != 0 && !fallback)
+            {
+                var error = await Assert.ThrowsAsync<IOException>(() => CandidateExport.WriteDictionaryAsync([step], tool, path,
+                    CandidateExport.EncodingFor("UTF8"), progress, default));
+                Assert.Equal(CandidateExport.FailureMessage(exitCode, exitCode == 2 ? "bad dictionary" :
+                    "ATTENTION! No OpenCL, HIP or CUDA compatible platform found."), error.Message);
+                Assert.Equal(exitCode == 2 ? [] : body.StartsWith("printf '\\n'") ? [""] : ["partial"], File.ReadAllLines(path));
+            }
+            else
+            {
+                string[] expected = fallback ? ["a1", "a2", "b1", "b2"] : body.Length == 0 ? [] : ["b2", "a1"];
+                Assert.Equal(expected.Length, await CandidateExport.WriteDictionaryAsync([step], tool, path,
+                    CandidateExport.EncodingFor("UTF8"), progress, default));
+                Assert.Equal(expected, File.ReadAllLines(path));
+                Assert.Equal([(long)expected.Length], progress.Values);
+            }
+            Assert.Equal(["run"], File.ReadAllLines(Path.Combine(dir, "runs.txt")));
+
+            if (fallback)
+            {
+                using var ct = new CancellationTokenSource();
+                await using var candidates = CandidateExport.CandidatesAsync(step, tool, ct.Token).GetAsyncEnumerator();
+                Assert.True(await candidates.MoveNextAsync());
+                Assert.Equal("a1", candidates.Current);
+                ct.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await candidates.MoveNextAsync());
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public void FailureMessageUsesTheFirstMeaningfulLine()
     {

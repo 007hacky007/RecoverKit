@@ -9,8 +9,9 @@ namespace RecoverKit.Core.Attacks;
 
 /// <summary>
 /// File > Dictionary Generator and File > WPA-PMK Generator: produce the candidates of an attack
-/// instead of testing them. Rule-free dictionaries, combinators and masks run locally; rules and unsupported
-/// arguments use hashcat --stdout. National alphabets and word combinations use the planner's generators.
+/// instead of testing them. Rule-free lists and masks run locally. Combined lists use hashcat --stdout
+/// for its device-tuned order, falling back locally only if no backend exists and no candidate was printed.
+/// Rules and unsupported arguments use hashcat; national alphabets and word combinations use the planner's generators.
 /// </summary>
 public static class CandidateExport
 {
@@ -29,7 +30,7 @@ public static class CandidateExport
         }
     }
 
-    /// <summary>Every candidate of a prepared attack, in hashcat's order.</summary>
+    /// <summary>Every candidate in hashcat's order, except local combinations when no compute backend exists.</summary>
     public static async IAsyncEnumerable<string> CandidatesAsync(PreparedAttack a, HashcatTool tool, [EnumeratorCancellation] CancellationToken ct)
     {
         bool rules = a.Args.Contains("-r");
@@ -67,15 +68,29 @@ public static class CandidateExport
             }, CancellationToken.None);
         }
         var errTask = p.StandardError.ReadToEndAsync(CancellationToken.None);
+        bool produced = false;
         try
         {
             string? line;
             while ((line = await p.StandardOutput.ReadLineAsync(ct)) is not null)
+            {
+                produced = true;
                 yield return HashcatTool.DecodePlain(line);
+            }
             // hashcat reports a failure (no compute backend, unreadable file, bad rule) only by its exit
             // code and stderr; without this check the generator would save an empty file as a success.
             await p.WaitForExitAsync(ct);
-            if (p.ExitCode != 0) throw new IOException(FailureMessage(p.ExitCode, await errTask));
+            if (p.ExitCode != 0)
+            {
+                string stderr = await errTask;
+                if (!produced && NoComputeBackend(stderr)
+                    && ExportCandidates.TryCreate(a, ct, tool.Directory, tool.Exe, combinatorFallback: true) is { } fallback)
+                {
+                    DebugLog.Info("Candidate export using local combinations: hashcat has no compute backend and printed no candidates.");
+                    foreach (var candidate in fallback) yield return candidate;
+                }
+                else throw new IOException(FailureMessage(p.ExitCode, stderr));
+            }
         }
         finally
         {
@@ -85,6 +100,9 @@ public static class CandidateExport
         }
     }
 
+    private static bool NoComputeBackend(string stderr)
+        => stderr.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.Ordinal);
+
     internal static string FailureMessage(int exitCode, string stderr)
     {
         var lines = stderr.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -92,7 +110,7 @@ public static class CandidateExport
             ? attention["ATTENTION!".Length..].Trim()
             : lines.FirstOrDefault(l => !l.StartsWith('*'));
         string text = $"hashcat could not produce the candidates (exit code {exitCode})" + (reason is null ? "." : ": " + reason);
-        if (stderr.Contains("No OpenCL, HIP or CUDA compatible platform", StringComparison.Ordinal))
+        if (NoComputeBackend(stderr))
             text += " hashcat needs a GPU driver or the CPU runtime even to list candidates: see Tools > Dependencies.";
         return text;
     }

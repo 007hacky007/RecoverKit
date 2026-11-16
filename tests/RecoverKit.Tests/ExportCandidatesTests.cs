@@ -51,6 +51,64 @@ public sealed class ExportCandidatesTests
         finally { Directory.Delete(dir, true); }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DictionariesKeepWordsAcrossReadBuffers(bool optimized)
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-export-buffers").FullName;
+        try
+        {
+            string path = Path.Combine(dir, "words.txt");
+            foreach (int offset in Enumerable.Range(65516, 24))
+            foreach (bool bom in new[] { false, true })
+            {
+                File.WriteAllBytes(path, BufferBoundaryWords(offset, bom));
+                string[] args = optimized ? ["-a", "0", path, "-O"] : ["-a", "0", path];
+                Assert.Equal(["é🙂", "alpha", "beta\rinside", "ÿ", "", "tail"], Generate(args));
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(0, false)]
+    [InlineData(65528, true)]
+    [InlineData(65528, false)]
+    public void DictionaryCancellationStopsBeforeTheNextBufferedWord(int padding, bool finalNewline)
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-export-cancel").FullName;
+        try
+        {
+            string path = Path.Combine(dir, "words.txt");
+            File.WriteAllText(path, (padding == 0 ? "" : new string('x', padding) + "\n")
+                + "first\nsecond" + (finalNewline ? "\n" : ""));
+            using var ct = new CancellationTokenSource();
+            using var words = ExportCandidates.TryCreate(Step("-a", "0", path), ct.Token)!.GetEnumerator();
+            Assert.True(words.MoveNext());
+            Assert.Equal("first", words.Current);
+            ct.Cancel();
+            Assert.Throws<OperationCanceledException>(() => words.MoveNext());
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void DictionaryDecodesFirstAcceptedWordOnEveryEnumeration()
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-export-first").FullName;
+        try
+        {
+            string path = Path.Combine(dir, "words.txt");
+            File.WriteAllText(path, new string('x', 257) + "\n$HEX[efbbbf61]\n$HEX[efbbbf6200]\n");
+            var candidates = ExportCandidates.TryCreate(Step("-a", "0", path), default)!;
+            Assert.Equal(["a", "\uFEFFb\0"], candidates.ToArray());
+            Assert.Equal(["a", "\uFEFFb\0"], candidates.ToArray());
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public void UnsupportedArgumentsStayOnHashcatAndCancellationStopsEnumeration()
     {
@@ -79,6 +137,25 @@ public sealed class ExportCandidatesTests
             File.WriteAllText(right, "1\n2\n3\n");
             string[] args = optimized ? ["-a", "1", left, right, "-O"] : ["-a", "1", left, right];
             Assert.Equal(optimized ? ["a1", "b1", "a2", "b2", "a3", "b3"] : ["a1", "a2", "a3", "b1", "b2", "b3"], Generate(args));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CombinatorKeepsOuterWordWhileInnerFileRefills(bool optimized)
+    {
+        string dir = Directory.CreateTempSubdirectory("rk-export-combine-buffers").FullName;
+        try
+        {
+            string left = Path.Combine(dir, "left"), right = Path.Combine(dir, "right");
+            File.WriteAllText(left, "a\nb\n");
+            File.WriteAllBytes(right, BufferBoundaryWords(65535));
+            string[] args = optimized ? ["-a", "1", left, right, "-O"] : ["-a", "1", left, right];
+            string[] suffixes = ["é🙂", "alpha", "beta\rinside", "ÿ", "", "tail"];
+            Assert.Equal(optimized ? suffixes.SelectMany(s => new[] { "a" + s, "b" + s })
+                : new[] { "a", "b" }.SelectMany(s => suffixes.Select(t => s + t)), Generate(args));
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -116,5 +193,10 @@ public sealed class ExportCandidatesTests
         return step;
     }
 
-    private static string[] Generate(params string[] args) => ExportCandidates.TryCreate(Step(args), default)!.ToArray();
+    internal static byte[] BufferBoundaryWords(int offset, bool bom = false) => Encoding.UTF8.GetBytes(
+        (bom ? "\uFEFF" : "") + new string('x', offset - (bom ? 4 : 1)) + "\né🙂\nalpha\r\r\nbeta\rinside\n$HEX[ff]\n"
+        + new string('\r', 2 * 65536) + "\n" + new string('\r', 65536) + "rejected\ntail\r\r");
+
+    private static string[] Generate(params string[] args)
+        => ExportCandidates.TryCreate(Step(args), default, combinatorFallback: args[1] == "1")!.ToArray();
 }

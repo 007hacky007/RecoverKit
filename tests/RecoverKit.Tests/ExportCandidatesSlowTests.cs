@@ -40,9 +40,14 @@ public sealed class ExportCandidatesSlowTests(ITestOutputHelper output)
                 ("carriage-returns", "\r\r\nleft\rright\r\r\n\r"u8.ToArray()),
                 ("empty-lines", "\n\r\n\n"u8.ToArray()),
                 ("bom", [0xef, 0xbb, 0xbf, .. "first\n\uFEFFsecond\n"u8.ToArray()]),
+                ("bom-after-rejected", Encoding.UTF8.GetBytes(new string('x', 257) + "\n$HEX[efbbbf61]\n$HEX[efbbbf6200]\n")),
                 ("hex", "$HEX[6162]\n$HEX[]\n$HEX[ff00c3a9]\n$HEX[xyz]\n$HEX[61]\r\n$HEX[244845585b36315d]\n"u8.ToArray()),
                 ("binary", [0, 1, 0x7f, 0x80, 0xff, (byte)'\n', 0xc3, 0xa9, (byte)'\n', 0xc3, (byte)'\n']),
                 ("lengths", LengthWords()),
+                ("buffer-utf8", ExportCandidatesTests.BufferBoundaryWords(65535)),
+                ("buffer-bom", ExportCandidatesTests.BufferBoundaryWords(65535, bom: true)),
+                ("buffer-crlf", ExportCandidatesTests.BufferBoundaryWords(65523)),
+                ("buffer-hex", ExportCandidatesTests.BufferBoundaryWords(65501)),
             };
             foreach (var (name, bytes) in cases)
             {
@@ -118,6 +123,7 @@ public sealed class ExportCandidatesSlowTests(ITestOutputHelper output)
                 ("hex-and-bytes", "$HEX[6162]\n$HEX[]\n$HEX[ff00]\n$HEX[244845585b36315d]\n"u8.ToArray(), "x\r\ny\n"u8.ToArray()),
                 ("lengths", LengthWords(), "x\n"u8.ToArray()),
                 ("lengths-reversed", "x\n"u8.ToArray(), LengthWords()),
+                ("buffer-boundary", "a\nb\n"u8.ToArray(), ExportCandidatesTests.BufferBoundaryWords(65535)),
             };
             foreach (var (name, left, right) in cases)
             {
@@ -131,6 +137,69 @@ public sealed class ExportCandidatesSlowTests(ITestOutputHelper output)
                     await Compare(tool, step, dir, name + (optimized ? "-optimized" : "-pure"));
                 }
             }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task LargeCombinatorKeepsHashcatsDeviceTunedOrder()
+    {
+        var tool = Tool();
+        if (tool is null) return;
+        string dir = Directory.CreateTempSubdirectory("rk-export-large-combinator").FullName;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            string left = Path.Combine(dir, "left.txt"), right = Path.Combine(dir, "right.txt");
+            File.WriteAllLines(left, Enumerable.Range(0, 3200).Select(i => $"L{i:D4}"));
+            File.WriteAllLines(right, Enumerable.Range(0, 3200).Select(i => $"R{i:D4}"));
+            var step = Step("-a", "1", left, right);
+            Assert.Null(ExportCandidates.TryCreate(step, timeout.Token, tool.Directory, tool.Exe));
+            string expectedPath = Path.Combine(dir, "hashcat.txt");
+            using (var process = new Process { StartInfo = tool.StartInfo(["--stdout", "--quiet", .. step.Args]) })
+            {
+                process.Start();
+                var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+                try
+                {
+                    await using var file = File.Create(expectedPath);
+                    await process.StandardOutput.BaseStream.CopyToAsync(file, timeout.Token);
+                    await process.WaitForExitAsync(timeout.Token);
+                    Assert.True(process.ExitCode == 0, $"hashcat exit {process.ExitCode}: {await stderr}");
+                }
+                finally { if (!process.HasExited) process.Kill(true); }
+            }
+            long count = 0;
+            using (var expected = File.ReadLines(expectedPath).GetEnumerator())
+            {
+                await foreach (string candidate in CandidateExport.CandidatesAsync(step, tool, timeout.Token))
+                {
+                    Assert.True(expected.MoveNext(), $"Unexpected candidate at {count}");
+                    Assert.Equal(HashcatTool.DecodePlain(expected.Current), candidate);
+                    count++;
+                }
+                Assert.False(expected.MoveNext());
+            }
+            Assert.Equal(3200L * 3200, count);
+
+            // Check the local fallback's complete set without assuming hashcat's tuned block order.
+            long localCount = 0;
+            var seen = new System.Collections.BitArray(3200 * 3200);
+            foreach (string candidate in ExportCandidates.TryCreate(step, timeout.Token, tool.Directory, tool.Exe, combinatorFallback: true)!)
+            {
+                Assert.Equal(10, candidate.Length);
+                Assert.Equal('L', candidate[0]);
+                Assert.Equal('R', candidate[5]);
+                int a = int.Parse(candidate.AsSpan(1, 4)), b = int.Parse(candidate.AsSpan(6, 4));
+                Assert.InRange(a, 0, 3199);
+                Assert.InRange(b, 0, 3199);
+                int index = a * 3200 + b;
+                Assert.False(seen[index]);
+                seen[index] = true;
+                localCount++;
+            }
+            Assert.Equal(count, localCount);
+            output.WriteLine($"Large combinator: {count} candidates matched hashcat in order; local fallback covered the same set once.");
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -167,7 +236,9 @@ public sealed class ExportCandidatesSlowTests(ITestOutputHelper output)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var expected = await HashcatCandidates(tool, step, timeout.Token);
-        var local = ExportCandidates.TryCreate(step, timeout.Token, tool.Directory, tool.Exe);
+        bool combinator = step.Args[step.Args.IndexOf("-a") + 1] == "1";
+        if (combinator) Assert.Null(ExportCandidates.TryCreate(step, timeout.Token, tool.Directory, tool.Exe));
+        var local = ExportCandidates.TryCreate(step, timeout.Token, tool.Directory, tool.Exe, combinatorFallback: combinator);
         Assert.True(local is not null, name + ": the in-process path was not selected.");
         Assert.Equal(expected, local!.ToArray());
         var actual = new List<string>();
@@ -184,7 +255,7 @@ public sealed class ExportCandidatesSlowTests(ITestOutputHelper output)
                 foreach (string word in expected) await writer.WriteLineAsync(word);
             Assert.Equal(memory.ToArray(), await File.ReadAllBytesAsync(path, timeout.Token));
         }
-        output.WriteLine($"{name}: {expected.Count} candidates matched in order; all four export encodings matched byte for byte.");
+        output.WriteLine($"{name}: {expected.Count} candidates matched in order via {(combinator ? "hashcat" : "local generation")}; all four export encodings matched byte for byte.");
     }
 
     private static async Task<List<string>> HashcatCandidates(HashcatTool tool, PreparedAttack step, CancellationToken ct, bool usable = true)

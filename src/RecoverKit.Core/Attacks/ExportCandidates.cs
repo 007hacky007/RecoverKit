@@ -3,12 +3,13 @@ using RecoverKit.Core.Native;
 
 namespace RecoverKit.Core.Attacks;
 
-/// <summary>The rule-free subset of hashcat --stdout that does not need a compute backend.</summary>
+/// <summary>Local rule-free lists and masks, plus a combinator fallback when no compute backend exists.</summary>
 internal static class ExportCandidates
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-    public static IEnumerable<string>? TryCreate(PreparedAttack attack, CancellationToken ct, string? workingDirectory = null, string? executable = null)
+    public static IEnumerable<string>? TryCreate(PreparedAttack attack, CancellationToken ct, string? workingDirectory = null, string? executable = null,
+        bool combinatorFallback = false)
     {
         ct.ThrowIfCancellationRequested();
         if (attack.Stdin is not null) return null;
@@ -41,6 +42,10 @@ internal static class ExportCandidates
             }
         }
 
+        // Combinator order depends on hashcat's device tuning; use the local loop only without a backend.
+        if (mode == "1" && !combinatorFallback) return null;
+        if (combinatorFallback && mode != "1") return null;
+
         string FullPath(string path) => Path.GetFullPath(path, workingDirectory ?? Environment.CurrentDirectory);
         if ((mode == "0" && inputs.Count == 1 || mode == "1" && inputs.Count == 2)
             && !hex && !increment && min is null && max is null && custom.All(c => c is null))
@@ -57,7 +62,8 @@ internal static class ExportCandidates
                     || header[..n].StartsWith(new byte[] { 0xfe, 0xff })) return null;
             }
             int wordLimit = optimized ? 31 : 256;
-            return Decode(mode == "0" ? Words(paths[0], wordLimit, ct) : Combinations(paths[0], paths[1], wordLimit, optimized, ct), ct);
+            return mode == "0" ? Words(paths[0], wordLimit, ct, DecodeWord)
+                : Decode(Combinations(paths[0], paths[1], wordLimit, optimized, ct), ct);
         }
         if (mode != "3" || inputs.Count != 1 || (!increment && (min is not null || max is not null))) return null;
         if (File.Exists(FullPath(inputs[0]))) return null; // A mask file has its own per-line options.
@@ -170,32 +176,59 @@ internal static class ExportCandidates
         }
     }
 
-    private static IEnumerable<byte[]> Words(string path, int limit, CancellationToken ct)
+    private static IEnumerable<ReadOnlyMemory<byte>> Words(string path, int limit, CancellationToken ct)
+        => Words(path, limit, ct, static (bytes, _) => bytes);
+
+    private static IEnumerable<T> Words<T>(string path, int limit, CancellationToken ct, Func<ReadOnlyMemory<byte>, bool, T> convert)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536);
-        var bom = new byte[3];
-        int prefix = stream.Read(bom);
-        stream.Position = prefix == 3 && bom.AsSpan().SequenceEqual(new byte[] { 0xef, 0xbb, 0xbf }) ? 3 : 0;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
         // A decoded HEX word can be longer than the ordinary input limit. Bound retained bytes even for huge lines.
         var line = new byte[2 * limit + 6];
+        var buffer = new byte[65536];
+        int available = stream.ReadAtLeast(buffer, 3, throwOnEndOfStream: false);
+        int position = available >= 3 && buffer.AsSpan(0, 3).SequenceEqual(new byte[] { 0xef, 0xbb, 0xbf }) ? 3 : 0;
         int length = 0, carriageReturns = 0;
-        bool any = false, overflow = false;
+        bool any = false, overflow = false, first = true;
         for (long offset = 0; ; offset++)
         {
             if ((offset & 4095) == 0) ct.ThrowIfCancellationRequested();
-            int value = stream.ReadByte();
+            if (position == available)
+            {
+                available = stream.Read(buffer);
+                position = 0;
+            }
+            if (!any && available > 0)
+            {
+                int newline = buffer.AsSpan(position, available - position).IndexOf((byte)'\n');
+                if (newline >= 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int end = position + newline;
+                    while (end > position && buffer[end - 1] == '\r') end--;
+                    int start = position, count = end - position;
+                    position += newline + 1;
+                    if (count <= limit && (count == 0 || buffer[start] != '$'))
+                    {
+                        yield return convert(buffer.AsMemory(start, count), first);
+                        first = false;
+                    }
+                    else if (ReadWord(buffer.AsMemory(start, count), limit) is { } word)
+                    {
+                        yield return convert(word, first);
+                        first = false;
+                    }
+                    continue;
+                }
+            }
+            int value = available == 0 ? -1 : buffer[position++];
             if (value == '\n' || value < 0)
             {
                 if (value < 0 && !any) yield break;
-                if (!overflow)
+                if (!overflow && ReadWord(line.AsMemory(0, length), limit) is { } word)
                 {
-                    byte[] word = line[..length];
-                    if (word.AsSpan().StartsWith("$HEX["u8) && word.AsSpan().EndsWith("]"u8))
-                    {
-                        try { word = Convert.FromHexString(Encoding.ASCII.GetString(word, 5, word.Length - 6)); }
-                        catch (FormatException) { }
-                    }
-                    if (word.Length <= limit) yield return word;
+                    ct.ThrowIfCancellationRequested();
+                    yield return convert(word, first);
+                    first = false;
                 }
                 if (value < 0) yield break;
                 length = carriageReturns = 0;
@@ -214,21 +247,60 @@ internal static class ExportCandidates
         }
     }
 
-    private static IEnumerable<byte[]> Combinations(string left, string right, int limit, bool optimized, CancellationToken ct)
+    private static ReadOnlyMemory<byte>? ReadWord(ReadOnlyMemory<byte> word, int limit)
     {
-        // Optimized combinator kernels use the larger raw dictionary as their outside loop.
+        if (word.Length > 2 * limit + 6) return null;
+        if (word.Span.StartsWith("$HEX["u8) && word.Span.EndsWith("]"u8))
+        {
+            try { word = Convert.FromHexString(Encoding.ASCII.GetString(word.Span[5..^1])); }
+            catch (FormatException) { }
+        }
+        if (word.Length > limit) return null;
+        return word;
+    }
+
+    private static IEnumerable<ReadOnlyMemory<byte>> Combinations(string left, string right, int limit, bool optimized, CancellationToken ct)
+    {
+        // Keep the small-list traversal, but device-tuned right-list blocks cannot be reproduced here.
         bool swap = optimized && Wordlists.CountLines(right, ct) > Wordlists.CountLines(left, ct);
+        var word = new byte[limit];
         foreach (var outer in Words(swap ? right : left, limit, ct))
         foreach (var inner in Words(swap ? left : right, limit, ct))
         {
             ct.ThrowIfCancellationRequested();
-            byte[] a = swap ? inner : outer, b = swap ? outer : inner;
-            var word = new byte[Math.Min(limit, a.Length + b.Length)];
-            int leftBytes = Math.Min(a.Length, word.Length);
-            a.AsSpan(0, leftBytes).CopyTo(word);
-            b.AsSpan(0, word.Length - leftBytes).CopyTo(word.AsSpan(leftBytes));
+            ReadOnlyMemory<byte> a = swap ? inner : outer, b = swap ? outer : inner;
+            int length = Math.Min(limit, a.Length + b.Length);
+            int leftBytes = Math.Min(a.Length, length);
+            a.Span[..leftBytes].CopyTo(word);
+            b.Span[..(length - leftBytes)].CopyTo(word.AsSpan(leftBytes));
+            yield return word.AsMemory(0, length);
+        }
+    }
+
+    // Byte buffers are reused by the producers; decode each word before advancing them.
+    private static IEnumerable<string> Decode(IEnumerable<ReadOnlyMemory<byte>> source, CancellationToken ct)
+    {
+        bool first = true;
+        foreach (var bytes in source)
+        {
+            ct.ThrowIfCancellationRequested();
+            string word = DecodeWord(bytes, first);
+            first = false;
             yield return word;
         }
+    }
+
+    private static string DecodeWord(ReadOnlyMemory<byte> bytes, bool first)
+    {
+        try
+        {
+            string word = StrictUtf8.GetString(bytes.Span);
+            // Process.StandardOutput consumes a leading UTF-8 BOM, unless hashcat hex-escapes the word.
+            if (first && word.StartsWith('\uFEFF') && !bytes.Span.ContainsAnyInRange((byte)0, (byte)31)
+                && !bytes.Span.Contains((byte)127)) word = word[1..];
+            return word;
+        }
+        catch (DecoderFallbackException) { return Encoding.Latin1.GetString(bytes.Span); }
     }
 
     private static IEnumerable<string> Decode(IEnumerable<byte[]> source, CancellationToken ct)
