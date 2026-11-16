@@ -12,6 +12,7 @@ using RecoverKit.Core.Diagnostics;
 //   recoverkit-cli scenario-line "/a:b /c:d /min:1 /max:4"
 //   recoverkit-cli bench-full [--sections system,cpu,gpu,zip,hybrid] [--thorough] [--out report.html] [--export-tests folder]
 //   recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]   ZipCrypto GPU kernels, hashcat's vs RecoverKit's
+//   recoverkit-cli bench-pdf [--hashcat path] [--device N[,N]] [--nvidia-backend cuda|opencl] [--out results.txt]
 
 if (args.Length > 0 && args[0] == FiniteDiagnosticWorker.Command) return FiniteDiagnosticWorker.Run(args);
 if (args.Length > 0 && args[0] == CpuDiagnosticWorker.Command) return CpuDiagnosticWorker.Run(args);
@@ -125,6 +126,40 @@ try
                 }
             }
             return 0;
+        }
+        case "bench-pdf":
+        {
+            var settings = new Settings();
+            ApplyNvidiaBackend(argv, settings);
+            var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? Settings.Load().HashcatPath)
+                ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>.");
+            var tuning = new List<string>();
+            foreach (var (option, flag) in new[] { ("--accel", "-n"), ("--loops", "-u"), ("--threads", "-T") })
+            {
+                if (Opt(argv, option) is not { } value) continue;
+                if (!int.TryParse(value, out int n) || n <= 0) throw new ArgumentException(option + " requires a positive integer.");
+                tuning.AddRange([flag, value]);
+            }
+            if (tuning.Count > 0) tuning.Add("--force"); // hashcat 8 requires this for manual launch sizes.
+            var bench = new PdfKernelBenchmark(tool)
+            {
+                Seconds = int.Parse(Opt(argv, "--seconds") ?? "10"), Runs = int.Parse(Opt(argv, "--runs") ?? "3"),
+                Workload = int.Parse(Opt(argv, "--workload") ?? "3"), Tuning = tuning,
+            };
+            var transcript = new System.Text.StringBuilder();
+            bench.Progress += line => { Console.WriteLine(line); transcript.AppendLine(line); };
+            using var cts = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+            Console.CancelKeyPress += cancel;
+            try
+            {
+                var rows = await bench.RunAsync(settings.NvidiaBackend, Opt(argv, "--device")?.Split(',').Select(int.Parse).ToHashSet(), cts.Token);
+                string result = PdfKernelBenchmark.Format(rows);
+                Console.Write(result);
+                if (Opt(argv, "--out") is { } path) await File.WriteAllTextAsync(path, transcript + "\n" + result, cts.Token);
+                return 0;
+            }
+            finally { Console.CancelKeyPress -= cancel; }
         }
         case "bench-zip":
         {
@@ -537,6 +572,7 @@ static int Usage()
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
     Console.WriteLine("Device options: --strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly; --nvidia-backend auto|cuda|opencl (crack and bench commands); --no-hybrid hashcat alone on the GPUs (no built-in CPU engine next to them); --hashcat-cpu also run hashcat on the CPU for formats without a built-in kernel; --threads N CPU thread limit");
+    Console.WriteLine("bench-pdf [--hashcat path] [--device N[,N]] [--nvidia-backend auto|cuda|opencl] [--seconds 10] [--runs 3] [--workload 3] [--out results.txt]; optional manual tuning: --accel N --loops N --threads N");
     Console.WriteLine("Diagnostics: --debug write a detailed log, including hashcat starts and CPU batch timings");
     return 64;
 }

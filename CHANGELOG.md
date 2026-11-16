@@ -10,6 +10,14 @@ All notable changes to RecoverKit. Downloads are on the
   paths. Masks and dictionaries with rules share work with hashcat by default on discrete GPUs;
   integrated-only systems need an explicit choice or a measured hybrid win.
 
+### Changed
+- On macOS, PDF R3/R4 128-bit GPU recovery uses a hashcat 8.0.0 kernel with compiler-selected RC4
+  unrolling: 35% faster on an M1 Pro through Metal. OpenCL on the same Mac was flat and NVIDIA is
+  unmeasured, so Windows and Linux keep hashcat's kernel unless `RECOVERKIT_HASHCAT_PDF_KERNELS=1`
+  is set (`=0` turns it off on macOS). R3 40-bit keeps hashcat's original kernel.
+- `recoverkit-cli bench-pdf` compares stock/replacement PDF kernels in an isolated engine copy,
+  with three-run medians, launch settings and explicit CUDA/OpenCL selection.
+
 ### Fixed
 - Split ZIP password recovery works with missing parts when the central directory and one complete
   encrypted entry are available. File details list missing parts, and incomplete entries are skipped.

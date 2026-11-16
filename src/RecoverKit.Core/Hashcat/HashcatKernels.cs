@@ -140,7 +140,8 @@ public static class HashcatKernels
 
     /// <summary>Returns whether this mode and attack run the installed replacement kernels.</summary>
     public static bool EnsureFor(HashcatTool tool, int mode, int attackMode = 3)
-        => Array.IndexOf(Modes, mode) >= 0 && attackMode is 0 or 3 && EnsureInstalled(tool.Directory);
+        => mode == 10500 ? PdfHashcatKernels.EnsureInstalled(tool.Directory, mode)
+            : Array.IndexOf(Modes, mode) >= 0 && attackMode is 0 or 3 && EnsureInstalled(tool.Directory);
 
     /// <summary>
     /// Why the replacement kernels cannot run with this hashcat, in plain words, or null when they can.

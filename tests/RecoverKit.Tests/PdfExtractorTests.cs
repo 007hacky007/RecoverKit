@@ -119,7 +119,7 @@ public class PdfExtractorTests
         Assert.Throws<FormatException>(() => Extract(text[..(start + 10)] + "\n/Encrypt 5 0 R"));
     }
 
-    private static byte[] Fixture(bool v1 = false) => Convert.FromBase64String(v1 ? V1 : V2);
+    internal static byte[] Fixture(bool v1 = false) => Convert.FromBase64String(v1 ? V1 : V2);
     private static string Text() => Encoding.Latin1.GetString(Fixture());
     private static Detection Extract(string text)
     {
