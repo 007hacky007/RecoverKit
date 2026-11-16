@@ -26,6 +26,8 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
     /// <summary>Seconds each attack runs (after start-up and autotune).</summary>
     public int Seconds { get; init; } = 10;
     public ProcessPriority? Priority { get; init; }
+    public int Workload { get; init; } = 3;
+    public string ExtraArguments { get; init; } = "";
     internal bool Optimized { get; init; }
     internal bool BoundedTuning { get; init; }
     internal IReadOnlyList<string>? DeviceArgumentsOverride { get; init; }
@@ -156,6 +158,8 @@ public sealed class ZipKernelBenchmark(HashcatTool tool)
         args.AddRange(DeviceArgumentsOverride ?? ["-d", device.ToString()]);
         if (Charset1 is not null) args.AddRange(["-1", Charset1]);
         if (Optimized) args.Add("-O");
+        args.AddRange(["-w", Math.Clamp(Workload, 1, 4).ToString()]);
+        args.AddRange(ExtraArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(a => a is not ("-O" or "--optimized-kernel-enable")));
         var (code, o, e) = await tool.RunAsync(args, TimeSpan.FromSeconds(Seconds + 600), ct: ct, priority: Priority, redactOutput: true);
         double speed = ParseSpeed(code, o);
         if (speed > 0) return speed;

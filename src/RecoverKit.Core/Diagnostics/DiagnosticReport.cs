@@ -29,6 +29,7 @@ public sealed class DiagnosticReport
     public string GpuPolicy { get; set; } = "";
     public List<DiagnosticStep> Plan { get; set; } = [];
     public List<DiagnosticMeasurement> Measurements { get; set; } = [];
+    public List<string> Setup { get; set; } = [];
     public List<string> Summary { get; set; } = [];
     public List<PerformanceDecision> Decisions { get; set; } = [];
     public Dictionary<string, string> System { get; set; } = new();

@@ -117,16 +117,16 @@ public class CudaFallbackTests : IDisposable
 
         CudaFallback.Activate(_devices, "test");
         Assert.True(CudaFallback.IsActive(_devices));
-        // Every GPU through OpenCL: the RTX 4060's OpenCL device and the Radeon.
-        Assert.Contains("--backend-ignore-cuda", HashcatRunner.DeviceArguments(new Settings(), _devices));
+        // The RTX 4060 uses its OpenCL alias; automatic selection leaves the Radeon integrated GPU out.
+        Assert.DoesNotContain("--backend-ignore-cuda", HashcatRunner.DeviceArguments(new Settings(), _devices));
         Assert.Null(runner.FailedCudaDevice(request, LinkFailure));
 
-        // A measured choice of the CUDA device selects its OpenCL twin, renumbered without CUDA.
+        // A stale measured CUDA key selects its OpenCL twin with its original discovery id.
         var cuda = _devices.Single(d => d.Backend == "CUDA");
         var measured = new Settings { GpuPerformanceChoice = new() { DeviceKeys = [cuda.Key] } };
         var args = HashcatRunner.DeviceArguments(measured, _devices);
-        Assert.Equal("1", args[args.IndexOf("-d") + 1]);
-        Assert.Contains("--backend-ignore-cuda", args);
+        Assert.Equal("2", args[args.IndexOf("-d") + 1]);
+        Assert.DoesNotContain("--backend-ignore-cuda", args);
 
         // Another driver (or RecoverKit version) tries CUDA again.
         var other = HashcatTool.ParseDevices(Info.Replace("999.17", "999.18"));
@@ -144,6 +144,17 @@ public class CudaFallbackTests : IDisposable
         CudaFallback.Activate(_devices, "test");
         Assert.Equal("OpenCL", HashcatRunner.RunningBackend(cuda, _devices));
         Assert.Equal("OpenCL", HashcatRunner.GpuBackends(settings, _devices));
+    }
+
+    [Fact]
+    public void ForcedCudaDoesNotRetryTheAttackThroughOpenCl()
+    {
+        var (runner, request) = Runner();
+        request.Settings.NvidiaBackend = NvidiaBackend.Cuda;
+        Assert.Null(runner.FailedCudaDevice(request, LinkFailure));
+        CudaFallback.Activate(_devices, "previous CUDA failure");
+        Assert.Equal("CUDA", HashcatRunner.RunningBackend(request.Settings, _devices[0], _devices));
+        Assert.DoesNotContain("--backend-ignore-cuda", runner.BuildArguments(request));
     }
 
     [Fact]

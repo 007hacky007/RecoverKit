@@ -390,9 +390,10 @@ test does the same with rules (keep, append, delete last). A third test installs
 a two-entry queue so that the retry path runs all the time. On the M1 Pro all three pass on Metal
 and OpenCL (and the random-archive test also with `RK_AMP_CACHE 1`).
 
-`recoverkit-cli bench-zip [--device N] [--seconds S]` measures hashcat's kernels against
-RecoverKit's on every device (CUDA, OpenCL and Metal aliases separately) for entries of 17 bytes to
-16 KB; see [benchmarks.md](benchmarks.md#zip-on-the-gpu).
+`recoverkit-cli bench-zip [--device N] [--nvidia-backend auto|cuda|opencl] [--seconds S]` measures
+hashcat's kernels against RecoverKit's on the selected GPUs for entries of 17 bytes to 16 KB.
+`--device` chooses a physical GPU by a listed backend ID; the NVIDIA backend preference resolves
+that ID to its CUDA or OpenCL twin. See [benchmarks.md](benchmarks.md#zip-on-the-gpu).
 
 ### Large entries
 
@@ -539,8 +540,8 @@ from an NVRTC no newer than itself, so the package is chosen by the CUDA version
 RTX 50 series), 12.4.127 for CUDA 12.4 to 12.7; older drivers are asked to update. The row is
 yellow when an NVIDIA GPU runs through OpenCL and no CUDA device is listed. NVRTC is downloaded,
 not bundled. Installing the CUDA Toolkit works as well. Whether
-CUDA is faster than OpenCL for a given mode shows in `recoverkit-cli bench-zip`, which measures
-both. The download and the CUDA path were not tested on real NVIDIA hardware.
+CUDA is faster than OpenCL for a given mode shows by comparing `recoverkit-cli bench-zip
+--nvidia-backend cuda` with `recoverkit-cli bench-zip --nvidia-backend opencl`.
 
 ## macOS app
 
@@ -598,6 +599,11 @@ recoverkit-cli decrypt secret.docx <password> [out.docx]           # decrypt an 
 hybrid CPU + GPU mode off, `--hashcat-cpu` adds hashcat's CPU device next to the GPUs for formats
 without a built-in kernel and `--threads N` limits the CPU threads, all for one run. The status
 lines list each device's speed in hybrid runs.
+`--nvidia-backend auto|cuda|opencl` overrides the saved NVIDIA backend for `crack`, `bench-full`,
+`bench-zip` and `bench-native` without saving the override. A missing or invalid value stops the
+command before starting the engine. `bench-native` measures only the CPU regardless of this option.
+On macOS, `crack` and `bench-native` print the engine setup once before running; native-only
+benchmarks do not enumerate hashcat devices.
 `--temp-limit 85 [--temp-hysteresis 10]` turns on the GPU temperature guard and `--gpu-duty 50`
 the GPU load limit for one run, `--power-limit <watts>` the NVIDIA power limit (see GPU temperature
 guard below; the CLI prints the explanation and asks y/n/c before the system prompt).
@@ -647,14 +653,25 @@ charset, `/u:` user charset, `/l:` national alphabet, `/m:` mask, `/ms:` mask sy
 
 ## Devices
 
-hashcat runs on every GPU it can use: discrete and integrated, each physical device once (a GPU
-seen through CUDA or HIP and again through OpenCL is used through CUDA/HIP, the OpenCL alias is
-skipped, as hashcat does; on Apple silicon the OpenCL device is used and the Metal one skipped).
-`hashcat -I` prints no `Type` for CUDA and HIP devices; they are GPUs, and before this was handled
-a GPU used through CUDA or HIP counted as "no GPU" (its OpenCL alias being skipped), so the GPU list
-stayed empty and the built-in engine ran alone. Devices the user unchecks are remembered by backend,
-name and position (`Settings.DisabledDeviceKeys`), not only by hashcat's id, which shifts when a
-driver adds or removes a backend. `Memory.Unified` marks integrated GPUs.
+Automatic selection uses each enabled physical GPU once. When any enabled dedicated GPU is
+available it leaves integrated GPUs idle; with only integrated GPUs available it uses them.
+`Memory.Unified` marks integrated GPUs. This filter applies only while device and performance
+strategy choices are automatic: `Settings.DeviceSelectionExplicit`, an explicit performance
+strategy, or saved disabled devices preserve the user's selection. Changing a device checkbox
+persists `DeviceSelectionExplicit`, including when every device is checked again.
+
+`Settings.NvidiaBackend` defaults to `Automatic`: NVIDIA uses CUDA when available and keeps the
+existing OpenCL fallback after a CUDA kernel-build failure. `Cuda` overrides that fallback and
+measured backend choices; `OpenCl` selects the same physical GPU's OpenCL twin. Device selection
+uses the twin's actual hashcat ID, without disabling CUDA globally or renumbering devices.
+Other vendors keep their backend policy. On Apple silicon recovery uses Metal except for formats
+with a recorded Metal correctness failure; `hashcat -I`'s default OpenCL alias does not decide
+the recovery backend.
+
+`HashcatRunner.ActiveGpus` returns the resolved devices used for execution and reporting. Devices
+the user unchecks are remembered by backend, name and position (`Settings.DisabledDeviceKeys`),
+not only by hashcat's ID, which shifts when a driver adds or removes a backend. `hashcat -I`
+prints no `Type` for CUDA and HIP devices; the parser treats both as GPUs.
 
 ## Native kernels
 

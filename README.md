@@ -42,6 +42,11 @@ number at the end"), and it tests those combinations until it finds the right on
   tens of times faster than the processor. On a Mac the Apple silicon GPU is used, through Metal. Without a graphics
   card RecoverKit uses the processor, with its own fast engine for the most common formats (on Apple
   silicon it uses the chip's NEON and crypto instructions).
+  Automatic selection leaves an integrated GPU idle when a dedicated GPU is enabled; a computer
+  with only integrated graphics still uses its GPU. Choose devices yourself in Preferences > GPU
+  to keep a different selection. The same tab offers **NVIDIA GPU backend: Automatic, CUDA or OpenCL**.
+  Automatic uses CUDA when available and falls back to OpenCL after a CUDA kernel-build failure.
+  An explicit backend choice takes priority over that fallback and measured backend choices.
 
 ## What it can open
 
@@ -173,6 +178,10 @@ The automatic check measures CPU paths and worker counts. Run the detailed test 
 backends and finite CPU/GPU/hybrid jobs. Whole-job engine comparisons currently cover RAR 5 and
 classic stored ZIP. Other formats keep their existing engine strategy. Temperature and power
 limits are respected; some GPU comparisons are skipped when those limits cannot be enforced.
+Reports include the engine setup and actual GPU backend, so CUDA fallback is labeled as OpenCL.
+For a CLI comparison, run `recoverkit-cli bench-full --nvidia-backend cuda --out cuda.html` and
+`recoverkit-cli bench-full --nvidia-backend opencl --out opencl.html`. The same option works with
+`crack` and `bench-zip`; it applies to that run without changing Preferences.
 
 
 ## Getting started

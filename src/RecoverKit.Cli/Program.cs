@@ -43,6 +43,7 @@ try
         case "bench-full":
         {
             var settings = Settings.Load();
+            ApplyNvidiaBackend(argv, settings);
             var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath);
             var devices = new List<BackendDevice>(); // Diagnostics enumerates its isolated engine copy.
             using var cts = new CancellationTokenSource();
@@ -68,6 +69,7 @@ try
         }
         case "bench-prims":
         {
+            ApplyNvidiaBackend(argv, Settings.Load());
             foreach (var (name, ps) in RecoverKit.Core.Native.NativeKernels.BenchmarkPrimitives())
                 Console.WriteLine($"{name,-34}: {ps:N0}/s  ({2.1e9 / ps:N0} cycles @2.1GHz)");
             if (RecoverKit.Core.Native.RkNative.Available)
@@ -78,19 +80,33 @@ try
         case "bench-native":
         {
             // recoverkit-cli bench-native [--threads N] [--seconds S] [--mode M] [--length L] [--managed] [--force-vector]
+            var settings = Settings.Load();
+            ApplyNvidiaBackend(argv, settings);
             int threads = int.TryParse(Opt(argv, "--threads"), out var th) ? th : Environment.ProcessorCount;
+            settings.MaxCpuThreads = threads;
+            settings.Strategy = DeviceStrategy.CpuOnly;
+            settings.HybridCpuGpu = false;
+            settings.UseNativeCpuEngine = true;
+            settings.ExtraArguments = "";
             int seconds = int.TryParse(Opt(argv, "--seconds"), out var se) ? se : 6;
             int length = int.TryParse(Opt(argv, "--length"), out var le) ? le : 0;
             var modes = Opt(argv, "--mode") is { } m ? [int.Parse(m)] : RecoverKit.Core.Native.NativeKernels.BenchmarkHashes.Keys.ToArray();
             // --managed: skip the native library; --force-vector: run the managed vector kernels even without hardware Vector256.
             if (argv.Contains("--managed")) RecoverKit.Core.Native.RkNative.Disabled = true;
             if (argv.Contains("--force-vector")) RecoverKit.Core.Native.NativeKernels.ForceVectorKernels = true;
-            RecoverKit.Core.Native.NativeKernels.ConfigureWhirlpool(Settings.Load());
+            RecoverKit.Core.Native.NativeKernels.ConfigureWhirlpool(settings);
+            if (OperatingSystem.IsMacOS())
+            {
+                Console.WriteLine("Setup: native-only benchmark; hashcat and GPUs are not started.");
+                foreach (string line in BenchmarkSetup.Lines(null, settings, [])
+                    .Where(line => !line.StartsWith("GPU devices:", StringComparison.Ordinal) && !line.StartsWith("Automatic resolved to:", StringComparison.Ordinal))) Console.WriteLine(line);
+                Console.WriteLine("GPU devices: not enumerated for this native-only benchmark");
+            }
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
             {
                 RecoverKit.Core.Native.NativeKernels.ResetCpuPath(mode);
-                void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length):N0} p/s" +
+                void Measure() => Console.WriteLine($"mode {mode,6}: {RecoverKit.Core.Native.NativeKernels.Benchmark(mode, threads, TimeSpan.FromSeconds(seconds), default, length, RecoverKit.Core.Native.NativeRunner.ThreadPriorityFor(settings.Priority)):N0} p/s" +
                     (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" :
                         Math.Abs(mode) is 12500 or 13000 or 13600 or 22000 or 29331 ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
                 Measure();
@@ -114,6 +130,7 @@ try
             // recoverkit-cli bench-zip [--hashcat path] [--device N[,N]] [--seconds S] [--quick]
             // hashcat's ZipCrypto kernels against RecoverKit's replacements, per device.
             var settings = Settings.Load();
+            ApplyNvidiaBackend(argv, settings);
             if (HashcatInstaller.BundledDirectory is not null) HashcatInstaller.TryInstallBundled();
             var tool = HashcatTool.Locate(Opt(argv, "--hashcat") ?? settings.HashcatPath)
                 ?? throw new InvalidOperationException("hashcat not found. Pass --hashcat <path>, or run 'recoverkit-cli install-hashcat --from <folder>'.");
@@ -124,9 +141,13 @@ try
                 return 2;
             }
             var devices = await tool.DevicesAsync();
+            if (HashcatRunner.NvidiaBackendError(settings, devices) is { } backendError) throw new InvalidOperationException(backendError);
             var only = Opt(argv, "--device")?.Split(',').Select(int.Parse).ToHashSet();
-            // Every backend device, aliases included: an NVIDIA GPU shows as CUDA and as OpenCL.
-            var chosen = devices.Where(d => only?.Contains(d.Id) ?? true).ToList();
+            if (only is not null) settings.DeviceSelectionExplicit = true;
+            var chosen = only is null ? HashcatRunner.ActiveGpus(settings, devices)
+                : devices.Where(d => d.IsGpu && only.Contains(d.Id))
+                    .Select(d => HashcatRunner.ResolveGpu(settings, d, devices)).DistinctBy(d => d.Id).ToList();
+            if (chosen.Count == 0) throw new InvalidOperationException("No GPU selected for the ZIP benchmark.");
             foreach (var dev in devices)
                 Console.WriteLine($"Device #{dev.Id}: {dev.Name} ({dev.Type}, {dev.Backend}{(dev.AliasOf is int a ? $", alias of #{a}" : "")}){(chosen.Contains(dev) ? "" : ", not measured")}");
             if (devices.Any(d => d.Vendor.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
@@ -136,6 +157,7 @@ try
             {
                 Seconds = int.TryParse(Opt(argv, "--seconds"), out var sec) ? sec : 10,
                 WithAmpCache = !argv.Contains("--quick"),
+                Priority = settings.Priority, Workload = settings.Workload, ExtraArguments = settings.ExtraArguments,
             };
             bench.Progress += Console.WriteLine;
             using var cts = new CancellationTokenSource();
@@ -246,6 +268,7 @@ try
         {
             if (argv.Count < 2) return Usage();
             var settings = Settings.Load();
+            ApplyNvidiaBackend(argv, settings);
             settings.HashcatPath = Opt(argv, "--hashcat") ?? settings.HashcatPath;
             if (Opt(argv, "--workload") is { } w) settings.Workload = int.Parse(w);
             if (argv.Contains("--no-potfile")) settings.DontUsePasswordCache = true;
@@ -296,6 +319,8 @@ try
                 }
                 settings.GpuPowerLimit = gpus.Count > 0;
             }
+            if (OperatingSystem.IsMacOS())
+                foreach (string line in BenchmarkSetup.Lines(tool, settings, devices)) Console.WriteLine(line);
             var session = new RecoverySession(tool, settings) { Devices = devices };
             session.ConfirmElevation = request =>
             {
@@ -465,6 +490,18 @@ static string? Opt(List<string> argv, string name)
     return i >= 0 && i + 1 < argv.Count ? argv[i + 1] : null;
 }
 
+static void ApplyNvidiaBackend(List<string> argv, Settings settings)
+{
+    if (!argv.Contains("--nvidia-backend")) return;
+    settings.NvidiaBackend = Opt(argv, "--nvidia-backend")?.ToLowerInvariant() switch
+    {
+        "auto" => NvidiaBackend.Automatic,
+        "cuda" => NvidiaBackend.Cuda,
+        "opencl" => NvidiaBackend.OpenCl,
+        _ => throw new ArgumentException("--nvidia-backend requires auto, cuda or opencl."),
+    };
+}
+
 static void Print(Detection d)
 {
     Console.WriteLine($"File:       {d.FilePath}");
@@ -498,7 +535,7 @@ static int Usage()
     Console.WriteLine("volume options: --volume tc|vc [--keyfile <path> ...] [--pim N] (VeraCrypt only; 0 = default)");
     Console.WriteLine("KeePass options: --keyfile <path> (optional, one keyfile for a .kdbx or .kdb database)");
     Console.WriteLine("GPU options: --temp-limit <°C> [--temp-hysteresis <°C>] pause while the GPU is too hot; --gpu-duty <10-100> share of time the GPU works; --power-limit <watts> NVIDIA power limit (asks for administrator rights)");
-    Console.WriteLine("Device options: --strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly; --no-hybrid hashcat alone on the GPUs (no built-in CPU engine next to them); --hashcat-cpu also run hashcat on the CPU for formats without a built-in kernel; --threads N CPU thread limit");
+    Console.WriteLine("Device options: --strategy GpuOnly|FastGpu|GpuAndCpu|CpuOnly; --nvidia-backend auto|cuda|opencl (crack and bench commands); --no-hybrid hashcat alone on the GPUs (no built-in CPU engine next to them); --hashcat-cpu also run hashcat on the CPU for formats without a built-in kernel; --threads N CPU thread limit");
     Console.WriteLine("Diagnostics: --debug write a detailed log, including hashcat starts and CPU batch timings");
     return 64;
 }

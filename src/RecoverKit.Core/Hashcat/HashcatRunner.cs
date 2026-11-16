@@ -149,8 +149,8 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     /// <summary>
     /// -d / -D arguments derived from the GPU configuration and CPU/GPU strategy. Every GPU hashcat
-    /// can use runs (discrete and integrated, each physical device once: aliases stay skipped) unless
-    /// the user unchecked it. <paramref name="gpuOnly"/> keeps the processor out of hashcat because the
+    /// can use runs once unless the user unchecked it. Automatic selection leaves integrated GPUs
+    /// out when a dedicated GPU is enabled. <paramref name="gpuOnly"/> keeps the processor out of hashcat because the
     /// built-in CPU engine is using it (hybrid attacks); <paramref name="exclude"/> leaves further
     /// devices out for this run.
     /// </summary>
@@ -165,24 +165,20 @@ public sealed class HashcatRunner(HashcatTool tool)
     public static List<string> DeviceArguments(Settings s, IReadOnlyList<BackendDevice>? known, bool gpuOnly = false,
         IReadOnlyCollection<int>? exclude = null, bool preferMetal = false)
     {
+        if (NvidiaBackendError(s, known) is { } backendError) throw new InvalidOperationException(backendError);
         var a = new List<string>();
-        // After a CUDA kernel build failed on this PC, NVIDIA GPUs run through their OpenCL device.
-        bool avoidCuda = CudaFallback.IsActive(known);
-        IEnumerable<int> Ids(IEnumerable<BackendDevice> devices) => devices
-            .Select(d => avoidCuda && d.Backend == "CUDA" ? CudaFallback.OpenClTwin(d, known!) : d)
-            .Where(d => d is not null && exclude?.Contains(d.Id) != true).Select(d => d!.Id).Distinct();
-        // With no GPU among the detected devices the GPU-first strategies fall back to the processor,
-        // instead of failing with "no devices found".
-        bool noGpu = known is { Count: > 0 } && !known.Any(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true);
-        bool cpuDevice = known?.Any(d => !d.IsSkippedAlias && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)) == true;
+        bool Excluded(BackendDevice d) => exclude?.Contains(d.Id) == true
+            || known?.Any(alias => (alias.AliasOf == d.Id || d.AliasOf == alias.Id) && exclude?.Contains(alias.Id) == true) == true;
+        var gpus = ActiveGpus(s, known).Where(d => !Excluded(d)).ToList();
+        bool noGpu = known is { Count: > 0 } && gpus.Count == 0;
+        bool cpuDevice = known?.Any(d => !d.IsSkippedAlias && !d.IsGpu && !IsDisabled(s, d)
+            && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)) == true;
         if (gpuOnly && !noGpu) a.AddRange(["-D", "2"]);
         else
             switch (s.Strategy)
             {
                 case DeviceStrategy.GpuAndCpu: a.AddRange(["-D", noGpu ? "1" : "1,2"]); break;
-                // hashcat reaches the processor only through OpenCL; skipping the GPU-only CUDA and HIP
-                // interfaces keeps a half-installed GPU runtime (for example AMD HIP without its compiler
-                // library) from aborting a CPU-only run.
+                // The processor is reachable only through OpenCL, so don't open optional GPU runtimes.
                 case DeviceStrategy.CpuOnly: a.AddRange(["-D", "1", "--backend-ignore-cuda", "--backend-ignore-hip"]); break;
                 case DeviceStrategy.FastGpu: a.AddRange(["-D", noGpu ? "1" : "2"]); break;
                 default:
@@ -190,34 +186,25 @@ public sealed class HashcatRunner(HashcatTool tool)
                     else if (s.HashcatCpuWithGpu && cpuDevice) a.AddRange(["-D", "1,2"]);
                     break;
             }
-        var measuredKeys = (s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys);
-        if (measuredKeys is { Count: > 0 } && known is not null)
-        {
-            var selected = known.Where(d => d.IsGpu && measuredKeys.Contains(d.Key) && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
-            if (selected.Count > 0) { a.AddRange(["-d", string.Join(',', Ids(selected))]); AddBackendIgnores(); return a; }
-        }
-        bool anyOff = s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0 || exclude is { Count: > 0 };
-        if (preferMetal && known is not null && known.Any(d => d.IsMetal && d.IsSkippedAlias && d.AliasOf is int))
-        {
-            var ids = new List<int>();
-            bool gpuTypesOnly = a.Count >= 2 && a[^2] == "-D" && a[^1] == "2";
-            foreach (var d in known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && (d.IsGpu || !gpuTypesOnly)))
+        var measuredKeys = s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys;
+        bool selectIds = measuredKeys is { Count: > 0 } || s.DisabledDeviceKeys.Count > 0 || s.DisabledDevices.Count > 0
+            || exclude is { Count: > 0 } || s.NvidiaBackend != NvidiaBackend.Automatic
+            || known?.Any(d => !d.IsSkippedAlias && (IsAutomaticallyExcluded(s, d, known) || ResolveGpu(s, d, known).Id != d.Id)) == true;
+        if (preferMetal && known is not null)
+            gpus = gpus.Select(d =>
             {
-                var metal = d.IsGpu && !d.IsMetal ? known.FirstOrDefault(m => m.IsMetal && m.AliasOf == d.Id) : null;
-                if (exclude?.Contains(d.Id) == true || (metal is not null && exclude?.Contains(metal.Id) == true)) continue;
-                ids.Add(metal?.Id ?? d.Id);
-            }
-            if (ids.Count > 0)
-            {
-                a.AddRange(["-d", string.Join(',', ids)]);
-                AddBackendIgnores();
-                return a;
-            }
-        }
-        if (anyOff && known is not null)
+                var metal = d.IsMetal ? d : known.FirstOrDefault(m => m.IsMetal && (m.AliasOf == d.Id || d.AliasOf == m.Id));
+                if (metal is null || Excluded(metal)) return d;
+                selectIds = true;
+                return metal;
+            }).DistinctBy(d => d.Id).ToList();
+        if (selectIds && known is not null)
         {
-            var enabled = Ids(known.Where(d => !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true)).ToList();
-            if (enabled.Count > 0) a.AddRange(["-d", string.Join(',', enabled)]);
+            var ids = gpus.Select(d => d.Id).ToList();
+            bool includeCpu = noGpu || !gpuOnly && (s.Strategy is DeviceStrategy.CpuOnly or DeviceStrategy.GpuAndCpu || s.HashcatCpuWithGpu);
+            if (includeCpu) ids.AddRange(known.Where(d => !d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && !Excluded(d)
+                && d.Type.Contains("CPU", StringComparison.OrdinalIgnoreCase)).Select(d => d.Id));
+            if (ids.Count > 0) a.AddRange(["-d", string.Join(',', ids.Distinct())]);
         }
         AddBackendIgnores();
         return a;
@@ -225,7 +212,7 @@ public sealed class HashcatRunner(HashcatTool tool)
         void AddBackendIgnores()
         {
             if (known is not { Count: > 0 }) return;
-            var enabled = known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && exclude?.Contains(d.Id) != true).ToList();
+            var enabled = gpus;
             bool cpuOnly = s.Strategy == DeviceStrategy.CpuOnly && !gpuOnly;
             // An unidentified GPU might still need either backend. Its aliases can supply the vendor.
             IEnumerable<BackendDevice> WithAliases(BackendDevice device)
@@ -234,7 +221,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             bool unknown = enabled.Any(d => !WithAliases(d).Any(device => device.Backend is "CUDA" or "HIP" or "Metal" ||
                     HasVendor(device, "NVIDIA") || HasVendor(device, "AMD") || HasVendor(device, "Advanced Micro Devices") ||
                     HasVendor(device, "Intel") || HasVendor(device, "Apple")));
-            bool ignoreCuda = cpuOnly || avoidCuda || !unknown && !enabledWithAliases.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
+            bool ignoreCuda = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "CUDA" || HasVendor(d, "NVIDIA"));
             bool ignoreHip = cpuOnly || !unknown && !enabledWithAliases.Any(d => d.Backend == "HIP" || HasVendor(d, "AMD") || HasVendor(d, "Advanced Micro Devices"));
             if (ignoreCuda && !a.Contains("--backend-ignore-cuda")) a.Add("--backend-ignore-cuda");
             if (ignoreHip && !a.Contains("--backend-ignore-hip")) a.Add("--backend-ignore-hip");
@@ -300,24 +287,63 @@ public sealed class HashcatRunner(HashcatTool tool)
             ? MetalOnlyArguments(s, known, gpuOnly: true, exclude)
             : DeviceArguments(s, known, gpuOnly: true, exclude, preferMetal: OperatingSystem.IsMacOS());
 
-    public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
+    /// <summary>Only automatic device selection leaves out shared-memory graphics next to a dedicated GPU.</summary>
+    public static bool IsAutomaticallyExcluded(Settings s, BackendDevice d, IReadOnlyList<BackendDevice>? known)
+        => d.IsIntegratedGpu && !s.DeviceSelectionExplicit && s.DisabledDeviceKeys.Count == 0 && s.DisabledDevices.Count == 0
+            && !s.PerformanceStrategyExplicit && s.Strategy == DeviceStrategy.GpuOnly
+            && known?.Any(g => g.IsGpu && !g.IsIntegratedGpu && !g.IsSkippedAlias && !IsDisabled(s, g)) == true;
+
+    /// <summary>Resolve NVIDIA backend aliases without removing a backend or changing discovery ids.</summary>
+    public static BackendDevice ResolveGpu(Settings s, BackendDevice d, IReadOnlyList<BackendDevice>? known)
     {
-        if (known is null) return [];
-        var measured = s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys;
-        return known.Where(d => d.IsGpu && !IsDisabled(s, d) && (measured is { Count: > 0 } ? measured.Contains(d.Key) : !d.IsSkippedAlias)).ToList();
+        if (!d.IsGpu || known is null) return d;
+        var cuda = d.Backend == "CUDA" ? d : known.FirstOrDefault(c => c.Backend == "CUDA" && (c.AliasOf == d.Id || d.AliasOf == c.Id));
+        if (cuda is null) return d;
+        bool opencl = s.NvidiaBackend == NvidiaBackend.OpenCl
+            || s.NvidiaBackend == NvidiaBackend.Automatic && CudaFallback.IsActive(known);
+        return opencl ? CudaFallback.OpenClTwin(cuda, known) ?? cuda : cuda;
     }
 
-    /// <summary>
-    /// The backend a GPU really runs on: an NVIDIA GPU whose CUDA kernel build failed on this PC runs as its
-    /// OpenCL device (see <see cref="CudaFallback"/>), although hashcat still lists it under CUDA.
-    /// </summary>
-    public static string RunningBackend(BackendDevice d, IReadOnlyList<BackendDevice>? known)
-        => d.Backend == "CUDA" && known is not null && CudaFallback.IsActive(known) && CudaFallback.OpenClTwin(d, known) is not null
-            ? "OpenCL" : d.Backend;
+    public static List<BackendDevice> ActiveGpus(Settings s, IReadOnlyList<BackendDevice>? known)
+    {
+        if (known is null || s.Strategy == DeviceStrategy.CpuOnly) return [];
+        var measured = s.PerformanceChoice?.DeviceKeys is { Count: > 0 } executionKeys ? executionKeys : s.GpuPerformanceChoice?.DeviceKeys;
+        var physical = known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d) && !IsAutomaticallyExcluded(s, d, known)).ToList();
+        var selected = measured is { Count: > 0 }
+            ? known.Where(d => d.IsGpu && measured.Contains(d.Key) && !IsDisabled(s, d)
+                && physical.Any(p => p.Id == d.Id || p.AliasOf == d.Id || d.AliasOf == p.Id)).ToList() : physical;
+        // Stale keys must never turn an otherwise enabled GPU set into an empty device selection.
+        if (selected.Count == 0) selected = physical;
+        return selected.Select(d => ResolveGpu(s, d, known)).DistinctBy(d => d.Id).ToList();
+    }
 
-    /// <summary>The backends of the GPUs hashcat would use, "CUDA" or "OpenCL + CUDA", or "" without one.</summary>
+    /// <summary>A requested interface must exist; never silently run a different NVIDIA backend.</summary>
+    public static string? NvidiaBackendError(Settings s, IReadOnlyList<BackendDevice>? known)
+    {
+        if (s.NvidiaBackend == NvidiaBackend.Automatic || s.Strategy == DeviceStrategy.CpuOnly || known is null) return null;
+        string wanted = s.NvidiaBackend == NvidiaBackend.Cuda ? "CUDA" : "OpenCL";
+        foreach (var d in known.Where(d => d.IsGpu && !d.IsSkippedAlias && !IsDisabled(s, d)
+            && (d.Backend == "CUDA" || HasVendor(d, "NVIDIA"))))
+            if (ResolveGpu(s, d, known).Backend != wanted)
+                return $"{d.Name} has no {wanted} device. Choose Automatic or install the matching NVIDIA runtime in Tools > Dependencies.";
+        return null;
+    }
+
+    public static string RunningBackend(Settings s, BackendDevice d, IReadOnlyList<BackendDevice>? known)
+        => ResolveGpu(s, d, known).Backend;
+
+    public static string RunningBackend(BackendDevice d, IReadOnlyList<BackendDevice>? known)
+        => RunningBackend(new Settings(), d, known);
+
     public static string GpuBackends(Settings s, IReadOnlyList<BackendDevice>? known)
-        => string.Join(" + ", ActiveGpus(s, known).Select(d => RunningBackend(d, known)).Distinct().Order());
+        => string.Join(" + ", ActiveGpus(s, known).Select(d => RunningBackend(s, d, known)).Distinct().Order());
+
+    public static bool HasDeviceOverrides(string extra)
+        => extra.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(arg =>
+            arg is "--backend-ignore-cuda" or "--backend-ignore-opencl" or "--backend-ignore-hip" or "--backend-ignore-metal"
+            || arg.StartsWith("--backend-devices", StringComparison.Ordinal)
+            || arg.StartsWith("--opencl-device-types", StringComparison.Ordinal)
+            || arg.StartsWith("-d", StringComparison.Ordinal) || arg.StartsWith("-D", StringComparison.Ordinal));
 
     /// <summary>
     /// True when the "Don't use GPU threads" strategy is chosen but hashcat sees no CPU device
@@ -371,6 +397,8 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     public async Task<RunResult> RunAsync(RunRequest r, CancellationToken ct)
     {
+        if (NvidiaBackendError(r.Settings, KnownDevices) is { } backendError)
+            return new RunResult { Outcome = RunOutcome.Error, Error = backendError };
         r.VolumeCredentials?.ValidateUnchanged();
         if (r.ZipCheckBytes is { } filter)
             return await RunCheckBytesAsync(r, filter, ct);
@@ -431,7 +459,7 @@ public sealed class HashcatRunner(HashcatTool tool)
 
     internal static string CudaSwitchMessage(string gpu, string said)
         => $"The {gpu} could not build hashcat's attack kernel through CUDA, so RecoverKit switched it to OpenCL and is starting this step again; " +
-           "no password is skipped. CUDA stays off on this computer until the NVIDIA driver or RecoverKit changes. To use CUDA again, update the " +
+           "no password is skipped. Automatic uses OpenCL until the NVIDIA driver or RecoverKit changes. Choose CUDA in Preferences to retry it, or update the " +
            "NVIDIA driver or install RecoverKit's CUDA compiler in Tools > Dependencies." + (said.Length > 0 ? " hashcat said: " + said : "");
 
     /// <summary>
@@ -440,7 +468,7 @@ public sealed class HashcatRunner(HashcatTool tool)
     /// </summary>
     internal BackendDevice? FailedCudaDevice(RunRequest r, string? error)
     {
-        if (error is null || KnownDevices is not { } known || !HashcatOutput.IsBuildFailure(error) || CudaFallback.IsActive(known)) return null;
+        if (error is null || KnownDevices is not { } known || !HashcatOutput.IsBuildFailure(error) || r.Settings.NvidiaBackend != NvidiaBackend.Automatic || CudaFallback.IsActive(known)) return null;
         var args = BuildArguments(r with { Restore = false });
         if (args.Contains("--backend-ignore-cuda")) return null;
         var original = OriginalDeviceIds(args);
@@ -599,6 +627,10 @@ public sealed class HashcatRunner(HashcatTool tool)
                             Id = id, Name = d.Name, Type = d.Type, Speed = d.Speed,
                             Temperature = d.Temperature, Utilization = d.Utilization,
                         } : d).ToList());
+                if (KnownDevices is { } deviceList)
+                    st = st.With(st.Devices.Select(d => deviceList.FirstOrDefault(k => k.Id == d.Id) is { } device
+                        ? new DeviceSpeed { Id = d.Id, Name = $"{device.Name} ({device.Backend})", Type = d.Type, Speed = d.Speed,
+                            Temperature = d.Temperature, Utilization = d.Utilization } : d).ToList());
                 if (r.ZipFilterReplayPending?.Invoke() == true) st = st.With(restorePoint: 0);
                 if (useStdin) st = st.WithStdinTotal(r.Attack.Keyspace);
                 last = st;

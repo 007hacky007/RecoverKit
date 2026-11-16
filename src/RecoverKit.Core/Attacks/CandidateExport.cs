@@ -31,7 +31,8 @@ public static class CandidateExport
     }
 
     /// <summary>Every candidate in hashcat's order, except local combinations when no compute backend exists.</summary>
-    public static async IAsyncEnumerable<string> CandidatesAsync(PreparedAttack a, HashcatTool tool, [EnumeratorCancellation] CancellationToken ct)
+    public static async IAsyncEnumerable<string> CandidatesAsync(PreparedAttack a, HashcatTool tool, [EnumeratorCancellation] CancellationToken ct,
+        IReadOnlyList<string>? deviceArguments = null)
     {
         bool rules = a.Args.Contains("-r");
         if (a.Stdin is not null && !rules)
@@ -53,7 +54,7 @@ public static class CandidateExport
         // Natural order for masks (hashcat otherwise orders by Markov statistics, which reads oddly in a dictionary).
         string[] extra = a.Args.Contains("3") && a.Args.IndexOf("-a") is int ai && ai >= 0 && ai + 1 < a.Args.Count && a.Args[ai + 1] == "3"
             ? ["--markov-disable"] : [];
-        var psi = tool.StartInfo(["--stdout", "--quiet", .. extra, .. a.Args], redirectStdin: a.Stdin is not null);
+        var psi = tool.StartInfo(["--stdout", "--quiet", .. extra, .. a.Args, .. deviceArguments ?? []], redirectStdin: a.Stdin is not null);
         int logId = DebugLog.ProcessStart(psi, "candidate export");
         using var p = new Process { StartInfo = psi };
         p.Start();
@@ -117,12 +118,12 @@ public static class CandidateExport
 
     /// <summary>Writes all candidates of the steps to a text file. Returns the number of lines.</summary>
     public static async Task<long> WriteDictionaryAsync(IEnumerable<PreparedAttack> steps, HashcatTool tool, string path, Encoding enc,
-        IProgress<long>? progress, CancellationToken ct)
+        IProgress<long>? progress, CancellationToken ct, IReadOnlyList<string>? deviceArguments = null)
     {
         long n = 0;
         await using var w = new StreamWriter(path, false, enc, 1 << 20) { NewLine = "\r\n" };
         foreach (var s in steps)
-            await foreach (var c in CandidatesAsync(s, tool, ct))
+            await foreach (var c in CandidatesAsync(s, tool, ct, deviceArguments))
             {
                 await w.WriteLineAsync(c);
                 if ((++n & 0xffff) == 0) progress?.Report(n);
@@ -136,7 +137,7 @@ public static class CandidateExport
     /// (8-63 characters, the WPA passphrase range). Computed in parallel batches, written in order.
     /// </summary>
     public static async Task<long> WritePmkTableAsync(IEnumerable<PreparedAttack> steps, HashcatTool tool, string path, string ssid,
-        int threads, IProgress<long>? progress, CancellationToken ct)
+        int threads, IProgress<long>? progress, CancellationToken ct, IReadOnlyList<string>? deviceArguments = null)
     {
         long n = 0;
         var ssidBytes = Encoding.UTF8.GetBytes(ssid);
@@ -160,7 +161,7 @@ public static class CandidateExport
         }
 
         foreach (var s in steps)
-            await foreach (var c in CandidatesAsync(s, tool, ct))
+            await foreach (var c in CandidatesAsync(s, tool, ct, deviceArguments))
             {
                 int bytes = Encoding.UTF8.GetByteCount(c);
                 if (bytes is < 8 or > 63) continue;

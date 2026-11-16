@@ -808,7 +808,7 @@ public sealed partial class MainWindow : Window
     private async Task ShowRulesEditorAsync()
     {
         if (!await RequireHashcatAsync()) return;
-        new RulesEditorWindow(_hashcat!, _settings).Show(this);
+        new RulesEditorWindow(_hashcat!, _settings, _devices).Show(this);
     }
 
     private async Task ShowBenchmarkAsync()
@@ -880,14 +880,15 @@ public sealed partial class MainWindow : Window
         {
             int threads = _settings.MaxCpuThreads > 0 ? _settings.MaxCpuThreads : Environment.ProcessorCount;
             var token = _cts.Token;
+            var deviceArguments = HashcatRunner.DeviceArguments(_settings, _devices);
             long n = pmk
-                ? await Task.Run(() => CandidateExport.WritePmkTableAsync(prepared, _hashcat!, w.ResultFile, w.Ssid, threads, progress, token))
-                : await Task.Run(() => CandidateExport.WriteDictionaryAsync(prepared, _hashcat!, w.ResultFile, CandidateExport.EncodingFor(w.OutputEncoding), progress, token));
+                ? await Task.Run(() => CandidateExport.WritePmkTableAsync(prepared, _hashcat!, w.ResultFile, w.Ssid, threads, progress, token, deviceArguments))
+                : await Task.Run(() => CandidateExport.WriteDictionaryAsync(prepared, _hashcat!, w.ResultFile, CandidateExport.EncodingFor(w.OutputEncoding), progress, token, deviceArguments));
             Log(LogKind.Success, pmk ? $"PMK table saved: {w.ResultFile} ({n:N0} PMKs). Use it as the dictionary for WPA handshakes of \"{w.Ssid}\"."
                                      : $"Dictionary saved: {w.ResultFile} ({n:N0} words).");
         }
         catch (OperationCanceledException) { Log(LogKind.Warning, "Generation stopped by user; the file contains the candidates written so far."); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             Log(LogKind.Error, "Generation failed: " + ex.Message);
         }

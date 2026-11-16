@@ -22,9 +22,11 @@ public static partial class DiagnosticHtml
         return value;
     }
 
-    public static string Summary(DiagnosticReport report) => Scrub(string.Join(Environment.NewLine,
+    private static string SetupText(string value) => value.StartsWith(BenchmarkSetup.ExtraPrefix, StringComparison.Ordinal) ? value : Scrub(value);
+
+    public static string Summary(DiagnosticReport report) => string.Join(Environment.NewLine,
         new[] { $"RecoverKit detailed performance test ({report.Started:yyyy-MM-dd})", report.Cancelled ? "Partial report: abandoned." : "" }
-            .Where(s => s.Length > 0).Concat(report.Summary).Append("Save test files exports synthetic targets, exact comparison attacks, measured rates and a results.csv template.")));
+            .Where(s => s.Length > 0).Concat(report.Setup.Count == 0 ? [] : new[] { "Setup" }.Concat(report.Setup.Select(SetupText))).Concat(report.Summary.Select(Scrub)).Append("Save test files exports synthetic targets, exact comparison attacks, measured rates and a results.csv template."));
 
     public static string Render(DiagnosticReport report)
     {
@@ -32,10 +34,14 @@ public static partial class DiagnosticHtml
         var safe = JsonSerializer.SerializeToNode(report, Json)!;
         safe["ComparisonFiles"] = JsonSerializer.SerializeToNode(BenchmarkTestFiles.Comparisons(report), Json);
         ScrubNode(safe);
+        // The user requested their extra arguments verbatim; all other report values remain scrubbed.
+        for (int i = 0; i < report.Setup.Count; i++)
+            if (report.Setup[i].StartsWith(BenchmarkSetup.ExtraPrefix, StringComparison.Ordinal)) safe["Setup"]![i] = report.Setup[i];
         string json = safe.ToJsonString(Json);
         static string H(string? s) => WebUtility.HtmlEncode(Scrub(s ?? ""));
         var html = new StringBuilder("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>RecoverKit performance report</title><style>body{font:15px system-ui,sans-serif;max-width:1400px;margin:2em auto;padding:0 1em;color:#222}table{border-collapse:collapse;width:100%;margin:1em 0}th,td{border:1px solid #ccc;padding:.5em;text-align:left;overflow-wrap:anywhere}th{background:#eee}pre{white-space:pre-wrap}button{padding:.7em}small{color:#555}</style><h1>Detailed performance test</h1><pre id=\"summary\">");
-        html.Append(H(Summary(report))).Append("</pre><button onclick=\"copySummary()\">Copy summary</button><p id=\"copy-status\"></p>")
+        html.Append(WebUtility.HtmlEncode(Summary(report))).Append("</pre><button onclick=\"copySummary()\">Copy summary</button><p id=\"copy-status\"></p>");
+        html.Append("<h2>Setup</h2><pre>").Append(WebUtility.HtmlEncode(string.Join(Environment.NewLine, report.Setup.Select(SetupText)))).Append("</pre>")
             .Append("<small>Only synthetic targets are used. Rates from different targets or lengths are separate measurements. Backend aliases are never added together. Zero rates and failed checks are ineligible for selection.</small><table><tr><th>System</th><th>Value</th></tr>");
         foreach (var (key, value) in report.System) html.Append("<tr><td>").Append(H(key)).Append("</td><td>").Append(H(value)).Append("</td></tr>");
         html.Append("</table>");
@@ -89,7 +95,7 @@ public static partial class DiagnosticHtml
             {
                 html.Append("<tr><td>").Append(H($"{r.Step} / {r.Mode}"))
                     .Append("</td><td>").Append(H($"{r.Target} / {(r.Length > 0 ? r.Length.ToString() : "module default")}"))
-                    .Append("</td><td>").Append(H($"{r.Engine} / {r.Variant}"))
+                    .Append("</td><td>").Append(H($"{r.Details.GetValueOrDefault("Engine", r.Engine)} / {r.Variant}"))
                     .Append("</td><td>").Append(H($"{r.Threads} / {r.DeviceKey} / {r.Backend}"))
                     .Append("</td><td>").Append(r.Correct ? "PASS" : "FAIL / not validated")
                     .Append("</td><td>").Append(r.Speed.ToString("N1", System.Globalization.CultureInfo.InvariantCulture))

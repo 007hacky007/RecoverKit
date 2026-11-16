@@ -1,4 +1,5 @@
 using RecoverKit.Core.Attacks;
+using RecoverKit.Core;
 using RecoverKit.Core.Hashcat;
 using System.Text;
 using Xunit;
@@ -7,6 +8,80 @@ namespace RecoverKit.Tests;
 
 public sealed class CandidateExportTests
 {
+    [Theory]
+    [InlineData("dictionary")]
+    [InlineData("pmk")]
+    [InlineData("preview")]
+    [InlineData("stream")]
+    [InlineData("materialized")]
+    public async Task GeneratorsUseSelectedOpenClTwinWithoutDroppingCandidates(string kind)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string dir = Directory.CreateTempSubdirectory("rk-export-backend").FullName;
+        try
+        {
+            var tool = FakeHashcat(dir, "printf '%s\\n' \"$@\" >> args.txt\ncase \" $* \" in *\" -r \"*) printf 'password1\\npassword2\\n';; *) printf 'x\\ny\\n';; esac\nexit 0");
+            BackendDevice[] devices =
+            [
+                new() { Id = 1, AliasOf = 2, Type = "GPU", Backend = "CUDA", Name = "NVIDIA test" },
+                new() { Id = 2, AliasOf = 1, Type = "GPU", Backend = "OpenCL", Name = "NVIDIA test" },
+            ];
+            var deviceArguments = HashcatRunner.DeviceArguments(new Settings { NvidiaBackend = NvidiaBackend.OpenCl }, devices);
+            string output = Path.Combine(dir, "out.txt");
+            if (kind == "materialized")
+            {
+                string words = Path.Combine(dir, "words.txt"), rules = Path.Combine(dir, "rules.rule");
+                File.WriteAllText(words, "x\ny\n");
+                File.WriteAllText(rules, ":\n");
+                var attack = Step(dir);
+                var spec = await DictionaryKernelPlanner.RuleLengthPassAsync(new AttackSpec { Kind = AttackKind.Dictionary }, attack,
+                    new HashModeInfo { Mode = 22000, PasswordLenMin = 8, PasswordLenMax = 63 }, tool,
+                    output, null, default, deviceArguments);
+                Assert.NotNull(spec);
+                Assert.Equal(["password1", "password2"], File.ReadAllLines(output).Select(s => HashcatTool.DecodePlain(s)));
+                File.Delete(output);
+                await DictionaryKernelPlanner.PreparePassAsync(spec.DictionaryKernel, null, default, tool: tool, deviceArguments: deviceArguments);
+                Assert.Equal(["password1", "password2"], File.ReadAllLines(output).Select(s => HashcatTool.DecodePlain(s)));
+            }
+            else if (kind == "stream")
+            {
+                string words = Path.Combine(dir, "words.txt"), rules = Path.Combine(dir, "rules.rule");
+                File.WriteAllText(words, "password1\npassword2\n");
+                File.WriteAllText(rules, ":\n");
+                var settings = new Settings { NvidiaBackend = NvidiaBackend.Cuda };
+                var pass = new DictionaryKernelPass
+                {
+                    StreamRules = true, RuleExpanded = true, Minimum = 1, Threshold = 256,
+                    RuleInputPath = words, Source = DictionaryFileStamp.Capture(words),
+                    Rules = [DictionaryFileStamp.Capture(rules)], Arguments = ["-a", "0", words], Words = 2,
+                };
+                var prepared = AttackPlanner.Prepare(new AttackSpec { Kind = AttackKind.Dictionary, DictionaryKernel = pass },
+                    new RecoverKit.Core.Formats.HashTarget { FormatId = "test", FormatName = "test", HashLines = "", Protection = "", Modes = [0] },
+                    new PlannerContext { Hashcat = tool, DeviceArguments = () => HashcatRunner.DeviceArguments(settings, devices) });
+                settings.NvidiaBackend = NvidiaBackend.OpenCl;
+                Assert.Equal(["password1", "password2"], prepared.CancellableStdin!(default).Select(s => HashcatTool.DecodePlain(s)));
+            }
+            else if (kind == "preview")
+                Assert.Equal(["password1", "password2"], await tool.ApplyRulesAsync(["password1", "password2"], ":", default, deviceArguments));
+            else if (kind == "pmk")
+            {
+                Assert.Equal(2, await CandidateExport.WritePmkTableAsync([Step(dir)], tool, output, "test", 1, null, default, deviceArguments));
+                Assert.Equal(["password1", "password2"], File.ReadAllLines(output).Skip(1).Select(line => line[65..]));
+            }
+            else
+            {
+                Assert.Equal(2, await CandidateExport.WriteDictionaryAsync([Step(dir)], tool, output, Encoding.UTF8, null, default, deviceArguments));
+                Assert.Equal(["password1", "password2"], File.ReadAllLines(output));
+            }
+            var arguments = File.ReadAllLines(Path.Combine(dir, "args.txt")).ToList();
+            Assert.Contains("-d", arguments);
+            for (int i = 0; i < arguments.Count; i++)
+                if (arguments[i] == "-d") Assert.Equal("2", arguments[i + 1]);
+            Assert.DoesNotContain("--backend-ignore-cuda", arguments);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact]
     public async Task GeneratorFailsWhenHashcatCannotListCandidates()
     {

@@ -37,9 +37,9 @@ public sealed class HashcatDeviceStatusTests : IDisposable
         Assert.Equal(RunOutcome.Exhausted, result.Outcome);
         var status = Assert.Single(emitted);
         Assert.Equal([2, 3], status.Devices.Select(d => d.Id));
-        Assert.Equal(["Integrated AMD GPU", "Discrete AMD GPU"], status.Devices.Select(d => d.Name));
+        Assert.Equal(["Integrated AMD GPU (HIP)", "Discrete AMD GPU (HIP)"], status.Devices.Select(d => d.Name));
         Assert.Equal([2, 3], result.LastStatus!.Devices.Select(d => d.Id));
-        Assert.Equal(["Integrated AMD GPU", "Discrete AMD GPU"], result.LastStatus.Devices.Select(d => d.Name));
+        Assert.Equal(["Integrated AMD GPU (HIP)", "Discrete AMD GPU (HIP)"], result.LastStatus.Devices.Select(d => d.Name));
         Assert.Equal([111d, 999d], status.Devices.Select(d => d.Speed));
         Assert.Equal([51, 62], status.Devices.Select(d => d.Temperature));
         Assert.Equal([75, 95], status.Devices.Select(d => d.Utilization));
@@ -85,7 +85,7 @@ public sealed class HashcatDeviceStatusTests : IDisposable
         var result = await runner.RunAsync(request, CancellationToken.None);
         var device = Assert.Single(result.LastStatus!.Devices);
         Assert.Equal(2, device.Id);
-        Assert.Equal("Processor", device.Name);
+        Assert.Equal("Processor (OpenCL)", device.Name);
         Assert.Equal("CPU", device.Type);
     }
 

@@ -41,6 +41,8 @@ public static class FiniteDiagnosticWorker
         public ProcessPriority Priority { get; set; }
         public int Workload { get; set; }
         public bool OptimizedKernels { get; set; }
+        public string ExtraArguments { get; set; } = "";
+        public NvidiaBackend NvidiaBackend { get; set; }
         public bool GpuTempGuard { get; set; }
         public int GpuTempLimit { get; set; }
         public int GpuTempHysteresis { get; set; }
@@ -76,6 +78,7 @@ public static class FiniteDiagnosticWorker
         Limits = new()
         {
             Priority = settings.Priority, Workload = settings.Workload, OptimizedKernels = settings.OptimizedKernels,
+            ExtraArguments = settings.ExtraArguments, NvidiaBackend = settings.NvidiaBackend,
             GpuTempGuard = settings.GpuTempGuard, GpuTempLimit = settings.GpuTempLimit, GpuTempHysteresis = settings.GpuTempHysteresis,
             GpuDutyPercent = settings.GpuDutyPercent, GpuPowerLimit = settings.GpuPowerLimit, GpuPowerWatts = new(settings.GpuPowerWatts),
         },
@@ -162,9 +165,12 @@ public static class FiniteDiagnosticWorker
         var known = value.KnownDevices.Count > 0
             ? value.KnownDevices.Select(d => devices.FirstOrDefault(selected => selected.Key == d.Key) ?? d.ToDevice()).ToList() : devices;
         var limits = value.Limits;
+        if (value.Count != 0 && !string.IsNullOrWhiteSpace(limits.ExtraArguments))
+            return Failed("Finite built-in CPU and hybrid jobs skipped: extra arguments disable the built-in CPU engine.");
         var settings = new Settings
         {
             Priority = limits.Priority, Workload = limits.Workload, OptimizedKernels = limits.OptimizedKernels,
+            ExtraArguments = limits.ExtraArguments, NvidiaBackend = limits.NvidiaBackend, DeviceSelectionExplicit = true,
             GpuTempGuard = limits.GpuTempGuard, GpuTempLimit = limits.GpuTempLimit, GpuTempHysteresis = limits.GpuTempHysteresis,
             GpuDutyPercent = limits.GpuDutyPercent, GpuPowerLimit = limits.GpuPowerLimit, GpuPowerWatts = limits.GpuPowerWatts,
             DontUsePasswordCache = true, SessionsDir = directory, MaxCpuThreads = value.Limit,
@@ -183,6 +189,7 @@ public static class FiniteDiagnosticWorker
             if (!check.Passed) return Failed("Finite diagnostic CPU correctness check failed: " + DiagnosticHtml.Scrub(check.Error ?? "incorrect result"));
         }
         var tool = HashcatTool.Locate(value.EngineExe) ?? throw new InvalidOperationException("Isolated GPU engine unavailable.");
+        using var invocation = new BenchmarkSetup.Invocation(tool);
         tool.MaxCpuThreads = value.Limit;
         using var tuning = value.ShortPlan ? DiagnosticGpuTuning.Apply(tool, devices) : null;
         var maskArgs = value.MaskArgs ?? new[] { "-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", value.Length)) };
@@ -234,6 +241,8 @@ public static class FiniteDiagnosticWorker
             Details = new() { ["Optimized"] = optimized.ToString(), ["Isolation"] = "Finite job ran in a separate process.", ["GPU temperature guard"] = (run.Guard?.TemperatureGuard ?? false).ToString(), ["GPU duty percent"] = limits.GpuDutyPercent.ToString(CultureInfo.InvariantCulture), ["Configured power limit"] = limits.GpuPowerLimit.ToString() },
         };
         samples.WriteTo(result.Details);
+        BenchmarkSetup.AddExecution(result.Details, settings, known, invocation, value.Count < 0, value.Count > 0,
+            value.Count < 0 ? value.Limit : value.Count, value.Count == 0 ? null : NativeKernels.CpuPath(value.Mode, actualOnly: true));
         if (value.Count > 0)
             result.Details["Actual execution"] = samples.ConcurrentSamples > 0 ? "Concurrent CPU and GPU" : "Adaptive scheduler; no concurrent CPU/GPU sample observed";
         return result;

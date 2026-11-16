@@ -149,6 +149,7 @@ public sealed class HybridRunner
     /// </summary>
     public static bool CpuAddsTooLittle(Settings s, IReadOnlyList<BackendDevice>? devices, int mode)
     {
+        if (s.PerformanceStrategyExplicit) return false;
         var gpus = HashcatRunner.ActiveGpus(s, devices);
         if (gpus.Count == 0 || !gpus.All(d => d.IsIntegratedGpu)) return false;
         return s.CpuSpeedByMode.TryGetValue(mode, out var cpu) && s.GpuSpeedByMode.TryGetValue(mode, out var gpu)
@@ -201,7 +202,8 @@ public sealed class HybridRunner
     internal async Task<RunResult> RunAsync(HybridPlan plan, string hashLine, RunRequest r, IGpuRange gpu, CancellationToken ct)
     {
         var s = r.Settings;
-        if (r.Mode == 29331) { NativeKernels.ConfigureWhirlpool(s); NativeKernels.ResetCpuPath(r.Mode); }
+        if (r.Mode == 29331) NativeKernels.ConfigureWhirlpool(s);
+        NativeKernels.ResetCpuPath(r.Mode);
         string restoreFile = RestoreFile(r.SessionDir, r.SessionName);
         HybridResumePoint? resume = null;
         if (r.Restore && File.Exists(restoreFile))
@@ -370,6 +372,7 @@ public sealed class HybridRunner
         private long _leftoverCount, _leftoverBytes, _leftoverLo, _leftoverProgress, _cpuHashed;
         private bool _leftoverRunning;
         private bool _cpuHashing;
+        private int _cpuThreads;
 
         public double CpuSpeed { get; private set; }
         public double GpuSpeed { get; private set; }
@@ -643,7 +646,8 @@ public sealed class HybridRunner
         private void CheckIntegratedGpus(HashcatStatus st)
         {
             var known = _owner.Devices;
-            if (known is null || st.Status != 3 || _gpuStatuses < 3) return;
+            if (known is null || st.Status != 3 || _gpuStatuses < 3 || _r.Settings.DeviceSelectionExplicit
+                || _r.Settings.PerformanceStrategyExplicit || _r.Settings.DisabledDeviceKeys.Count > 0 || _r.Settings.DisabledDevices.Count > 0) return;
             var active = HashcatRunner.ActiveGpus(_r.Settings, known);
             if (!active.Any(d => !d.IsIntegratedGpu)) return;
             double perThread = CpuSpeed / Math.Max(1, Threads(true));
@@ -742,7 +746,7 @@ public sealed class HybridRunner
             {
                 var devices = new List<DeviceSpeed>();
                 if (_hcRunning && DateTime.UtcNow - _gpuStatusAt < TimeSpan.FromSeconds(10)) devices.AddRange(_gpuDevices);
-                devices.Add(new DeviceSpeed { Id = 0, Name = _r.Mode == 29331 ? $"CPU (built-in engine, {NativeKernels.CpuPath(_r.Mode, actualOnly: true)})" : "CPU (built-in engine)", Type = "CPU",
+                devices.Add(new DeviceSpeed { Id = 0, Name = $"CPU (built-in engine, {NativeKernels.CpuPath(_r.Mode, actualOnly: true)}, {_cpuThreads} threads)", Type = "CPU",
                     Speed = CpuIdle() || _order.Dictionary is not null && !_cpuHashing ? 0 : CpuSpeed });
                 st = new HashcatStatus
                 {
@@ -885,7 +889,7 @@ public sealed class HybridRunner
             var gate = new object();
             int threads = Threads(hashcatRunning);
             var hashing = Stopwatch.StartNew();
-            lock (_lock) _cpuHashing = true;
+            lock (_lock) { _cpuHashing = true; _cpuThreads = threads; }
             DebugLog.Info($"Hybrid CPU hashing: [{lo}, {hi}), {threads} threads, ordinal {from}");
             Parallel.For(0, threads, new ParallelOptions { MaxDegreeOfParallelism = threads }, _ =>
             {
@@ -1022,9 +1026,10 @@ public sealed class HybridRunner
             {
                 var box = boxes[b];
                 long boxBefore = before;
+                int threads = Threads(hashcatRunning);
                 var engine = new NativeEngine(_kernel, box)
                 {
-                    Threads = Threads(hashcatRunning),
+                    Threads = threads,
                     Priority = NativeRunner.ThreadPriorityFor(_r.Settings.Priority),
                     ProgressInterval = TimeSpan.FromMilliseconds(500),
                     Confirm = _r.ConfirmPassword,
@@ -1032,7 +1037,7 @@ public sealed class HybridRunner
                 };
                 engine.Progress += p => { lock (_lock) _batchDone = boxBefore + p.Done; };
                 var resumeAt = b == box0 && prefix0 > 0 ? new NativeResumePoint { Length = _len, PrefixIndex = prefix0 } : null;
-                lock (_lock) { _box = b; _boxPrefix = prefix0; }
+                lock (_lock) { _box = b; _boxPrefix = prefix0; _cpuThreads = threads; }
                 var res = engine.Run(resumeAt, stop);
                 switch (res.Outcome)
                 {

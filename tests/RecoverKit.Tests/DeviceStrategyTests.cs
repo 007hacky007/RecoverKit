@@ -166,17 +166,17 @@ public class DeviceStrategyTests
         """;
 
     [Fact]
-    public void DiscreteAndIntegratedGpusAreBothUsed()
+    public void AutomaticSelectionUsesOnlyTheDedicatedGpu()
     {
         // hashcat prints no "Type" for CUDA and HIP devices: they used to count as "not a GPU", and with
         // their OpenCL aliases skipped RecoverKit saw no GPU at all.
         var devs = HashcatTool.ParseDevices(TwoGpuInfo);
         Assert.Equal(4, devs.Count);
         var active = HashcatRunner.ActiveGpus(new Settings(), devs);
-        Assert.Equal([1, 2], active.Select(d => d.Id));                       // one of each pair, both GPUs
+        Assert.Equal([1], active.Select(d => d.Id));
         Assert.False(devs[0].IsIntegratedGpu);
         Assert.True(devs[1].IsIntegratedGpu);
-        Assert.Empty(Args(DeviceStrategy.GpuOnly, [.. devs]));                  // hashcat's default already uses both
+        Assert.Equal(["-d", "1", "--backend-ignore-hip"], Args(DeviceStrategy.GpuOnly, [.. devs]));
         Assert.Equal("CUDA|NVIDIA GeForce RTX 4060|0", devs[0].Key);
         Assert.Equal("OpenCL|AMD Radeon(TM) Graphics|0", devs[3].Key);
     }

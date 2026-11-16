@@ -74,7 +74,7 @@ public static class MatchedSpeedProbe
             {
                 runner.StatusReceived += received;
                 return runner.RunAsync(request, token);
-            }, hybrid ? token => NativeKernels.Benchmark(mode, threads, duration, token, LengthFor(mode)) : null, ct);
+            }, hybrid ? token => NativeKernels.Benchmark(mode, threads, duration, token, LengthFor(mode), NativeRunner.ThreadPriorityFor(settings.Priority)) : null, ct);
         }
         finally
         {

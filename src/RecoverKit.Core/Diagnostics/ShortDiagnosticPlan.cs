@@ -15,7 +15,7 @@ public sealed partial class DetailedBenchmarkRunner
     {
         var clock = Stopwatch.StartNew();
         var report = new DiagnosticReport { CpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "cpu"), GpuPolicy = PerformanceProfiles.PolicyFingerprint(settings, "gpu") };
-        if (selected.Length == 0) { report.Finished = DateTimeOffset.UtcNow; return report; }
+        if (selected.Length == 0) { CompleteSetup(report); report.Finished = DateTimeOffset.UtcNow; return report; }
         var plan = new DiagnosticPlan { TotalBudget = TimeSpan.FromSeconds(ShortBudgets.Values.Sum()), SectionBudgets = ShortBudgets };
         report.Plan = plan.Steps;
         report.System["Test plan"] = $"Default: {ShortBudgets.Values.Sum()} seconds for work, 5 seconds reserved for cleanup and profile storage";
@@ -57,7 +57,8 @@ public sealed partial class DetailedBenchmarkRunner
             }
             report.System["hashcat version"] = tool.FullVersion;
             foreach (var d in devices) report.System[$"Device {d.Id}"] = $"{d.Name}; {d.Backend}; driver {d.DriverVersion}; alias {d.AliasOf}; skipped {d.IsSkippedAlias}";
-            gpuAllowed = HashcatRunner.ActiveGpus(settings, devices).Count > 0 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
+            gpuAllowed = HashcatRunner.NvidiaBackendError(settings, devices) is null && HashcatRunner.ActiveGpus(settings, devices).Count > 0
+                && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
         foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 12500, 13000, 13600, 22000, 17200, 17210, 29331 } : Array.Empty<int>())
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && (v.Name is "avx2" or "avx512" || mode == 29331 && v.Name == "scalar")))
@@ -141,10 +142,13 @@ public sealed partial class DetailedBenchmarkRunner
             {
                 var dev = Chosen(0)!;
                 bool correct = await GpuZipCorrectness.CheckAsync(local!, dev, sample, variant, token);
-                double speed = correct ? await new ZipKernelBenchmark(local!) { Seconds = 2, Mask = BenchmarkTestFiles.Mask, Charset1 = BenchmarkTestFiles.Charset, Priority = settings.Priority, BoundedTuning = true }.MeasureAsync(sample, dev, variant, token) : 0;
-                report.Measurements.Add(new() { Section = "zip", Step = sample.Label, Target = "synthetic ZIP " + sample.Label, Mode = sample.Mode, Length = 7,
+                using var invocation = new BenchmarkSetup.Invocation(local!);
+                double speed = correct ? await new ZipKernelBenchmark(local!) { Seconds = 2, Mask = BenchmarkTestFiles.Mask, Charset1 = BenchmarkTestFiles.Charset, Priority = settings.Priority, Workload = settings.Workload, ExtraArguments = settings.ExtraArguments, BoundedTuning = true }.MeasureAsync(sample, dev, variant, token) : 0;
+                var row = new DiagnosticMeasurement { Section = "zip", Step = sample.Label, Target = "synthetic ZIP " + sample.Label, Mode = sample.Mode, Length = 7,
                     Variant = variant, Engine = "gpu", DeviceKey = dev.Key, Backend = dev.Backend, Speed = speed, Correct = correct, Repeat = repeat,
-                    Error = correct ? null : "GPU correctness failed", Details = ComparisonDetails(sample) });
+                    Error = correct ? null : "GPU correctness failed", Details = ComparisonDetails(sample) };
+                BenchmarkSetup.AddExecution(row.Details, settings, devices, invocation);
+                report.Measurements.Add(row);
             }, () => gpuAllowed && Chosen(0) is not null && (repeat == 1 || NeedsConfirmation(report.Measurements, "zip", sample.Mode, variant)));
         if (!selected.Contains("cpu"))
             foreach (int mode in new[] { 13000, 17210 })
@@ -175,6 +179,7 @@ public sealed partial class DetailedBenchmarkRunner
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { report.Cancelled = true; }
         finally
         {
+            CompleteSetup(report);
             pulse.Change(Timeout.Infinite, Timeout.Infinite);
             if (isolated is not null) try { Directory.Delete(isolated, true); } catch (IOException) { }
         }
@@ -242,8 +247,9 @@ public sealed partial class DetailedBenchmarkRunner
         string hash = comparison?.Hash ?? NativeKernels.BenchmarkHashes.GetValueOrDefault(mode) ?? (await local.ModeInfoAsync(mode, 3, ct))?.ExampleHash
             ?? throw new InvalidOperationException("No synthetic target available.");
         bool optimized = settings.OptimizedKernels && (await local.ModeInfoAsync(mode, 3, ct))?.HasOptimizedKernel == true;
+        using var invocation = new BenchmarkSetup.Invocation(local);
         var sample = new ZipKernelBenchmark.Sample(comparison?.FileName ?? "native synthetic fixture mode " + mode, mode, hash);
-        double speed = await new ZipKernelBenchmark(local) { Seconds = 3, Optimized = optimized, Mask = comparison is null ? "?u?u?u?u?u?u?u" : BenchmarkTestFiles.Mask, Charset1 = comparison is null ? null : BenchmarkTestFiles.Charset, Priority = settings.Priority, BoundedTuning = true }.MeasureAsync(sample, dev, "replacement", ct);
+        double speed = await new ZipKernelBenchmark(local) { Seconds = 3, Optimized = optimized, Mask = comparison is null ? "?u?u?u?u?u?u?u" : BenchmarkTestFiles.Mask, Charset1 = comparison is null ? null : BenchmarkTestFiles.Charset, Priority = settings.Priority, Workload = settings.Workload, ExtraArguments = settings.ExtraArguments, BoundedTuning = true }.MeasureAsync(sample, dev, "replacement", ct);
         var row = new DiagnosticMeasurement { Section = "gpu", Step = step, Mode = mode, Target = sample.Label, Length = 7, Engine = "gpu", Variant = "default", DeviceKey = dev.Key, Backend = dev.Backend,
             Speed = speed, Correct = speed > 0, Repeat = 1, ElapsedSeconds = timer.Elapsed.TotalSeconds,
             Error = speed > 0 ? null : "No valid live rate within this window", Details = new() { ["Mask"] = comparison is null ? "brute force, uppercase letters, length 7" : BenchmarkTestFiles.Attack, ["Optimized"] = optimized.ToString(), ["Short plan"] = "True" } };
@@ -252,6 +258,7 @@ public sealed partial class DetailedBenchmarkRunner
             row.Details["Test file"] = comparison.FileName;
             row.Details["Attack"] = BenchmarkTestFiles.Attack;
         }
+        BenchmarkSetup.AddExecution(row.Details, settings, devices, invocation);
         return row;
     }
 }

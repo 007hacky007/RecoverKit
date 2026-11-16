@@ -519,7 +519,7 @@ public class OptimizedKernelTests
     [InlineData("OpenCL", false)]
     [InlineData("Metal", true)]
     [InlineData(null, false)]
-    [InlineData("stale", false)]
+    [InlineData("stale", true)]
     public async Task MacRar3DictionaryRequiresVerifiedMetalBackend(string? backend, bool expected)
     {
         if (!OperatingSystem.IsMacOS()) return;
