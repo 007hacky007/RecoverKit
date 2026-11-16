@@ -103,6 +103,8 @@ public sealed class WordlistDownloads
         if (job.Finished) return;
         job.Progress = new("Preparing", 0, 0);
         string? part = null, unpacked = null;
+        // Completing the job lets waiters look at the folder, so it happens only after the cleanup below.
+        Action? complete = null;
         var detail = job.Detail;
         var library = job.Library;
         var ct = job.Cancellation.Token;
@@ -141,7 +143,7 @@ public sealed class WordlistDownloads
             var item = await library.PublishAsync(detail, unpacked, ct);
             library.RemovePartial(detail, part);
             Report(job, new("Ready", detail.Size, detail.Size));
-            job.Result.TrySetResult(item);
+            complete = () => job.Result.TrySetResult(item);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -149,26 +151,28 @@ public sealed class WordlistDownloads
             {
                 if (part is not null && !job.KeepPartial) library.RemovePartial(detail, part);
                 job.Progress = new("Cancelled", 0, 0);
-                job.Result.TrySetCanceled(ct);
+                complete = () => job.Result.TrySetCanceled(ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 job.Error = "Could not remove the partial download: " + ex.Message;
                 job.Progress = new("Failed", 0, 0);
-                job.Result.TrySetException(new IOException(job.Error, ex));
+                complete = () => job.Result.TrySetException(new IOException(job.Error, ex));
             }
         }
         catch (Exception ex)
         {
             job.Error = $"{detail.Name}: {ex.Message}";
             job.Progress = new("Failed", 0, 0);
-            job.Result.TrySetException(ex is IOException ? ex : new IOException(job.Error, ex));
+            complete = () => job.Result.TrySetException(ex is IOException ? ex : new IOException(job.Error, ex));
         }
         finally
         {
             try { if (unpacked is not null && File.Exists(unpacked)) File.Delete(unpacked); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { job.Error = "Could not remove the temporary wordlist: " + ex.Message; }
-            Changed?.Invoke(job);
+            // Changed handlers check Finished, so complete first.
+            try { complete?.Invoke(); }
+            finally { Changed?.Invoke(job); }
         }
     }
 
