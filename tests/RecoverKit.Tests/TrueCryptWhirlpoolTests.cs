@@ -15,6 +15,17 @@ namespace RecoverKit.Tests;
 [Collection("NativeFeatures")]
 public class TrueCryptWhirlpoolTests
 {
+    [Theory]
+    [InlineData("scalar")]
+    [InlineData("avx512")]
+    [Trait("Category", "Slow")]
+    public void InProcessBenchmarkReportsRateInsideEightSecondWindow(string variant)
+    {
+        if (!RkNative.Available || variant == "avx512" && !KernelVariants.Supported(29331, variant)) return;
+        using var selection = KernelVariants.Select(29331, variant);
+        Assert.True(NativeKernels.Benchmark(29331, Math.Min(15, Environment.ProcessorCount), TimeSpan.FromSeconds(8), length: 7) > 0);
+    }
+
     [Fact]
     public void ExperimentalSettingDefaultsOffAndRoundTrips()
     {

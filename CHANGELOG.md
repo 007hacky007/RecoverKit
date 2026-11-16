@@ -10,6 +10,11 @@ All notable changes to RecoverKit. Downloads are on the
   GPU is discrete. With only integrated GPUs, hybrid still needs an explicit choice or a measured
   whole-job win. Performance preferences and measured engine choices still apply.
 
+### Fixed
+- The benchmark keeps hashcat's measured speed when hashcat stops at its time limit before sending
+  a running status, so a CPU + GPU row no longer shows "not supported on this device" for that
+  reason. The debug log names the side that failed when a benchmark rate is unavailable.
+
 ## [1.7.2] - 2026-11-16
 
 ### Fixed
