@@ -292,16 +292,29 @@ step reruns on the CPU automatically.
 `ZipArchiveSource.Open(path)` is the shared ZIP opener used by `FormatDetector`, the large-entry
 ZipCrypto kernel and the Stay input readers. It discovers siblings from any selected part:
 
-- PKZIP spanned archives: `name.z01`, `name.z02`, ..., `name.zip`. The final `.zip` EOCD or
-  ZIP64 locator supplies the disk count. All preceding parts are required and the first part
-  must start with `0x08074b50`. Sibling matching ignores case and gaps name the missing part.
-- Byte-split archives: `name.zip.001`, `name.zip.002`, ... . All numbered siblings must be
-  contiguous from `.001`; a missing end record names the next required part. These use the
-  existing `MultiVolumeStream` concatenation, as split 7-Zip archives do.
+- PKZIP spanned archives: `name.z01`, `name.z02`, ..., `name.zip`. The final `.zip` is required.
+  Its EOCD or ZIP64 locator supplies the disk count. Disks holding the ZIP64 locator/record or any
+  of the central directory are required; other disks can be absent, including `.z01`. When present,
+  `.z01` must start with `0x08074b50`. Sibling matching ignores case. Disk numbers never shift.
+- Byte-split archives: `name.zip.001`, `name.zip.002`, ... . The final part holding the EOCD is
+  required. Partial sets use the first present nonfinal part's size as the fixed volume size;
+  every present nonfinal part must have that size and the final part cannot be larger. Otherwise
+  partial mode refuses to guess offsets and names the missing parts. A final part alone cannot
+  establish the volume size. Complete sets retain concatenation with variable part sizes.
+  A missing end record names the next required part; the format has no separate part-count field.
 
 Both layouts read volumes in place. No joined archive or full-volume buffer is created.
 `MultiVolumeStream.DiskRelative` marks PKZIP input; `DiskOffset` translates a disk number and
 an offset within that disk into a logical position, rejecting offsets outside the named part.
+Missing byte-split parts reserve their known length. Missing spanned disks use unreadable barriers
+in the logical stream because their lengths are unknown; logical positions are never used as ZIP
+archive offsets. `DiskOffset` and reads through holes throw `MissingZipPartException`, naming the
+absent part. EOCD searching reads only the contiguous present suffix, so it does not touch an
+optional missing disk. The Parts detail gives the present count and ranges of missing names.
+Discovery caps the part count at 100,000 before allocating paths. If the ZIP64 locator straddles a
+missing preceding disk, its surviving final disk-count field still identifies the required disk.
+When even that field is incomplete and the preceding disk cannot be identified, detection refuses
+without guessing a filename and asks for the part immediately before the final `.zip`.
 `ZipExtractor` resolves the central directory using the EOCD/ZIP64 disk and offset, follows the
 ZIP64 locator's own disk/offset, and resolves each local header using its central record's start
 disk. ZIP64 extra field `0x0001` is consumed in order: uncompressed size, compressed size, local
@@ -313,8 +326,17 @@ confirmation budgets still apply, including the 64 MiB limit for an embedded AES
 Before using a split entry, the local signature, raw name, flags, method, DOS timestamps, sizes, CRC and AES
 metadata must agree with the central record. Data-descriptor placeholders are allowed. A mismatch
 fails detection without a target, including a mismatch in a confirmation entry. Single-file local
-headers retain their previous tolerance. Large ZipCrypto verification reopens the complete sibling
-set and reads the whole attacked entry only for candidates that survive the prefix check.
+headers retain their previous tolerance. Selection in a partial set considers only entries whose
+validated local header and entire compressed body fit in consecutive present parts. The existing
+cost rules choose among them. Confirmation siblings must also be fully available, even when only
+their headers are retained. If no usable entry is available, the error lists up to three candidates
+by compressed size and their missing parts. For an absent spanned disk or local header, more parts
+may be needed once that first blocker is supplied, because its size cannot be inferred.
+
+Partial sets always confirm the attacked entry against its complete CRC (ZipCrypto) or HMAC (AES).
+Large ZipCrypto verification reopens the available sibling set and reads the whole attacked entry
+only for candidates that survive the prefix check. Its saved position remains disk-relative for
+spanned input, so adding or removing unrelated parts does not redirect verification.
 `ZipPasswordConfirmer` keeps its bounded data/header checks in memory and needs no path reopen.
 The CLI `info` alias and `extract` use the same detector as `crack` and the GUI. Dependency repair
 reuses detection; there is no separate encrypted-ZIP repair/extraction reader to join volumes.
@@ -325,7 +347,10 @@ split input before creating output. Normal dictionary, mask and password confirm
 
 Small real-tool fixtures and their regeneration script are in `tests/fixtures/zip-split`.
 `ZipSplitTests` covers both layouts, ZIP64 fields and sparse offsets beyond 4 GiB, disk crossings,
-missing parts, local-header mismatches, single-file compatibility and joined-reference hashes.
+partial sets, missing directory disks, local-header mismatches, single-file compatibility and
+joined-reference hashes. Real Info-ZIP fixtures recover with just the final disk present; the
+single-entry 7-Zip fixtures need all their data and directory parts. Padded copies of the AES
+fixtures exercise partial sets, since no original fixture part can be omitted.
 The `ZipSplitCliTests` slow tests require a built CLI and `RECOVERKIT_TEST_HASHCAT` pointing at a
 private hashcat 8.0.0 installation:
 

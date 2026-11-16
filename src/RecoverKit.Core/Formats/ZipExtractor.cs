@@ -52,8 +52,36 @@ public static class ZipExtractor
             return;
         }
 
+        if (s is MultiVolumeStream { HasMissingParts: true })
+        {
+            var available = new List<ZipEntry>();
+            var missing = new List<(ZipEntry Entry, MissingZipPartException Error)>();
+            foreach (var entry in enc)
+            {
+                try { EntryDataOffset(s, entry, delta); available.Add(entry); }
+                catch (MissingZipPartException ex) { missing.Add((entry, ex)); }
+            }
+            bool Suitable(ZipEntry entry) => entry.AesStrength > 0 || (entry.Method is 0 or 8 && entry.CompSize > 12);
+            if (!available.Any(Suitable) && missing.Any(x => Suitable(x.Entry)))
+                throw new UnsupportedFormatException("No encrypted entry is fully available. " + string.Join(" or ",
+                    missing.Where(x => Suitable(x.Entry)).OrderBy(x => x.Entry.CompSize).Take(3).Select(x =>
+                        $"Add part {string.Join(", ", x.Error.Parts.Select(Path.GetFileName))} (entry {x.Entry.Name}, {x.Entry.CompSize:N0} bytes)")) +
+                    ". Further parts may be needed after a missing local header or spanned disk is supplied.");
+            enc = available;
+        }
+
         var aes = enc.Where(e => e.AesStrength > 0).OrderBy(e => e.CompSize).FirstOrDefault();
-        if (aes is not null) { d.Target = WinZipAes(s, aes, delta, d); return; }
+        if (aes is not null)
+        {
+            d.Target = WinZipAes(s, aes, delta, d);
+            if (s is MultiVolumeStream { HasMissingParts: true })
+            {
+                var kernel = Native.Kernels.WinZipAesKernel.TryParse(d.Target.HashLines)
+                    ?? throw new FormatException("The AES entry cannot be checked from the archive.");
+                d.Target.ConfirmPassword = password => kernel.Verify(password);
+            }
+            return;
+        }
 
         var classic = ChooseClassic(enc, legacy);
         if (classic is null)
@@ -77,9 +105,9 @@ public static class ZipExtractor
             d.Add("Also checked against", $"{confirmer.Entries} other encrypted file(s)" +
                   (confirmer.FullChecks < confirmer.Entries ? $" ({confirmer.FullChecks} with their whole data)" : ""));
         }
-        if (d.Target.ZipPartial is { } partial)
+        if (d.Target.ZipPartial is not null || s is MultiVolumeStream { HasMissingParts: true })
         {
-            var kernel = Native.Kernels.ZipCryptoKernel.TryParse(d.Target.HashLines, partial)
+            var kernel = Native.Kernels.ZipCryptoKernel.TryParse(d.Target.HashLines, d.Target.ZipPartial)
                 ?? throw new FormatException("The ZIP entry cannot be checked from the archive.");
             d.Target.ConfirmPassword = password => (confirmer?.Confirm(password) ?? true) && kernel.Verify(password);
         }
@@ -114,7 +142,7 @@ public static class ZipExtractor
         if (deflated is null || stored is null) return deflated ?? stored;
         // A stored prefix cannot be checked safely on the GPU; keep a deflated fallback.
         if (!legacy && stored.CompSize > HashcatMaxData) return deflated;
-        bool confirmation = enc.Any(e => e != stored && e.LocalOffset != stored.LocalOffset && e.AesStrength == 0 && e.CompSize >= 12);
+        bool confirmation = enc.Any(e => e != stored && (e.Disk != stored.Disk || e.LocalOffset != stored.LocalOffset) && e.AesStrength == 0 && e.CompSize >= 12);
         double ratio = !legacy && confirmation ? StoredRate / DeflatedRate : 1.0 / 8;
         return stored.CompSize <= deflated.CompSize * ratio ? stored : deflated;
     }
@@ -158,7 +186,7 @@ public static class ZipExtractor
     /// </summary>
     private static ZipPasswordConfirmer? BuildConfirmer(Stream s, List<ZipEntry> enc, ZipEntry attacked, long delta)
     {
-        var others = enc.Where(e => e != attacked && e.LocalOffset != attacked.LocalOffset && e.AesStrength == 0 && e.CompSize >= 12)
+        var others = enc.Where(e => e != attacked && (e.Disk != attacked.Disk || e.LocalOffset != attacked.LocalOffset) && e.AesStrength == 0 && e.CompSize >= 12)
             .OrderBy(e => e.Method is 0 or 8 && e.CompSize <= MaxFullCheckEntry ? 0 : 1)
             .ThenBy(e => e.CompSize)
             .ToList();
@@ -270,13 +298,29 @@ public static class ZipExtractor
             HashLines = PkzipLine(e, data, partial),
             Speed = SpeedClass.VeryFast,
             ZipPartial = partial
-                ? new(d.FilePath, offset, e.CompSize, e.UncompSize, e.Crc, e.Method) { Siblings = confirmer?.HeaderChecks ?? [] }
+                ? CreatePartialTarget(s, d.FilePath, offset, e, confirmer)
                 : null,
             Notes = partial
                 ? e.Method == 0
                     ? "Only the beginning of the file fits the GPU check; this uncompressed file uses the CPU to avoid missing the password."
                     : "Only the beginning of the file is given to the GPU; passwords are checked against the whole file."
                 : notes,
+        };
+    }
+
+    private static ZipPartialTarget CreatePartialTarget(Stream s, string path, long offset, ZipEntry e, ZipPasswordConfirmer? confirmer)
+    {
+        uint? disk = null;
+        if (s is MultiVolumeStream { DiskRelative: true } volumes)
+        {
+            var position = volumes.DiskPosition(offset);
+            disk = position.Disk;
+            offset = position.Offset;
+        }
+        return new(path, offset, e.CompSize, e.UncompSize, e.Crc, e.Method)
+        {
+            ArchiveDisk = disk,
+            Siblings = confirmer?.HeaderChecks ?? []
         };
     }
 
@@ -379,7 +423,8 @@ public static class ZipExtractor
     internal static long FindEocd(Stream s)
     {
         if (s.Length < 22) return -1;
-        int tail = (int)Math.Min(s.Length, 65535 + 22);
+        long available = s is MultiVolumeStream volumes ? s.Length - volumes.AvailableTailStart : s.Length;
+        int tail = (int)Math.Min(available, 65535 + 22);
         var buf = Bin.ReadAt(s, s.Length - tail, tail);
         for (int i = buf.Length - 22; i >= 0; i--)
             if (buf[i] == 0x50 && buf[i + 1] == 0x4B && buf[i + 2] == 0x05 && buf[i + 3] == 0x06
@@ -401,7 +446,12 @@ public static class ZipExtractor
         bool needs64 = cdSize == uint.MaxValue || cdOffset == uint.MaxValue
             || disk == ushort.MaxValue || cdDisk == ushort.MaxValue;
         bool has64 = false;
-        if (eocd >= 20)
+        if (needs64 && volumes is not null && eocd - 20 < volumes.AvailableTailStart)
+        {
+            uint tailDisk = volumes.DiskPosition(volumes.AvailableTailStart).Disk;
+            if (tailDisk > 0) volumes.RequireDisks(tailDisk - 1, tailDisk - 1);
+        }
+        if (eocd >= 20 && (volumes is null || needs64 || eocd - 20 >= volumes.AvailableTailStart))
         {
             var loc = Bin.ReadAt(s, eocd - 20, 20);
             if (Bin.U32(loc, 0) == 0x07064b50)
@@ -412,8 +462,15 @@ public static class ZipExtractor
                 long z64 = ResolveOffset(s, zDisk, zOffset);
                 var z = Bin.ReadAt(s, z64, 56);
                 Bin.Need(z, 0, 56);
-                if (Bin.U32(z, 0) != 0x06064b50 || Zip64Value(z, 4) < 44)
+                long recordSize = Zip64Value(z, 4);
+                if (Bin.U32(z, 0) != 0x06064b50 || recordSize < 44 || recordSize > long.MaxValue - 12)
                     throw new FormatException("Bad ZIP64 end of central directory.");
+                if (volumes is not null)
+                {
+                    volumes.EnsureAvailable(z64, recordSize + 12);
+                    if (recordSize + 12 > eocd - 20 - z64)
+                        throw new FormatException("ZIP64 end record overlaps its locator.");
+                }
                 disk = Bin.U32(z, 16);
                 cdDisk = Bin.U32(z, 20);
                 // Some single-file ZIP64 writers store 0 as the total disk count.
@@ -429,14 +486,25 @@ public static class ZipExtractor
             }
         }
         if (needs64 && !has64) throw new FormatException("ZIP64 locator is missing.");
-        if (cdSize > 256L * 1024 * 1024 || cdSize > expectedEnd)
+        if (cdSize > 256L * 1024 * 1024 || (!spanned && cdSize > expectedEnd))
             throw new FormatException("ZIP central directory is too large or truncated.");
         if (spanned)
         {
             // The ZIP64 record may precede the locator on another disk; the EOCD names the last disk.
             if (!has64) volumes!.ValidateDiskCount(disk + 1);
             delta = 0;
-            cdStart = ResolveOffset(s, cdDisk, cdOffset);
+            try
+            {
+                cdStart = ResolveOffset(s, cdDisk, cdOffset);
+                volumes!.EnsureAvailable(cdStart, cdSize);
+            }
+            catch (MissingZipPartException)
+            {
+                // Report the directory's missing disks together. If its bytes already fit in
+                // present disks, padding between the directory and end records stays optional.
+                volumes!.RequireDisks(cdDisk, disk);
+                throw;
+            }
         }
         else
         {
@@ -449,6 +517,7 @@ public static class ZipExtractor
         if (cdSize > expectedEnd - cdStart)
             throw new FormatException("ZIP central directory is too large or truncated.");
 
+        volumes?.EnsureAvailable(cdStart, cdSize);
         var cdBytes = Bin.ReadAt(s, cdStart, (int)cdSize);
         cd = cdBytes;
         var list = new List<ZipEntry>();
@@ -477,7 +546,12 @@ public static class ZipExtractor
             bool extra64 = ParseExtra(cdBytes, p + 46 + nameLen, extraLen, ze);
             if (needsExtra64 && !extra64)
                 throw new FormatException("ZIP64 entry extra field is missing or incomplete.");
-            ze.LocalOffset = ResolveOffset(s, ze.Disk, ze.LocalOffset);
+            if (spanned)
+            {
+                // Check disk numbers even for unavailable entries, but defer disk-relative offsets.
+                if (ze.Disk >= volumes!.Paths.Count) throw new FormatException("ZIP entry disk number is outside the archive.");
+            }
+            else if (ze.Disk != 0) throw new FormatException("ZIP entry requires split ZIP parts.");
             list.Add(ze);
             p += 46 + nameLen + extraLen + commentLen;
         }
@@ -538,9 +612,10 @@ public static class ZipExtractor
     /// <summary>Absolute offset of an entry's stored body, after validating its local record.</summary>
     private static long EntryDataOffset(Stream s, ZipEntry e, long delta)
     {
-        if (delta < 0 || delta > s.Length || e.LocalOffset < 0 || e.LocalOffset > s.Length - delta)
+        long localOffset = ResolveOffset(s, e.Disk, e.LocalOffset);
+        if (delta < 0 || delta > s.Length || localOffset < 0 || localOffset > s.Length - delta)
             throw new FormatException("ZIP local header offset is outside the archive.");
-        long lh = e.LocalOffset + delta;
+        long lh = localOffset + delta;
         var h = Bin.ReadAt(s, lh, 30);
         Bin.Need(h, 0, 30);
         if (Bin.U32(h, 0) != 0x04034b50) throw new FormatException("Bad ZIP local header.");
@@ -566,7 +641,7 @@ public static class ZipExtractor
             || local.AesStrength != e.AesStrength || local.AesMethod != e.AesMethod)
             throw new FormatException($"ZIP local sizes or encryption do not match the central directory for '{e.Name}'.");
         long dataOff = checked(lh + 30 + nameLen + extraLen);
-        if (e.CompSize > s.Length - dataOff) throw new FormatException("ZIP entry is truncated.");
+        ((MultiVolumeStream)s).EnsureAvailable(dataOff, e.CompSize);
         return dataOff;
     }
 

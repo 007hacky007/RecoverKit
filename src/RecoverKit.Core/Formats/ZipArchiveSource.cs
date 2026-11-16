@@ -15,12 +15,29 @@ public static partial class ZipArchiveSource
             string stem = numbered.Groups[1].Value;
             int width = numbered.Groups[2].Value.Length;
             var siblings = NumberedSiblings(stem, width);
-            var paths = Contiguous(stem, width, siblings);
-            var stream = new MultiVolumeStream(paths);
+            var paths = NumberedPaths(stem, width, siblings);
+            bool partial = paths.Any(p => !File.Exists(p));
+            long? volumeSize = null;
+            if (partial)
+            {
+                var nonfinal = paths.Take(paths.Count - 1).Where(File.Exists).ToArray();
+                if (nonfinal.Length > 0) volumeSize = new FileInfo(nonfinal[0]).Length;
+                if (volumeSize is null or <= 0 || nonfinal.Any(p => new FileInfo(p).Length != volumeSize)
+                    || new FileInfo(paths[^1]).Length > volumeSize)
+                    throw new UnsupportedFormatException("Cannot determine byte-split ZIP offsets from unequal or unknown volume sizes. Add missing part(s): " +
+                        string.Join(", ", paths.Where(p => !File.Exists(p)).Select(Path.GetFileName)) + ".");
+            }
+            var stream = new MultiVolumeStream(paths, missingPartSize: volumeSize);
             try
             {
                 if (ZipExtractor.FindEocd(stream) < 0)
+                {
+                    // The EOCD itself can cross into the final part. Restore the preceding hole
+                    // before deciding that the highest numbered sibling is not the final part.
+                    uint tailDisk = stream.DiskPosition(stream.AvailableTailStart).Disk;
+                    if (tailDisk > 0) stream.RequireDisks(tailDisk - 1, tailDisk - 1);
                     throw Missing(stem + (paths.Count + 1).ToString().PadLeft(width, '0'));
+                }
                 return stream;
             }
             catch { stream.Dispose(); throw; }
@@ -57,32 +74,49 @@ public static partial class ZipArchiveSource
             if (disks <= 1 && !isPart) return OpenFile(path);
             var siblings = NumberedSiblings(basePath + ".z", 2);
             // A ZIP64 locator can begin on the preceding disk even when the EOCD uses sentinels.
-            if (disks == 65536 && end < 20)
+            if (disks == 65536 && end is >= 4 and < 20)
             {
-                var available = Contiguous(basePath + ".z", 2, siblings);
+                // The locator's last field can survive even when its signature is on a missing disk.
+                // Use it for discovery; the extractor still requires and validates the full locator.
+                disks = Bin.U32(Bin.ReadAt(last, end - 4, 4), 0);
+            }
+            else if (disks == 65536 && end < 4)
+            {
+                var available = NumberedPaths(basePath + ".z", 2, siblings);
                 available.Add(final);
-                using var tail = new MultiVolumeStream(available);
+                using var tail = new MultiVolumeStream(available, diskRelative: true);
                 long logicalEnd = ZipExtractor.FindEocd(tail);
-                if (logicalEnd >= 20)
+                bool foundLocator = false;
+                if (logicalEnd >= 20 && logicalEnd - 20 >= tail.AvailableTailStart)
                 {
                     var locator = Bin.ReadAt(tail, logicalEnd - 20, 20);
-                    if (Bin.U32(locator, 0) == 0x07064b50) disks = Bin.U32(locator, 16);
+                    if (Bin.U32(locator, 0) == 0x07064b50)
+                    {
+                        disks = Bin.U32(locator, 16);
+                        foundLocator = true;
+                    }
                 }
+                if (!foundLocator)
+                    throw new UnsupportedFormatException("The ZIP64 locator needs the part immediately before " +
+                        Path.GetFileName(final) + ". Its filename cannot be determined because the locator's disk count is unavailable.");
             }
             if (disks < 2 || disks > int.MaxValue)
                 throw new FormatException("Invalid split ZIP disk count.");
             int found = siblings.Count == 0 ? 0 : siblings.Keys.Max();
             if (found >= disks || (isPart && !siblings.Values.Contains(path, StringComparer.OrdinalIgnoreCase)))
                 throw new FormatException("ZIP part numbers do not match the final disk count.");
-            var paths = Contiguous(basePath + ".z", 2, siblings, (int)disks - 1);
+            var paths = NumberedPaths(basePath + ".z", 2, siblings, (int)disks - 1);
             paths.Add(final);
             var stream = new MultiVolumeStream(paths, diskRelative: true);
             try
             {
-                var signature = Bin.ReadAt(stream, 0, 4);
-                Bin.Need(signature, 0, 4);
-                if (Bin.U32(signature, 0) != 0x08074b50)
-                    throw new FormatException("Split ZIP first part has no split signature.");
+                if (stream.IsPresent(0))
+                {
+                    var signature = Bin.ReadAt(stream, 0, 4);
+                    Bin.Need(signature, 0, 4);
+                    if (Bin.U32(signature, 0) != 0x08074b50)
+                        throw new FormatException("Split ZIP first part has no split signature.");
+                }
                 return stream;
             }
             catch { stream.Dispose(); throw; }
@@ -108,15 +142,15 @@ public static partial class ZipArchiveSource
         return found;
     }
 
-    private static List<string> Contiguous(string stem, int width, Dictionary<int, string> found, int? count = null)
+    private static List<string> NumberedPaths(string stem, int width, Dictionary<int, string> found, int? count = null)
     {
         int last = count ?? (found.Count == 0 ? 1 : found.Keys.Max());
+        if (last > 100_000)
+            throw new UnsupportedFormatException("Split ZIP part count exceeds the supported limit of 100,000.");
         var paths = new List<string>();
         for (int i = 1; i <= last; i++)
         {
-            if (!found.TryGetValue(i, out string? file))
-                throw Missing(stem + i.ToString().PadLeft(width, '0'));
-            paths.Add(file);
+            paths.Add(found.GetValueOrDefault(i) ?? stem + i.ToString().PadLeft(width, '0'));
         }
         return paths;
     }
@@ -126,7 +160,7 @@ public static partial class ZipArchiveSource
             string.Equals(Path.GetFileName(p), Path.GetFileName(path), StringComparison.OrdinalIgnoreCase)) ?? path;
 
     private static UnsupportedFormatException Missing(string path) => new(
-        $"Part {Path.GetFileName(path)} of this split ZIP archive is missing. Put all parts in the same folder.");
+        $"Part {Path.GetFileName(path)} of this split ZIP archive is missing. Put the required parts in the same folder.");
 
     [GeneratedRegex(@"^(.*\.zip\.)(\d{3,})$", RegexOptions.IgnoreCase)]
     private static partial Regex NumberedPart();

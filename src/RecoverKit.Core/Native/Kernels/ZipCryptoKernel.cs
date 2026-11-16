@@ -92,9 +92,7 @@ public sealed class ZipCryptoKernel : NativeKernel
             {
                 if (partial!.Method != method || partial.DataOffset < 0 || partial.CompressedLength < data.Length || uncompressed < 0)
                     return null;
-                using var archive = ZipArchiveSource.Open(partial.ArchivePath);
-                if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return null;
-                archive.Position = partial.DataOffset;
+                using var archive = partial.OpenData();
                 var prefix = new byte[data.Length];
                 archive.ReadExactly(prefix);
                 if (!data.AsSpan().SequenceEqual(prefix)) return null;
@@ -355,9 +353,7 @@ public sealed class ZipCryptoKernel : NativeKernel
     {
         try
         {
-            using var archive = ZipArchiveSource.Open(partial.ArchivePath);
-            if (partial.DataOffset > archive.Length || partial.CompressedLength > archive.Length - partial.DataOffset) return false;
-            archive.Position = partial.DataOffset;
+            using var archive = partial.OpenData();
             Span<byte> header = stackalloc byte[12];
             archive.ReadExactly(header);
             if (!header.SequenceEqual(_header)) return false;

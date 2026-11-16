@@ -6,6 +6,8 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Fixed
+- Split ZIP password recovery works with missing parts when the central directory and one complete
+  encrypted entry are available. File details list missing parts, and incomplete entries are skipped.
 - Benchmark rows no longer repeat the whole setup: each row lists its hashcat arguments and only
   the settings that differ from the Setup section.
 - The Setup section shows the NVIDIA driver version for the CUDA device too, instead of "unknown".

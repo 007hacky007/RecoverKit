@@ -9,6 +9,26 @@ namespace RecoverKit.Core.Formats;
 public sealed record ZipPartialTarget(string ArchivePath, long DataOffset, long CompressedLength,
     long UncompressedLength, uint Crc, int Method)
 {
+    // Spanned positions stay relative to their disk when the available sibling set changes.
+    public uint? ArchiveDisk { get; init; }
+
+    internal Stream OpenData()
+    {
+        var stream = ZipArchiveSource.Open(ArchivePath);
+        try
+        {
+            long offset = ArchiveDisk is { } disk
+                ? (stream as MultiVolumeStream ?? throw new FormatException("ZIP parts have changed.")).DiskOffset(disk, DataOffset)
+                : DataOffset;
+            if (stream is MultiVolumeStream volumes) volumes.EnsureAvailable(offset, CompressedLength);
+            if (offset < 0 || offset > stream.Length || CompressedLength > stream.Length - offset)
+                throw new FormatException("ZIP entry is truncated.");
+            stream.Position = offset;
+            return stream;
+        }
+        catch { stream.Dispose(); throw; }
+    }
+
     public IReadOnlyList<ZipHeaderCheck> Siblings { get; init; } = [];
 }
 
