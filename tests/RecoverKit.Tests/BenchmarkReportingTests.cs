@@ -33,6 +33,32 @@ public sealed class BenchmarkReportingTests
     }
 
     [Fact]
+    public void CudaDeviceShowsTheDriverVersionOfItsOpenClAlias()
+    {
+        // hashcat prints the NVIDIA driver version only on the OpenCL device.
+        var cuda = new BackendDevice { Id = 1, Key = "CUDA|NVIDIA GeForce RTX 4060|0", Backend = "CUDA", Type = "GPU", Name = "NVIDIA GeForce RTX 4060", BackendVersion = "13.3" };
+        var opencl = new BackendDevice { Id = 2, AliasOf = 1, Key = "OpenCL|NVIDIA GeForce RTX 4060|0", Backend = "OpenCL", Type = "GPU",
+            Name = "NVIDIA GeForce RTX 4060", Vendor = "NVIDIA Corporation", DriverVersion = "610.88", IsSkippedAlias = true };
+        var lines = BenchmarkSetup.Lines(null, new Settings(), [cuda, opencl]);
+        string cudaLine = Assert.Single(lines, l => l.StartsWith("GPU #1 ", StringComparison.Ordinal));
+        Assert.Contains("driver 610.88", cudaLine);
+        Assert.DoesNotContain(lines, l => l.Contains("driver unknown", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RowsRepeatOnlySettingsThatDifferFromTheSetup()
+    {
+        var settings = new Settings();
+        var setup = BenchmarkSetup.Lines(null, settings, []);
+        Assert.Contains(BenchmarkSetup.RowNote, setup);
+        Assert.Empty(BenchmarkSetup.RowSettings(BenchmarkSetup.ExecutionLines(settings), setup));
+        var changed = BenchmarkSetup.ExecutionLines(new Settings { Workload = 1 }).ToList();
+        var shown = BenchmarkSetup.RowSettings(changed, setup).ToList();
+        Assert.Contains(shown, l => l.Contains("workload: 1", StringComparison.Ordinal));
+        Assert.True(shown.Count < changed.Count);
+    }
+
+    [Fact]
     public void RowArgumentsRetainTuningAndRemoveTargetsPathsAndUnknownValues()
     {
         string args = BenchmarkSetup.SafeArguments(["-m", "12500", "/private/target.hash", "-a", "3", "?u?u?u", "-d", "2", "-w", "4",

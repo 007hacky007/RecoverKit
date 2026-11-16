@@ -49,7 +49,7 @@ public static class BenchmarkSetup
                 : enabled ? $"selected: #{resolved.Id} {resolved.Backend}"
                 : "not used: alias or performance-profile selection";
             if (resolved.Id != d.Id) state += $"; alias resolves to #{resolved.Id} {resolved.Backend}";
-            lines.Add($"GPU #{d.Id} {d.Name}: {d.Backend}; {state}; driver {Known(d.DriverVersion)}; backend version {Known(d.BackendVersion)}");
+            lines.Add($"GPU #{d.Id} {d.Name}: {d.Backend}; {state}; driver {Known(DriverVersion(d, devices))}; backend version {Known(d.BackendVersion)}");
         }
         if (!devices.Any(d => d.IsGpu)) lines.Add("GPU devices: none detected");
         if (OperatingSystem.IsMacOS()) lines.Add("macOS GPU runs use Metal; OpenDocument 1.1 (mode 18600) uses OpenCL. Each measurement records its actual format backend.");
@@ -66,8 +66,24 @@ public static class BenchmarkSetup
         lines.Add(ExtraPrefix + (string.IsNullOrWhiteSpace(settings.ExtraArguments) ? "none" : settings.ExtraArguments));
         if (!string.IsNullOrWhiteSpace(settings.ExtraArguments)) lines.Add("Extra arguments disable the built-in CPU engine and hybrid execution.");
         if (HashcatRunner.HasDeviceOverrides(settings.ExtraArguments)) lines.Add("Extra arguments override device selection; per-row hashcat arguments show the effective device flags.");
+        lines.Add(RowNote);
         return lines;
     }
+
+    public const string RowNote = "Rows list their hashcat arguments (device and tuning flags only; targets and paths omitted) " +
+        "and repeat a setting only where it differs from this setup.";
+
+    /// <summary>A row's settings without the lines already printed in the setup block.</summary>
+    public static IEnumerable<string> RowSettings(IEnumerable<string> execution, IReadOnlyCollection<string> setup)
+        => execution.Where(line => !setup.Contains(line));
+
+    /// <summary>
+    /// hashcat reports the NVIDIA driver version only on the OpenCL device; the CUDA device of the same GPU
+    /// shows its alias's version instead of "unknown".
+    /// </summary>
+    internal static string DriverVersion(BackendDevice d, IReadOnlyList<BackendDevice> devices)
+        => d.DriverVersion.Length > 0 ? d.DriverVersion
+            : devices.FirstOrDefault(a => (a.AliasOf == d.Id || d.AliasOf == a.Id) && a.DriverVersion.Length > 0)?.DriverVersion ?? "";
 
     private static string BackendName(NvidiaBackend value) => value switch { NvidiaBackend.Cuda => "CUDA", NvidiaBackend.OpenCl => "OpenCL", _ => "Automatic" };
 

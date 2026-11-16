@@ -128,14 +128,14 @@ public sealed class BenchmarkWindow : Window
     }
 
     /// <summary>The test password length and, for hashcat + built-in engine rows, what each side measured.</summary>
-    internal static List<string> DetailLines(SpeedProbe.Details? d, double speed)
+    internal static List<string> DetailLines(SpeedProbe.Details? d, double speed, IReadOnlyCollection<string> setup)
     {
         var lines = new List<string>();
         if (d is null) return lines;
         if (d.Length > 0) lines.Add($"Test passwords: {d.Length} characters");
         if (speed > 0 && d.Cpu > 0 && d.Gpu > 0) lines.Add($"Measured separately: GPU {d.Gpu:N0}, CPU {d.Cpu:N0}");
-        lines.AddRange(d.Execution.Select(DiagnosticHtml.Scrub));
-        lines.Add("hashcat arguments (device and tuning flags; targets, paths and unrecognized options omitted): " + (d.Arguments.Length == 0 ? "none (built-in CPU or measurement not started)" : d.Arguments));
+        lines.AddRange(BenchmarkSetup.RowSettings(d.Execution, setup).Select(DiagnosticHtml.Scrub));
+        lines.Add("hashcat arguments: " + (d.Arguments.Length == 0 ? "none (built-in CPU or measurement not started)" : d.Arguments));
         return lines;
     }
 
@@ -184,7 +184,7 @@ public sealed class BenchmarkWindow : Window
                 catch (TimeoutException) { speed = 0; }
                 _cts.Token.ThrowIfCancellationRequested();
                 _engines[e.Mode] = details?.Engine ?? "measurement did not complete; engine unavailable";
-                _details[e.Mode] = DetailLines(details, speed);
+                _details[e.Mode] = DetailLines(details, speed, _setup);
                 _results.Add((e, speed));
                 if (speed > 0) _settings.SpeedByMode[e.Mode] = speed;
 
