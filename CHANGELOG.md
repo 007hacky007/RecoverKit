@@ -5,6 +5,9 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Fixed
+- A downloaded word list now shows by its name in the dictionary field instead of its full path.
+
 ## [1.7.1] - 2026-11-16
 
 ### Fixed

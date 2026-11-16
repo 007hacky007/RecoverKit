@@ -894,7 +894,7 @@ public sealed class WizardWindow : Window
                 var picker = new WordlistWindow(_settings, labels[k], DictValue(dicts[k]), speed, outputs, name);
                 picker.FitTo(this);
                 if (await picker.ShowDialog<string?>(this) is { } path)
-                    dicts[k].Text = BuiltinDictionaries.IsBuiltin(path) ? BuiltinDictionaries.DisplayName(path) : path;
+                    dicts[k].Text = DictText(path);
                 await RefreshDictionaryItemsAsync();
             }, 40);
             t.Put(Lb(labels[i]), 1 + i, 0); t.Put(dicts[i], 1 + i, 1, 2); t.Put(btns[i], 1 + i, 3);
@@ -924,6 +924,7 @@ public sealed class WizardWindow : Window
             try
             {
                 var downloaded = await Task.Run(() => wordlistLibrary.LoadAsync());
+                var values = dicts.Select(DictValue).ToArray();
                 downloadedNames.Clear();
                 foreach (var entry in downloaded)
                 {
@@ -932,11 +933,10 @@ public sealed class WizardWindow : Window
                     downloadedNames[label] = wordlistLibrary.FilePath(entry);
                 }
                 var choices = BuiltinDictionaries.Names.Concat(downloadedNames.Keys).Concat(WordlistLibrary.DataFiles(_settings.DataPath).Take(200)).ToList();
-                foreach (var combo in dicts)
+                for (int i = 0; i < dicts.Length; i++)
                 {
-                    string? text = combo.Text;
-                    combo.ItemsSource = choices;
-                    combo.Text = text;
+                    dicts[i].ItemsSource = choices;
+                    dicts[i].Text = DictText(values[i]);
                 }
             }
             catch (Exception ex) { DebugLog.Info("Could not read wordlist library: " + ex.Message); }
@@ -962,6 +962,15 @@ public sealed class WizardWindow : Window
             var v = (cb.Text ?? "").Trim();
             if (v.Length == 0) return null;
             return BuiltinDictionaries.Names.Contains(v) ? BuiltinDictionaries.Reference(v) : downloadedNames.GetValueOrDefault(v, v);
+        }
+        string DictText(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (BuiltinDictionaries.IsBuiltin(value)) return BuiltinDictionaries.DisplayName(value);
+            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            foreach (var (label, path) in downloadedNames)
+                if (string.Equals(path, value, cmp)) return label;
+            return value;
         }
         RulesPreset Preset() => rules.SelectedIndex >= 0 && rules.SelectedIndex < AttackSpec.PresetOrder.Length ? AttackSpec.PresetOrder[rules.SelectedIndex] : RulesPreset.CustomFile;
         static int Need(RulesPreset p) => p switch { RulesPreset.TwoWords or RulesPreset.TwoWordsAdvanced => 2, RulesPreset.ThreeWords => 3, _ => 1 };
@@ -1011,9 +1020,7 @@ public sealed class WizardWindow : Window
         {
             d.PropertyChanged += (_, e) =>
             {
-                if (e.Property != ComboBox.TextProperty) return;
-                if (downloadedNames.TryGetValue(d.Text ?? "", out var path)) d.Text = path;
-                else Update();
+                if (e.Property == ComboBox.TextProperty) Update();
             };
         }
         skipMin.ValueChanged += (_, _) => Update();
