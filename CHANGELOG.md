@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-16
+
 ### Fixed
 - A downloaded word list now shows by its name in the dictionary field instead of its full path.
 - Preferences now offers the word list library for the default dictionary, including built-in lists.
@@ -347,6 +349,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.7.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.2
 [1.7.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.1
 [1.7.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.0
 [1.6.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.2
