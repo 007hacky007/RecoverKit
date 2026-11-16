@@ -5,9 +5,16 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-16
+
 ### Added
-- A wordlist library in the dictionary picker: browse weakpass.com, inspect its statistics,
-  resume downloads, see unpacking progress, reuse verified lists offline, or choose a file on disk.
+- A wordlist library. The "..." button next to each dictionary now opens a window with four tabs:
+  the built-in lists, lists you downloaded, the weakpass.com catalog and files on disk. The
+  weakpass.com tab lists about 1,700 password lists with search and filters, and shows for each
+  one its rank, success rate, size, password lengths, character mix, common patterns, sample
+  passwords and how long it would take on your file. Downloads resume after an interruption, are
+  checked against weakpass.com's checksums, unpacked once and then work offline. Downloaded lists
+  also appear in the dictionary drop-downs.
 
 ## [1.6.2] - 2026-11-15
 
@@ -324,6 +331,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.7.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.0
 [1.6.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.2
 [1.6.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.1
 [1.6.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.6.0

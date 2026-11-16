@@ -114,6 +114,9 @@ More things it does:
   restart. Passwords it has already found are remembered.
 - **Smart word lists.** Built-in English word lists, your own lists, and variations such as
   `Password1`, `PASSWORD` or `drowssap`. A rules editor shows a preview of the variations.
+- **Wordlist library.** Browse about 1,700 password lists from weakpass.com, compare their size,
+  success rate and password lengths, and download the ones you want. Downloads resume if they are
+  interrupted and are checked before use.
 - **Ready-made plans** that run several methods in a row, from quick guesses to longer searches.
 - **Works with any language.** Passwords with accents and non-Latin letters are supported.
 - **Unlocks very old Office and PDF files for certain.** Files from Office 97-2003 and early PDF
@@ -206,8 +209,9 @@ quickest guesses.
   Click **Done**, then open **System Settings > Privacy & Security**, scroll down and click **Open
   Anyway**. This is needed only once. The first start can take a minute while macOS checks the app.
 - Your files never leave your computer. RecoverKit only connects to the internet to download the
-  engine (Windows), to check for updates (at start, at most once an hour, unless turned off) and to
-  download an update you accept.
+  engine (Windows), to check for updates (at start, at most once an hour, unless turned off), to
+  download an update you accept, and to show and download weakpass.com word lists when you open
+  that tab in the wordlist library.
 - If something goes wrong, Help > Open debug log folder has a log you can attach to a bug report.
   Recovered passwords are never written to it.
 - **TrueCrypt and VeraCrypt:** File > Open As lets you add keyfiles. For VeraCrypt, enter the
