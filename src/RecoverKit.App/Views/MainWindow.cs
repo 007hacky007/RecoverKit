@@ -1588,7 +1588,15 @@ public sealed partial class MainWindow : Window
             await Msg.Error(this, "The update could not be started: " + ex.Message, title);
             return;
         }
-        Close();   // the update script waits for this process to end, installs, and starts RecoverKit again
+        // The update script waits for this process to end, installs, and starts RecoverKit again. A
+        // Close() straight after the update dialog only hid this window and the process kept running,
+        // so the app is shut down explicitly once the dialog has finished closing.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                desktop.Shutdown();
+            else Close();
+        });
     }
 
     private static void OpenLogFolder()
