@@ -231,7 +231,8 @@ public static class AttackPlanner
         string name = d[1..];
         if (name is "" or "default")
         {
-            if (!string.IsNullOrEmpty(ctx.DefaultDictionary)) return Path.GetFullPath(ctx.DefaultDictionary);
+            if (!string.IsNullOrEmpty(ctx.DefaultDictionary)) return BuiltinDictionaries.IsBuiltin(ctx.DefaultDictionary)
+                ? BuiltinDictionaries.Materialize(ctx.DefaultDictionary) : Path.GetFullPath(ctx.DefaultDictionary);
             if (ctx.DataPath is not null && Directory.Exists(ctx.DataPath))
             {
                 var first = Directory.EnumerateFiles(ctx.DataPath)

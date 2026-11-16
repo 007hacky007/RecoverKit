@@ -9,8 +9,8 @@ namespace RecoverKit.Core.Attacks;
 
 /// <summary>
 /// File > Dictionary Generator and File > WPA-PMK Generator: produce the candidates of an attack
-/// instead of testing them. Candidates come from hashcat --stdout (masks, dictionaries, rules) or
-/// from RecoverKit's own generators (national alphabets, word combinations).
+/// instead of testing them. Rule-free dictionaries, combinators and masks run locally; rules and unsupported
+/// arguments use hashcat --stdout. National alphabets and word combinations use the planner's generators.
 /// </summary>
 public static class CandidateExport
 {
@@ -40,6 +40,12 @@ public static class CandidateExport
                 ct.ThrowIfCancellationRequested();
                 yield return c;
             }
+            yield break;
+        }
+
+        if (ExportCandidates.TryCreate(a, ct, tool.Directory, tool.Exe) is { } candidates)
+        {
+            foreach (var candidate in candidates) yield return candidate;
             yield break;
         }
 

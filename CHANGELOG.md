@@ -7,6 +7,10 @@ All notable changes to RecoverKit. Downloads are on the
 
 ### Fixed
 - A downloaded word list now shows by its name in the dictionary field instead of its full path.
+- Preferences now offers the word list library for the default dictionary, including built-in lists.
+- Data-folder lists show by file name in the wizard. Deleted library selections are cleared with a note.
+- Dictionary and WPA-PMK generation no longer need a compute backend for plain dictionaries,
+  masks and word pairs without rules. Rules and hybrid dictionary/mask attacks still use hashcat.
 
 ## [1.7.1] - 2026-11-16
 

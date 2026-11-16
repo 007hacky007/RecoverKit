@@ -16,6 +16,7 @@ namespace RecoverKit.App.Views;
 internal sealed class WordlistWindow : Window
 {
     private readonly Settings settings;
+    private readonly string? dataPath;
     private readonly WordlistLibrary library;
     private readonly WeakpassCatalog catalog = new();
     private readonly WordlistDownloads downloads = WordlistDownloads.Shared;
@@ -61,14 +62,16 @@ internal sealed class WordlistWindow : Window
     private bool descending, refreshing, closed, fileReady, initialized, weakpassOpened;
     private int fileGeneration;
 
-    public WordlistWindow(Settings settings, string label, string? current, double speed = 0, long? ruleOutputs = null, string rules = "as is", bool preview = false)
+    public WordlistWindow(Settings settings, string label, string? current, double speed = 0, long? ruleOutputs = null, string rules = "as is", bool preview = false,
+        string? dataPath = null)
     {
         this.settings = settings;
+        this.dataPath = dataPath is null ? settings.DataPath : string.IsNullOrWhiteSpace(dataPath) ? null : dataPath;
         this.speed = speed;
         outputs = ruleOutputs;
         this.rules = rules;
         this.preview = preview;
-        library = new WordlistLibrary(WordlistLibrary.Folder(settings));
+        library = new WordlistLibrary(Path.Combine(this.dataPath ?? Settings.AppDataDir, "wordlists"));
         Title = "Choose wordlist for: " + label;
         Icon = Icons.AppIcon();
         Width = 1180; Height = 790; MinWidth = 1020; MinHeight = 640;
@@ -246,7 +249,7 @@ internal sealed class WordlistWindow : Window
         pathRow.Put(filePath, 0, 0);
         pathRow.Put(L.Button("Browse...", async () => await GuardAsync(async () =>
         {
-            if (await Pick.Open(this, "Wordlist files (*.txt; *.dic; *.lst)|*.txt;*.dic;*.lst|All files|*.*", settings.LastDictionaryDirectory ?? settings.DataPath, "Choose wordlist") is { } path)
+            if (await Pick.Open(this, "Wordlist files (*.txt; *.dic; *.lst)|*.txt;*.dic;*.lst|All files|*.*", settings.LastDictionaryDirectory ?? dataPath, "Choose wordlist") is { } path)
             { filePath.Text = path; settings.LastDictionaryDirectory = Path.GetDirectoryName(path); }
         })), 0, 1);
         filePath.TextChanged += async (_, _) => await InspectFileAsync();
@@ -302,7 +305,7 @@ internal sealed class WordlistWindow : Window
         recentFiles.Children.Clear(); dataFiles.Children.Clear();
         foreach (string path in settings.RecentWordlistFiles) recentFiles.Children.Add(FileLink(path));
         if (recentFiles.Children.Count == 0) recentFiles.Children.Add(L.Text("No recently used files.", dim: true));
-        foreach (string path in WordlistLibrary.DataFiles(settings.DataPath)) dataFiles.Children.Add(FileLink(path));
+        foreach (string path in WordlistLibrary.DataFiles(dataPath)) dataFiles.Children.Add(FileLink(path));
         if (dataFiles.Children.Count == 0) dataFiles.Children.Add(L.Text("No wordlist files in the data folder.", dim: true));
     }
 

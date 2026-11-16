@@ -3,8 +3,10 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Threading;
 using RecoverKit.App.Ui;
 using RecoverKit.Core;
+using RecoverKit.Core.Attacks;
 using RecoverKit.Core.Hashcat;
 using RecoverKit.Core.Diagnostics;
 using RecoverKit.Core.Native;
@@ -70,6 +72,10 @@ public sealed class PreferencesWindow : Window
     private readonly TextBox _hashcatPath = new();
     private readonly TextBox _dataPath = new();
     private readonly TextBox _defaultDict = new();
+    private WordlistChoices _defaultChoices = new([], []);
+    private readonly TextBlock _defaultDeletedNote = L.Text("", dim: true, wrap: true);
+    private readonly SemaphoreSlim _wordlistRefreshGate = new(1);
+    private Action<WordlistDownload>? _wordlistChanged;
     private readonly TextBox _onSuccess = new();
     private readonly TextBox _onFail = new();
     private readonly TextBox _rainbowPath = new();
@@ -121,6 +127,15 @@ public sealed class PreferencesWindow : Window
         root.Children.Add(tabs);
         Content = root;
         LoadValues();
+        Activated += async (_, _) => await RefreshDefaultDictionaryAsync();
+        _defaultDict.TextChanged += (_, _) => { if (!string.IsNullOrWhiteSpace(_defaultDict.Text)) _defaultDeletedNote.IsVisible = false; };
+        _wordlistChanged = job =>
+        {
+            if (job.Finished) Dispatcher.UIThread.Post(async () => await RefreshDefaultDictionaryAsync());
+        };
+        WordlistDownloads.Shared.Changed += _wordlistChanged;
+        Closed += (_, _) => WordlistDownloads.Shared.Changed -= _wordlistChanged;
+        _ = RefreshDefaultDictionaryAsync();
         _maxThreads.ValueChanged += (_, _) => _threadsEdited = true;
         _strategy.SelectionChanged += (_, _) => _strategyEdited = true;
         // Apply stays disabled until something changes.
@@ -384,6 +399,60 @@ public sealed class PreferencesWindow : Window
         return g;
     }
 
+    private Control DefaultDictionaryRow()
+    {
+        _defaultDeletedNote.FontSize = 12;
+        _defaultDeletedNote.IsVisible = false;
+        var row = L.Grid("*,Auto,Auto");
+        row.Put(_defaultDict, 0, 0);
+        row.Put(L.Button("...", async () =>
+        {
+            var picker = new WordlistWindow(_s, "Default dictionary", _defaultChoices.Value(_defaultDict.Text), dataPath: Null(_dataPath.Text) ?? "");
+            picker.FitTo(this);
+            var path = await picker.ShowDialog<string?>(this);
+            await RefreshDefaultDictionaryAsync();
+            if (path is not null)
+            {
+                _defaultDict.Text = _defaultChoices.Text(path);
+                _defaultDeletedNote.IsVisible = false;
+            }
+        }, 40), 0, 1);
+        row.Put(L.Button("Browse", async () =>
+        {
+            if (await PickFile("Dictionary files (*.dic; *.txt; *.lst)|*.dic;*.txt;*.lst|All files|*.*") is { } path)
+                _defaultDict.Text = _defaultChoices.Text(path);
+        }, 84), 0, 2);
+        return L.Column(4, row, _defaultDeletedNote);
+    }
+
+    private void ClearDeletedDefault(WordlistChoices? snapshot = null)
+    {
+        string? value = _defaultChoices.Value(_defaultDict.Text);
+        if ((_defaultChoices.DeletedName(value) ?? snapshot?.DeletedName(value)) is not { } name) return;
+        _defaultDict.Text = "";
+        _defaultDeletedNote.Text = name + " was deleted. Choose another word list.";
+        _defaultDeletedNote.IsVisible = true;
+    }
+
+    private async Task RefreshDefaultDictionaryAsync()
+    {
+        await _wordlistRefreshGate.WaitAsync();
+        try
+        {
+            string? dataPath = Null(_dataPath.Text);
+            var library = new WordlistLibrary(Path.Combine(dataPath ?? Settings.AppDataDir, "wordlists"));
+            var downloaded = await Task.Run(() => library.LoadAsync(includeMissing: true));
+            var snapshot = new WordlistChoices(downloaded.Select(entry => (entry.Name, library.FilePath(entry))), []);
+            ClearDeletedDefault(snapshot);
+            string? value = _defaultChoices.Value(_defaultDict.Text);
+            _defaultChoices = new WordlistChoices(downloaded.Where(entry => File.Exists(library.FilePath(entry)))
+                .Select(entry => (entry.Name, library.FilePath(entry))), WordlistLibrary.DataFiles(dataPath).Take(200));
+            _defaultDict.Text = _defaultChoices.Text(value);
+        }
+        catch (Exception ex) { DebugLog.Info("Could not read wordlist library: " + ex.Message); }
+        finally { _wordlistRefreshGate.Release(); }
+    }
+
     private Control PathsTab()
     {
         var exec = L.Grid("Auto,*", rowSpacing: 8, columnSpacing: 10);
@@ -393,7 +462,7 @@ public sealed class PreferencesWindow : Window
         exec.Put(PathRow(_onFail, () => PickFile("All files|*.*")), 1, 1);
         return L.Column(14,
             L.Group(OperatingSystem.IsWindows() ? "hashcat executable (hashcat.exe)" : "hashcat executable", HashcatRow()),
-            L.Group("Default dictionary (used by scenarios as *default)", PathRow(_defaultDict, () => PickFile("Dictionary files (*.dic; *.txt)|*.dic;*.txt|All files|*.*"))),
+            L.Group("Default dictionary (used by scenarios as *default)", DefaultDictionaryRow()),
             L.Group("Folder for dictionaries and rule files", PathRow(_dataPath, PickFolder)),
             L.Group("Run these programs when recovery ends", exec),
             L.Group("", L.Column(8, _useScenario, PathRow(_scenarioFile, () => PickFile("Scenario files (*.txt)|*.txt|All files|*.*")))));
@@ -484,7 +553,7 @@ public sealed class PreferencesWindow : Window
         _scenarioFile.Text = _s.ExternalScenarioFile ?? "";
         _hashcatPath.Text = _s.HashcatPath ?? _hashcat?.Exe ?? "";
         _dataPath.Text = _s.DataPath ?? "";
-        _defaultDict.Text = _s.DefaultDictionary ?? "";
+        _defaultDict.Text = _defaultChoices.Text(_s.DefaultDictionary);
         _onSuccess.Text = _s.ExecuteOnSuccess ?? "";
         _onFail.Text = _s.ExecuteOnFail ?? "";
         _rainbowPath.Text = _s.RainbowTablesPath ?? "";
@@ -558,7 +627,8 @@ public sealed class PreferencesWindow : Window
         if (hp != _s.HashcatPath && hp != _hashcat?.Exe) HashcatChanged = true;
         _s.HashcatPath = hp;
         _s.DataPath = Null(_dataPath.Text);
-        _s.DefaultDictionary = Null(_defaultDict.Text);
+        ClearDeletedDefault();
+        _s.DefaultDictionary = _defaultChoices.Value(_defaultDict.Text);
         _s.ExecuteOnSuccess = Null(_onSuccess.Text);
         _s.ExecuteOnFail = Null(_onFail.Text);
         _s.RainbowTablesPath = Null(_rainbowPath.Text);

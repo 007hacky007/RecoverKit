@@ -42,7 +42,7 @@ public sealed class WordlistLibrary
 
     private bool Regular(string file) => File.Exists(file) && (File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0;
 
-    private async Task<List<LibraryWordlist>> ReadManifest(CancellationToken ct)
+    private async Task<List<LibraryWordlist>> ReadManifest(CancellationToken ct, bool includeMissing = false)
     {
         if (!File.Exists(Manifest)) return [];
         if (!Regular(Manifest)) throw new IOException("The library manifest is a link. Choose another library folder.");
@@ -59,16 +59,18 @@ public sealed class WordlistLibrary
         var stored = manifest.Wordlists;
         var valid = stored.Where(x => SafeFile(x.FileName) && Regular(FilePath(x))).DistinctBy(x => x.Id).ToList();
         if (valid.Count != stored.Count) await SaveManifest(valid, ct);
-        return valid;
+        return includeMissing ? stored.Where(x => SafeFile(x.FileName) && (Regular(FilePath(x)) || !File.Exists(FilePath(x))))
+            .DistinctBy(x => x.Id).ToList() : valid;
     }
 
     private Task SaveManifest(List<LibraryWordlist> items, CancellationToken ct)
         => WeakpassCatalog.WriteAsync(Manifest, new ManifestData(1, "RecoverKit", items), ct);
 
-    public async Task<List<LibraryWordlist>> LoadAsync(CancellationToken ct = default)
+    /// <summary>Missing files are pruned; includeMissing also returns them in this read so fields can explain a deletion.</summary>
+    public async Task<List<LibraryWordlist>> LoadAsync(CancellationToken ct = default, bool includeMissing = false)
     {
         await gate.WaitAsync(ct);
-        try { return await ReadManifest(ct); }
+        try { return await ReadManifest(ct, includeMissing); }
         finally { gate.Release(); }
     }
 

@@ -54,6 +54,7 @@ public sealed class WizardWindow : Window
     private readonly Button _cancel = new() { Content = "Cancel", MinWidth = 90, IsCancel = true, HorizontalContentAlignment = HorizontalAlignment.Center };
     private readonly ContentControl _host = new();
     private Action<WordlistDownload>? _wordlistChanged;
+    private Func<Task>? _refreshWordlists;
     private readonly StackPanel _trail = new() { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 0, 8) };
     private int _slideGeneration;
 
@@ -77,6 +78,7 @@ public sealed class WizardWindow : Window
         _tool = tool;
         _devices = devices ?? [];
         Closed += (_, _) => { if (_wordlistChanged is not null) WordlistDownloads.Shared.Changed -= _wordlistChanged; };
+        Activated += async (_, _) => { if (_refreshWordlists is not null) await _refreshWordlists(); };
 
         Title = mode switch { WizardMode.DictionaryGenerator => "Dictionary Generator", WizardMode.PmkGenerator => "WPA-PMK Generator", _ => "Password Recovery Wizard" };
         Icon = Icons.AppIcon();
@@ -148,6 +150,7 @@ public sealed class WizardWindow : Window
         if (push && _currentFactory is not null) _history.Push(_currentFactory);
         _currentFactory = factory;
         _commit = null;
+        _refreshWordlists = null;
         _atFirstPage = false;
         _attackCards = null;
         _host.Content = factory();
@@ -868,10 +871,14 @@ public sealed class WizardWindow : Window
         string? customRules = a.RulesFile;
         CancellationTokenSource? countCts = null;
 
-        var items = BuiltinDictionaries.Names.ToList();
-        var downloadedNames = new Dictionary<string, string>();
+        var choices = new WordlistChoices([], WordlistLibrary.DataFiles(_settings.DataPath).Take(200));
         var wordlistLibrary = new WordlistLibrary(WordlistLibrary.Folder(_settings));
-        items.AddRange(WordlistLibrary.DataFiles(_settings.DataPath).Take(200));
+        var refreshGate = new SemaphoreSlim(1);
+        bool refreshingChoices = false;
+        var deletedNote = L.Text("", dim: true, wrap: true);
+        deletedNote.FontSize = 12;
+        deletedNote.IsVisible = false;
+        var deletedFields = new string?[4];
         var dicts = new ComboBox[4];
         var btns = new Button[4];
         string[] labels = ["Primary dictionary", "Dictionary #2", "Dictionary #3", "Dictionary #4"];
@@ -884,18 +891,23 @@ public sealed class WizardWindow : Window
         {
             dicts[i] = new ComboBox
             {
-                IsEditable = true, ItemsSource = items, HorizontalAlignment = HorizontalAlignment.Stretch,
-                Text = BuiltinDictionaries.IsBuiltin(a.Dictionaries[i]) ? BuiltinDictionaries.DisplayName(a.Dictionaries[i]!) : a.Dictionaries[i] ?? "",
+                IsEditable = true, ItemsSource = choices.Labels, HorizontalAlignment = HorizontalAlignment.Stretch,
+                Text = choices.Text(a.Dictionaries[i]),
             };
             int k = i;
             btns[i] = L.Button("...", async () =>
             {
                 var (speed, outputs, name) = await LibraryEstimateAsync();
-                var picker = new WordlistWindow(_settings, labels[k], DictValue(dicts[k]), speed, outputs, name);
+                var picker = new WordlistWindow(_settings, labels[k], choices.Value(dicts[k].Text), speed, outputs, name);
                 picker.FitTo(this);
-                if (await picker.ShowDialog<string?>(this) is { } path)
-                    dicts[k].Text = DictText(path);
+                var path = await picker.ShowDialog<string?>(this);
                 await RefreshDictionaryItemsAsync();
+                if (path is not null)
+                {
+                    dicts[k].Text = choices.Text(path);
+                    deletedFields[k] = null;
+                    UpdateDeletedNote();
+                }
             }, 40);
             t.Put(Lb(labels[i]), 1 + i, 0); t.Put(dicts[i], 1 + i, 1, 2); t.Put(btns[i], 1 + i, 3);
         }
@@ -904,7 +916,7 @@ public sealed class WizardWindow : Window
         t.Put(skipRow, 5, 0, 4);
         var note = L.Text("0 = no limit. Rules files come from hashcat's rules folder or the data folder.", dim: true, wrap: true);
         note.FontSize = 12;
-        t.Put(note, 6, 0, 4);
+        t.Put(L.Column(4, deletedNote, note), 6, 0, 4);
 
         async Task<(double Speed, long? Outputs, string Name)> LibraryEstimateAsync()
         {
@@ -919,28 +931,41 @@ public sealed class WizardWindow : Window
             });
             return (speed, outputs, attack.Rules == RulesPreset.AsIs ? "as is" : AttackSpec.RulesName(attack.Rules));
         }
+        void UpdateDeletedNote()
+        {
+            var names = deletedFields.Where(name => name is not null).Distinct().ToArray();
+            deletedNote.Text = string.Join(", ", names) + (names.Length == 1 ? " was" : " were")
+                + " deleted. Choose another word list.";
+            deletedNote.IsVisible = names.Length > 0;
+        }
         async Task RefreshDictionaryItemsAsync()
         {
+            await refreshGate.WaitAsync();
             try
             {
-                var downloaded = await Task.Run(() => wordlistLibrary.LoadAsync());
-                var values = dicts.Select(DictValue).ToArray();
-                downloadedNames.Clear();
-                foreach (var entry in downloaded)
-                {
-                    string label = entry.Name + " (downloaded)";
-                    if (downloadedNames.ContainsKey(label)) label = entry.Name + $" ({entry.Id}, downloaded)";
-                    downloadedNames[label] = wordlistLibrary.FilePath(entry);
-                }
-                var choices = BuiltinDictionaries.Names.Concat(downloadedNames.Keys).Concat(WordlistLibrary.DataFiles(_settings.DataPath).Take(200)).ToList();
+                var downloaded = await Task.Run(() => wordlistLibrary.LoadAsync(includeMissing: true));
+                var snapshot = new WordlistChoices(downloaded.Select(entry => (entry.Name, wordlistLibrary.FilePath(entry))), []);
+                var values = dicts.Select(d => choices.Value(d.Text)).ToArray();
+                var missing = values.Select(value => choices.DeletedName(value) ?? snapshot.DeletedName(value)).ToArray();
+                var next = new WordlistChoices(downloaded.Where(entry => File.Exists(wordlistLibrary.FilePath(entry)))
+                    .Select(entry => (entry.Name, wordlistLibrary.FilePath(entry))),
+                    WordlistLibrary.DataFiles(_settings.DataPath).Take(200));
+                choices = next;
+                refreshingChoices = true;
                 for (int i = 0; i < dicts.Length; i++)
                 {
-                    dicts[i].ItemsSource = choices;
-                    dicts[i].Text = DictText(values[i]);
+                    dicts[i].ItemsSource = choices.Labels;
+                    if (missing[i] is not null) deletedFields[i] = missing[i];
+                    dicts[i].Text = choices.Text(missing[i] is not null ? null : values[i]);
                 }
+                refreshingChoices = false;
+                Update();
+                UpdateDeletedNote();
             }
             catch (Exception ex) { DebugLog.Info("Could not read wordlist library: " + ex.Message); }
+            finally { refreshingChoices = false; refreshGate.Release(); }
         }
+        _refreshWordlists = RefreshDictionaryItemsAsync;
         if (_wordlistChanged is not null) WordlistDownloads.Shared.Changed -= _wordlistChanged;
         int finishedDownloads = WordlistDownloads.Shared.Jobs.Count(x => x.Finished);
         _wordlistChanged = job =>
@@ -957,21 +982,6 @@ public sealed class WizardWindow : Window
         WordlistDownloads.Shared.Changed += _wordlistChanged;
         _ = RefreshDictionaryItemsAsync();
 
-        string? DictValue(ComboBox cb)
-        {
-            var v = (cb.Text ?? "").Trim();
-            if (v.Length == 0) return null;
-            return BuiltinDictionaries.Names.Contains(v) ? BuiltinDictionaries.Reference(v) : downloadedNames.GetValueOrDefault(v, v);
-        }
-        string DictText(string? value)
-        {
-            if (string.IsNullOrEmpty(value)) return "";
-            if (BuiltinDictionaries.IsBuiltin(value)) return BuiltinDictionaries.DisplayName(value);
-            var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            foreach (var (label, path) in downloadedNames)
-                if (string.Equals(path, value, cmp)) return label;
-            return value;
-        }
         RulesPreset Preset() => rules.SelectedIndex >= 0 && rules.SelectedIndex < AttackSpec.PresetOrder.Length ? AttackSpec.PresetOrder[rules.SelectedIndex] : RulesPreset.CustomFile;
         static int Need(RulesPreset p) => p switch { RulesPreset.TwoWords or RulesPreset.TwoWordsAdvanced => 2, RulesPreset.ThreeWords => 3, _ => 1 };
 
@@ -979,7 +989,7 @@ public sealed class WizardWindow : Window
         {
             var r = new AttackSpec { Kind = AttackKind.Dictionary, Rules = Preset(), RulesFile = customRules, SkipShorterThan = skipMin.IntValue(), SkipLongerThan = skipMax.IntValue() };
             int need = Need(r.Rules);
-            for (int i = 0; i < 4; i++) r.Dictionaries[i] = i < need ? DictValue(dicts[i]) : null;
+            for (int i = 0; i < 4; i++) r.Dictionaries[i] = i < need ? choices.Value(dicts[i].Text) : null;
             return r;
         }
 
@@ -1016,11 +1026,18 @@ public sealed class WizardWindow : Window
             if (Preset() == RulesPreset.CustomFile && string.IsNullOrEmpty(customRules)) await PickRules();
             Update();
         };
-        foreach (var d in dicts)
+        for (int i = 0; i < dicts.Length; i++)
         {
+            int k = i;
+            var d = dicts[i];
             d.PropertyChanged += (_, e) =>
             {
-                if (e.Property == ComboBox.TextProperty) Update();
+                if (e.Property == ComboBox.TextProperty && !refreshingChoices)
+                {
+                    if (!string.IsNullOrWhiteSpace(d.Text)) deletedFields[k] = null;
+                    UpdateDeletedNote();
+                    Update();
+                }
             };
         }
         skipMin.ValueChanged += (_, _) => Update();
@@ -1029,6 +1046,7 @@ public sealed class WizardWindow : Window
         Update();
         _commit = async () =>
         {
+            await RefreshDictionaryItemsAsync();
             countCts?.Cancel();
             var r = Read();
             if (!await ValidateAsync(r)) return false;
