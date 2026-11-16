@@ -1,0 +1,148 @@
+{
+  "data": [
+    {
+      "id": 1934,
+      "name": "ignis-10K.txt",
+      "slug": "ignis_10k.txt",
+      "size": 80456,
+      "size_compressed": 38284,
+      "count": 10000,
+      "rank": "S",
+      "rate": 2.0634014831729,
+      "download_url": "https://weakpass.com/download/1934/ignis-10K.txt.7z",
+      "torrent_url": "https://weakpass.com/download/1934/ignis-10K.txt.7z.torrent",
+      "url": "https://weakpass.com/api/v1/wordlists/ignis_10k.txt"
+    },
+    {
+      "id": 1935,
+      "name": "ignis-10M.txt",
+      "slug": "ignis_10m.txt",
+      "size": 94461698,
+      "size_compressed": 33317586,
+      "count": 10000000,
+      "rank": "A",
+      "rate": 11.777799014243,
+      "download_url": "https://weakpass.com/download/1935/ignis-10M.txt.7z",
+      "torrent_url": "https://weakpass.com/download/1935/ignis-10M.txt.7z.torrent",
+      "url": "https://weakpass.com/api/v1/wordlists/ignis_10m.txt"
+    },
+    {
+      "id": 1937,
+      "name": "ignis-1M.txt",
+      "slug": "ignis_1m.txt",
+      "size": 8755171,
+      "size_compressed": 3546270,
+      "count": 1000000,
+      "rank": "A",
+      "rate": 7.9218064316843,
+      "download_url": "https://weakpass.com/download/1937/ignis-1M.txt.7z",
+      "torrent_url": "https://weakpass.com/download/1937/ignis-1M.txt.7z.torrent",
+      "url": "https://weakpass.com/api/v1/wordlists/ignis_1m.txt"
+    },
+    {
+      "id": 1933,
+      "name": "ignis-100K.txt",
+      "slug": "ignis_100k.txt",
+      "size": 828498,
+      "size_compressed": 365760,
+      "count": 100000,
+      "rank": "B",
+      "rate": 4.7332660086356,
+      "download_url": "https://weakpass.com/download/1933/ignis-100K.txt.7z",
+      "torrent_url": "https://weakpass.com/download/1933/ignis-100K.txt.7z.torrent",
+      "url": "https://weakpass.com/api/v1/wordlists/ignis_100k.txt"
+    }
+  ],
+  "links": {
+    "first": "https://weakpass.com/api/v1/wordlists?per_page=100&page=1",
+    "last": "https://weakpass.com/api/v1/wordlists?per_page=100&page=17",
+    "prev": null,
+    "next": "https://weakpass.com/api/v1/wordlists?per_page=100&page=2"
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 17,
+    "links": [
+      {
+        "url": null,
+        "label": "&laquo; Previous",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=1",
+        "label": "1",
+        "active": true
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=2",
+        "label": "2",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=3",
+        "label": "3",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=4",
+        "label": "4",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=5",
+        "label": "5",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=6",
+        "label": "6",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=7",
+        "label": "7",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=8",
+        "label": "8",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=9",
+        "label": "9",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=10",
+        "label": "10",
+        "active": false
+      },
+      {
+        "url": null,
+        "label": "...",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=16",
+        "label": "16",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=17",
+        "label": "17",
+        "active": false
+      },
+      {
+        "url": "https://weakpass.com/api/v1/wordlists?per_page=100&page=2",
+        "label": "Next &raquo;",
+        "active": false
+      }
+    ],
+    "path": "https://weakpass.com/api/v1/wordlists",
+    "per_page": 100,
+    "to": 100,
+    "total": 1692
+  }
+}

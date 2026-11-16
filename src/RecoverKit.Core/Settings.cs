@@ -99,6 +99,8 @@ public sealed class Settings
     public DateTime? LastUpdateCheckUtc { get; set; }
     public string? LastOpenedDirectory { get; set; }
     public string? LastDictionaryDirectory { get; set; }
+    public List<string> RecentWordlistFiles { get; set; } = new();
+    public int LastWordlistTab { get; set; }
     public int[]? WindowBounds { get; set; }
 
     [JsonIgnore] public static string AppDataDir { get; } = InitAppData();

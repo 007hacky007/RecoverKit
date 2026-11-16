@@ -53,6 +53,7 @@ public sealed class WizardWindow : Window
     private readonly Button _next = new() { Content = "Next", MinWidth = 90, HorizontalContentAlignment = HorizontalAlignment.Center, Classes = { "accent" } };
     private readonly Button _cancel = new() { Content = "Cancel", MinWidth = 90, IsCancel = true, HorizontalContentAlignment = HorizontalAlignment.Center };
     private readonly ContentControl _host = new();
+    private Action<WordlistDownload>? _wordlistChanged;
     private readonly StackPanel _trail = new() { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 0, 8) };
     private int _slideGeneration;
 
@@ -75,6 +76,7 @@ public sealed class WizardWindow : Window
         _ctx = ctx;
         _tool = tool;
         _devices = devices ?? [];
+        Closed += (_, _) => { if (_wordlistChanged is not null) WordlistDownloads.Shared.Changed -= _wordlistChanged; };
 
         Title = mode switch { WizardMode.DictionaryGenerator => "Dictionary Generator", WizardMode.PmkGenerator => "WPA-PMK Generator", _ => "Password Recovery Wizard" };
         Icon = Icons.AppIcon();
@@ -867,11 +869,15 @@ public sealed class WizardWindow : Window
         CancellationTokenSource? countCts = null;
 
         var items = BuiltinDictionaries.Names.ToList();
-        if (_settings.DataPath is { } dp && Directory.Exists(dp))
-            items.AddRange(Directory.EnumerateFiles(dp).Where(f => f.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dic", StringComparison.OrdinalIgnoreCase)).Take(200));
+        var downloadedNames = new Dictionary<string, string>();
+        var wordlistLibrary = new WordlistLibrary(WordlistLibrary.Folder(_settings));
+        items.AddRange(WordlistLibrary.DataFiles(_settings.DataPath).Take(200));
         var dicts = new ComboBox[4];
         var btns = new Button[4];
         string[] labels = ["Primary dictionary", "Dictionary #2", "Dictionary #3", "Dictionary #4"];
+        var skipMin = L.Number(0, 256, a.SkipShorterThan, 100);
+        var skipMax = L.Number(0, 256, a.SkipLongerThan, 100);
+        var est = EstimateRow(t, 7);
         var rulesBtn = new Button { Content = "...", MinWidth = 40, HorizontalContentAlignment = HorizontalAlignment.Center };
         t.Put(Lb("Rules set"), 0, 0); t.Put(rules, 0, 1, 2); t.Put(rulesBtn, 0, 3);
         for (int i = 0; i < 4; i++)
@@ -884,29 +890,78 @@ public sealed class WizardWindow : Window
             int k = i;
             btns[i] = L.Button("...", async () =>
             {
-                if (await Pick.Open(this, "Dictionary files (*.dic; *.txt)|*.dic;*.txt|All files|*.*", _settings.LastDictionaryDirectory ?? _settings.DataPath) is { } p)
-                {
-                    dicts[k].Text = p;
-                    _settings.LastDictionaryDirectory = Path.GetDirectoryName(p);
-                }
+                var (speed, outputs, name) = await LibraryEstimateAsync();
+                var picker = new WordlistWindow(_settings, labels[k], DictValue(dicts[k]), speed, outputs, name);
+                picker.FitTo(this);
+                if (await picker.ShowDialog<string?>(this) is { } path)
+                    dicts[k].Text = BuiltinDictionaries.IsBuiltin(path) ? BuiltinDictionaries.DisplayName(path) : path;
+                await RefreshDictionaryItemsAsync();
             }, 40);
             t.Put(Lb(labels[i]), 1 + i, 0); t.Put(dicts[i], 1 + i, 1, 2); t.Put(btns[i], 1 + i, 3);
         }
-        var skipMin = L.Number(0, 256, a.SkipShorterThan, 100);
-        var skipMax = L.Number(0, 256, a.SkipLongerThan, 100);
         var skipRow = new WrapPanel { ItemSpacing = 8, LineSpacing = 6 };
         foreach (var c in new Control[] { Lb("Skip passwords shorter than"), skipMin, Lb("and longer than"), skipMax, Lb("symbols") }) skipRow.Children.Add(c);
         t.Put(skipRow, 5, 0, 4);
         var note = L.Text("0 = no limit. Rules files come from hashcat's rules folder or the data folder.", dim: true, wrap: true);
         note.FontSize = 12;
         t.Put(note, 6, 0, 4);
-        var est = EstimateRow(t, 7);
 
-        static string? DictValue(ComboBox cb)
+        async Task<(double Speed, long? Outputs, string Name)> LibraryEstimateAsync()
+        {
+            double.TryParse(est.Speed.Text, out var speed);
+            var attack = Read();
+            long? outputs = await Task.Run(() =>
+            {
+                if (Need(attack.Rules) != 1) return (long?)null;
+                if (attack.Rules == RulesPreset.AsIs) return 1;
+                try { return Wordlists.CountRules(AttackPlanner.ResolveRules(attack, _ctx)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AttackPlanException) { return (long?)null; }
+            });
+            return (speed, outputs, attack.Rules == RulesPreset.AsIs ? "as is" : AttackSpec.RulesName(attack.Rules));
+        }
+        async Task RefreshDictionaryItemsAsync()
+        {
+            try
+            {
+                var downloaded = await Task.Run(() => wordlistLibrary.LoadAsync());
+                downloadedNames.Clear();
+                foreach (var entry in downloaded)
+                {
+                    string label = entry.Name + " (downloaded)";
+                    if (downloadedNames.ContainsKey(label)) label = entry.Name + $" ({entry.Id}, downloaded)";
+                    downloadedNames[label] = wordlistLibrary.FilePath(entry);
+                }
+                var choices = BuiltinDictionaries.Names.Concat(downloadedNames.Keys).Concat(WordlistLibrary.DataFiles(_settings.DataPath).Take(200)).ToList();
+                foreach (var combo in dicts)
+                {
+                    string? text = combo.Text;
+                    combo.ItemsSource = choices;
+                    combo.Text = text;
+                }
+            }
+            catch (Exception ex) { DebugLog.Info("Could not read wordlist library: " + ex.Message); }
+        }
+        if (_wordlistChanged is not null) WordlistDownloads.Shared.Changed -= _wordlistChanged;
+        int finishedDownloads = WordlistDownloads.Shared.Jobs.Count(x => x.Finished);
+        _wordlistChanged = job =>
+        {
+            if (!job.Finished) return;
+            Dispatcher.UIThread.Post(async () =>
+            {
+                int finished = WordlistDownloads.Shared.Jobs.Count(x => x.Finished);
+                if (finished == finishedDownloads) return;
+                finishedDownloads = finished;
+                await RefreshDictionaryItemsAsync();
+            });
+        };
+        WordlistDownloads.Shared.Changed += _wordlistChanged;
+        _ = RefreshDictionaryItemsAsync();
+
+        string? DictValue(ComboBox cb)
         {
             var v = (cb.Text ?? "").Trim();
             if (v.Length == 0) return null;
-            return BuiltinDictionaries.Names.Contains(v) ? BuiltinDictionaries.Reference(v) : v;
+            return BuiltinDictionaries.Names.Contains(v) ? BuiltinDictionaries.Reference(v) : downloadedNames.GetValueOrDefault(v, v);
         }
         RulesPreset Preset() => rules.SelectedIndex >= 0 && rules.SelectedIndex < AttackSpec.PresetOrder.Length ? AttackSpec.PresetOrder[rules.SelectedIndex] : RulesPreset.CustomFile;
         static int Need(RulesPreset p) => p switch { RulesPreset.TwoWords or RulesPreset.TwoWordsAdvanced => 2, RulesPreset.ThreeWords => 3, _ => 1 };
@@ -952,7 +1007,15 @@ public sealed class WizardWindow : Window
             if (Preset() == RulesPreset.CustomFile && string.IsNullOrEmpty(customRules)) await PickRules();
             Update();
         };
-        foreach (var d in dicts) { d.PropertyChanged += (_, e) => { if (e.Property == ComboBox.TextProperty) Update(); }; }
+        foreach (var d in dicts)
+        {
+            d.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != ComboBox.TextProperty) return;
+                if (downloadedNames.TryGetValue(d.Text ?? "", out var path)) d.Text = path;
+                else Update();
+            };
+        }
         skipMin.ValueChanged += (_, _) => Update();
         skipMax.ValueChanged += (_, _) => Update();
         est.Speed.TextChanged += (_, _) => Update();

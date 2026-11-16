@@ -101,6 +101,77 @@ public static class SevenZipExtractor
         throw new FormatException("Too many nested 7z headers.");
     }
 
+    /// <summary>Unpacks one unencrypted, unfiltered LZMA/LZMA2 file without using archive paths.</summary>
+    public static void UnpackSingleFile(Stream source, Stream destination, long expectedSize, CancellationToken ct = default)
+    {
+        var start = Read(source, 0, 32);
+        if (!IsSevenZip(start) || start[6] != 0) throw new FormatException("Invalid 7z signature or version.");
+        CheckCrc(start.AsSpan(12), Bin.U32(start, 8));
+        ulong nextOffset = Bin.U64(start, 12), nextSize = Bin.U64(start, 20);
+        if (nextSize > HeaderLimit || nextOffset > (ulong)source.Length - 32) throw new FormatException("Invalid 7z header size.");
+        ulong headerStart = 32 + nextOffset;
+        byte[] header = Read(source, headerStart, nextSize);
+        CheckCrc(header, Bin.U32(start, 28));
+        for (int depth = 0; depth < 4; depth++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var reader = new Reader(header);
+            int type = reader.Byte();
+            if (type == 0x17)
+            {
+                var encoded = Streams(reader);
+                ValidateRanges(encoded, 32, headerStart);
+                if (encoded.Folders.Any(f => f.Coders.Any(c => c.Id == AesId)))
+                    throw new UnsupportedFormatException("Encrypted 7z archives cannot be used as wordlists.");
+                foreach (var coder in encoded.Folders.SelectMany(f => f.Coders)) CheckWordlistDictionary(coder);
+                header = DecodeHeader(source, encoded, 32);
+                continue;
+            }
+            if (type != 1) throw new FormatException("Expected a 7z header.");
+            StreamsInfo? main = null;
+            int files = 0;
+            for (int id; (id = reader.Byte()) != 0;)
+            {
+                switch (id)
+                {
+                    case 2: SkipProperties(reader); break;
+                    case 4: main = Streams(reader); break;
+                    case 5: files = reader.Count(); SkipProperties(reader); break;
+                    default: throw new UnsupportedFormatException("Unsupported 7z header property in wordlist archive.");
+                }
+            }
+            if (files != 1 || main is null || main.Folders.Count != 1 || main.Sizes.Count != 1 || main.Folders[0].SubSizes.Count != 1)
+                throw new UnsupportedFormatException("Wordlist 7z archives must contain a single file and a single data stream.");
+            ValidateRanges(main, 32, headerStart);
+            var folder = main.Folders[0];
+            var chain = folder.Chain();
+            string methods = string.Join(", ", folder.Coders.Select(c => c.Id switch
+            { "030401" => "PPMd", "040202" => "BZip2", AesId => "encrypted AES", _ => c.Id }));
+            if (chain is null || chain.Count != 1 || chain[0].Id is not "21" and not "030101")
+                throw new UnsupportedFormatException($"Unsupported 7z coder {methods}. Wordlists need LZMA or LZMA2 without filters.");
+            if (expectedSize < 0 || folder.FinalSize != (ulong)expectedSize) throw new FormatException("The unpacked 7z size differs from the published size.");
+            source.Position = checked((long)(32 + main.Positions[0]));
+            using var packed = new LimitedReadStream(source, checked((long)main.Sizes[0]));
+            CheckWordlistDictionary(chain[0]);
+            using var buffered = new BufferedStream(packed, 1 << 20);
+            using var decoder = SevenZipLzma.Open(buffered, chain[0].Properties, expectedSize, chain[0].Id == "21");
+            var buffer = new byte[1 << 20];
+            for (int n; (n = decoder.Read(buffer)) > 0;)
+            {
+                ct.ThrowIfCancellationRequested();
+                destination.Write(buffer, 0, n);
+            }
+            return;
+        }
+        throw new FormatException("Too many nested 7z headers.");
+    }
+
+    private static void CheckWordlistDictionary(Coder coder)
+    {
+        if (coder.Id is "21" or "030101" && SevenZipLzma.DictionarySize(coder.Properties, coder.Id == "21") > 1u << 30)
+            throw new UnsupportedFormatException("This wordlist archive needs a dictionary larger than 1 GB. Choose a smaller dictionary archive.");
+    }
+
     private static void SetTarget(Stream s, StreamsInfo info, ulong dataBase, Detection d, bool encryptedHeader)
     {
         Candidate? best = null;

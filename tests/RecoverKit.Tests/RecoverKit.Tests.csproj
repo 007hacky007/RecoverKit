@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Fixtures/Wordlists/*" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/Wallets/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

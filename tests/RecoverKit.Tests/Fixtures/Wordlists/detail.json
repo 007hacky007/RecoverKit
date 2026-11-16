@@ -1,0 +1,213 @@
+{
+  "data": {
+    "id": 1934,
+    "name": "ignis-10K.txt",
+    "slug": "ignis_10k.txt",
+    "size": 80456,
+    "size_compressed": 38284,
+    "count": 10000,
+    "rank": "S",
+    "rate": 2.0634014831729,
+    "download_url": "https://weakpass.com/download/1934/ignis-10K.txt.7z",
+    "torrent_url": "https://weakpass.com/download/1934/ignis-10K.txt.7z.torrent",
+    "url": "https://weakpass.com/api/v1/wordlists/ignis_10k.txt",
+    "description": "https://github.com/ignis-sec/Pwdb-Public",
+    "checksum": "e2bfa126fd50e8d778a42c9eeeb804b4",
+    "checksum_compressed": "7131bda1e042ac8cbe19aea85e508bd4",
+    "downloaded": 9895,
+    "created_at": "2024-03-20T19:45:19.000000Z",
+    "updated_at": "2026-11-15T23:06:53.000000Z",
+    "examples": [
+      "123456",
+      "123456789",
+      "password",
+      "qwerty",
+      "12345678",
+      "12345",
+      "123123",
+      "111111"
+    ],
+    "masks": [
+      {
+        "mask": "l",
+        "count": 6387
+      },
+      {
+        "mask": "ld",
+        "count": 2269
+      },
+      {
+        "mask": "d",
+        "count": 911
+      },
+      {
+        "mask": "lud",
+        "count": 219
+      },
+      {
+        "mask": "lu",
+        "count": 104
+      },
+      {
+        "mask": "u",
+        "count": 52
+      },
+      {
+        "mask": "ls",
+        "count": 13
+      },
+      {
+        "mask": "luds",
+        "count": 13
+      },
+      {
+        "mask": "ud",
+        "count": 13
+      },
+      {
+        "mask": "s",
+        "count": 8
+      },
+      {
+        "mask": "lds",
+        "count": 5
+      },
+      {
+        "mask": "ds",
+        "count": 4
+      },
+      {
+        "mask": "us",
+        "count": 2
+      },
+      {
+        "mask": "lus",
+        "count": 0
+      },
+      {
+        "mask": "uds",
+        "count": 0
+      }
+    ],
+    "top_masks": [
+      {
+        "mask": "?l?l?l?l?l?l",
+        "count": 2163
+      },
+      {
+        "mask": "?l?l?l?l?l?l?l",
+        "count": 1337
+      },
+      {
+        "mask": "?l?l?l?l?l?l?l?l",
+        "count": 1194
+      },
+      {
+        "mask": "?l?l?l?l?l",
+        "count": 476
+      },
+      {
+        "mask": "?l?l?l?l?l?l?l?l?l",
+        "count": 457
+      },
+      {
+        "mask": "?l?l?l?l?l?l?l?d",
+        "count": 319
+      },
+      {
+        "mask": "?d?d?d?d?d?d",
+        "count": 317
+      },
+      {
+        "mask": "?l?l?l?l",
+        "count": 242
+      },
+      {
+        "mask": "?l?l?l?l?l?l?d",
+        "count": 219
+      },
+      {
+        "mask": "?l?l?l",
+        "count": 215
+      }
+    ],
+    "length_distribution": [
+      {
+        "length": 4,
+        "count": 379
+      },
+      {
+        "length": 5,
+        "count": 512
+      },
+      {
+        "length": 6,
+        "count": 2897
+      },
+      {
+        "length": 7,
+        "count": 1834
+      },
+      {
+        "length": 8,
+        "count": 2266
+      },
+      {
+        "length": 9,
+        "count": 947
+      },
+      {
+        "length": 10,
+        "count": 583
+      },
+      {
+        "length": 11,
+        "count": 105
+      },
+      {
+        "length": 12,
+        "count": 76
+      },
+      {
+        "length": 13,
+        "count": 18
+      },
+      {
+        "length": 14,
+        "count": 6
+      },
+      {
+        "length": 15,
+        "count": 3
+      },
+      {
+        "length": 16,
+        "count": 4
+      },
+      {
+        "length": 17,
+        "count": 2
+      },
+      {
+        "length": 18,
+        "count": 2
+      },
+      {
+        "length": 19,
+        "count": 2
+      },
+      {
+        "length": 20,
+        "count": 2
+      },
+      {
+        "length": 21,
+        "count": 1
+      },
+      {
+        "length": 30,
+        "count": 2
+      }
+    ]
+  }
+}

@@ -5,6 +5,10 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+### Added
+- A wordlist library in the dictionary picker: browse weakpass.com, inspect its statistics,
+  resume downloads, see unpacking progress, reuse verified lists offline, or choose a file on disk.
+
 ## [1.6.2] - 2026-11-15
 
 ### Added

@@ -34,6 +34,45 @@ docs/                 benchmarks, screenshots, this file
 Everything is cross-platform .NET. The GUI is written in C# against Avalonia 12 (code only, no
 XAML) and uses the system menu bar on macOS and an in-window menu elsewhere.
 
+## Wordlist library
+
+`Attacks/WeakpassCatalog.cs` owns the weakpass API models, local filters and cache. Only opening
+its tab or using Refresh or Download contacts `https://weakpass.com/api/v1`; the library never
+uses hash lookup, rule generation or torrent endpoints. Requests identify as `RecoverKit/1.0`.
+`catalog.json` and `detail-<id>.json` live in `Settings.AppDataDir/wordlists`. Catalogs refresh
+after 24 hours; failed or malformed refreshes preserve the last successful cache. Paging stops
+at 100 pages, repeated ids, or inconsistent page bounds. Invalid cache files are ignored. Details are reused until a
+newer catalog is fetched. Cache and manifest writes use a temporary file and an atomic move.
+
+`WordlistLibrary.cs` stores verified lists and `library.json` in `<data folder>/wordlists`, or
+`Settings.AppDataDir/wordlists` when no data folder is set. Its versioned manifest identifies RecoverKit as its owner and keeps ordinary file
+names and metadata; dictionary attacks receive full paths. Missing files are pruned. An existing unreadable or foreign manifest is refused. Only
+manifest-owned files can be deleted, and externally changed files are refused.
+`WordlistDownloads.cs` owns the app-wide serial queue, disk budget, resumable `.part` files,
+both MD5 checks and bounded streaming unpacking. Hashes are calculated while downloading and
+unpacking; resuming first hashes the retained bytes. A 60-second body-read inactivity timeout
+keeps the partial. Ignored Range requests are retried twice before restarting from zero.
+Redirects are handled explicitly, at most five hops, over HTTPS to weakpass.com or
+download.weakpass.com. `download-<id>.json` records the owned partial path and compressed
+checksum; renaming a list keeps its partial, but a changed checksum starts over. New partials
+use `<id>-download.part`. Unowned files are never overwritten or cleaned. Cancel offers Keep
+or Delete above 100 MB already downloaded; abandoned owned partials expire after seven days. GZip uses the standard library;
+7z uses `SevenZipExtractor.UnpackSingleFile` and the existing managed LZMA/LZMA2 decoder.
+Unsupported coders, filters, encryption, multiple files and dictionaries above 1 GiB are
+refused without an external tool. Only known wordlist suffixes are retained; other names get `.txt`.
+
+`Views/WordlistWindow.cs` builds the four-tab dialog. `Settings.RecentWordlistFiles` holds the
+last ten existing file choices; `LastWordlistTab` remembers the empty-field tab. Debug snapshots
+with `RECOVERKIT_SNAPSHOT_ONLY=wordlists` render all tabs from offline fixture data. The dialog
+shows failures inline, retries initialization, and updates transfer and unpack progress at
+most four times per second. Manifest reads run in the background only when a job finishes.
+The recorded JSON fixtures are excerpts of one catalog page and ignis-10K details; the compact
+7z fixtures were created with 7zz and need no external program at test runtime. The default
+tests use recorded data, fake HTTP handlers and local servers for body stalls and redirects. The optional live check is
+`dotnet test tests/RecoverKit.Tests -c Release --filter FullyQualifiedName~WordlistLiveTests`;
+it refreshes the catalog, checks every sanitized name and downloads only the 38 KB ignis-10K archive. Set `RECOVERKIT_HOME` and
+`TMPDIR` to private test directories when running tests or snapshots.
+
 ## Detailed performance diagnostics
 
 `recoverkit-cli bench-full --out report.html` runs the same Core diagnostics as **Tools >

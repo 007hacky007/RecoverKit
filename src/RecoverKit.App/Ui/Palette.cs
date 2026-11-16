@@ -49,5 +49,22 @@ internal static class Palette
     public static IBrush StatusBandBrush => B(0xFFEBECEF, 0xFF313236);
     public static IBrush FileCardBrush => B(0x05000000, 0x05FFFFFF);
 
+    public static IBrush RankText(string? rank) => rank switch
+    {
+        "S" => B(0xFF7025A8, 0xFFD5A6FF),
+        "A" => SuccessBrush,
+        "B" => StepBrush,
+        "C" => WarningBrush,
+        _ => DimBrush,
+    };
+    public static IBrush RankBackground(string? rank) => rank switch
+    {
+        "S" => B(0xFFEFDFFC, 0xFF4B2D63),
+        "A" => B(0xFFD9F2DF, 0xFF23472E),
+        "B" => B(0xFFDCEAFF, 0xFF253C59),
+        "C" => B(0xFFFFEAC8, 0xFF503D22),
+        _ => B(0xFFE5E7EB, 0xFF3C3F45),
+    };
+
     public static Color AccentColor => Color.FromUInt32(Dark ? 0xFF2F86FFu : 0xFF0A6CF0u);
 }

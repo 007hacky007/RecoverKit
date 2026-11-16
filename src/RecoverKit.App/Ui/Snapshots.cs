@@ -39,6 +39,11 @@ internal static class Snapshots
     public static async Task RunAsync(MainWindow main, string dir)
     {
         Directory.CreateDirectory(dir);
+        if (Environment.GetEnvironmentVariable("RECOVERKIT_SNAPSHOT_ONLY") == "wordlists")
+        {
+            await WordlistSnapshots.RunAsync(main, dir);
+            Environment.Exit(0);
+        }
         main.Width = 700;
         main.Height = 600;
         await Task.Delay(2500);   // hashcat detection
