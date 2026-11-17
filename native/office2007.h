@@ -25,7 +25,7 @@
 #endif
 #include "office2007_crypto.h"
 
-typedef void (*office2007_iter_fn)(uint32_t (*)[5]);
+typedef void (*office2007_iter_fn)(uint32_t (*)[5], uint32_t);
 static atomic_int g_office2007_tests[7];
 
 static void office2007_initial(const uint8_t* pw, int len, const uint8_t* salt, uint32_t h[5])
@@ -107,7 +107,7 @@ RK_EXPORT int rk_office2007_spin(const uint8_t* pws, int stride, const int* lens
         int m=n-b<lanes?n-b:lanes;
         for (int l=0;l<m;l++) office2007_initial(pws?pws+(size_t)(b+l)*stride:NULL,lens?lens[b+l]:stride,salt,h[l]);
         for (int l=m;l<lanes;l++) memcpy(h[l],h[0],20);
-        fn(h);
+        fn(h,50000);
         for (int l=0;l<m;l++) for (int j=0;j<5;j++) put_be32(hashes+(size_t)(b+l)*20+4*j,h[l][j]);
         b+=m;
     }

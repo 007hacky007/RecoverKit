@@ -10,7 +10,7 @@ internal static unsafe class WideCpuChecks
 {
     internal static CpuDiagnostics.CorrectnessResult Check(int mode)
     {
-        if (mode == 9400) return CheckOffice2007();
+        if (mode is 9400 or 9500 or 9600) return CheckOffice(mode);
         if (mode is 13600 or 22000) return CheckPbkdf2Sha1();
         if (TrueCryptSha512Kernel.SupportsMode(mode)) return CheckPbkdf2Sha512();
         if (mode == 29331) return CheckWhirlpool();
@@ -55,10 +55,12 @@ internal static unsafe class WideCpuChecks
         return new(true, cases);
     }
 
-    private static CpuDiagnostics.CorrectnessResult CheckOffice2007()
+    private static CpuDiagnostics.CorrectnessResult CheckOffice(int mode)
     {
         const int stride = 512;
-        int n = Math.Max(9, RkNative.Office2007Lanes() + 3), cases = 0;
+        int n = Math.Max(9, (mode == 9400 ? RkNative.Office2007Lanes() : RkNative.OfficeAgileLanes(mode)) + 3), cases = 0;
+        int hashBytes = mode == 9600 ? 64 : 20;
+        uint spins = mode == 9400 ? 50000u : 100000u;
         int[] sizes = [0, 2, 14, 54, 56, 110, 128, 256, 512];
         int[] lengths = Enumerable.Range(0, n).Select(i => sizes[i % sizes.Length]).ToArray();
         byte[] passwords = new byte[n * stride];
@@ -68,25 +70,29 @@ internal static unsafe class WideCpuChecks
             passwords[i + 1] = (byte)(i % 7);
         }
         byte[] salt = Convert.FromHexString("e6773b8ca35c5e57d61e2d3a4d634566");
-        byte[] actual = new byte[n * 20];
+        byte[] actual = new byte[n * hashBytes];
         fixed (byte* p = passwords, s = salt, o = actual)
         fixed (int* lens = lengths)
-            if (RkNative.Office2007Spin(p, stride, lens, n, s, o) != 0)
-                return new(false, cases, "Native Office 2007 rejected the lane check.");
-        Span<byte> digest = stackalloc byte[20];
-        Span<byte> round = stackalloc byte[24];
+            if ((mode == 9400 ? RkNative.Office2007Spin(p, stride, lens, n, s, o)
+                : RkNative.OfficeAgileSpin(mode, p, stride, lens, n, s, spins, o)) != 0)
+                return new(false, cases, $"Native Office mode {mode} rejected the lane check.");
+        Span<byte> digest = stackalloc byte[hashBytes];
+        Span<byte> round = stackalloc byte[4 + hashBytes];
         for (int i = 0; i < n; i++)
         {
-            SHA1.HashData([.. salt, .. passwords.AsSpan(i * stride, lengths[i])], digest);
-            for (int counter = 0; counter < 50000; counter++)
+            byte[] input = [.. salt, .. passwords.AsSpan(i * stride, lengths[i])];
+            if (mode == 9600) SHA512.HashData(input, digest);
+            else SHA1.HashData(input, digest);
+            for (int counter = 0; counter < spins; counter++)
             {
                 BinaryPrimitives.WriteInt32LittleEndian(round, counter);
                 digest.CopyTo(round[4..]);
-                SHA1.HashData(round, digest);
+                if (mode == 9600) SHA512.HashData(round, digest);
+                else SHA1.HashData(round, digest);
             }
             cases++;
-            if (!digest.SequenceEqual(actual.AsSpan(i * 20, 20)))
-                return new(false, cases, $"Office 2007 SHA-1 differs from the reference at batch position {i}, UTF-16LE length {lengths[i]}.");
+            if (!digest.SequenceEqual(actual.AsSpan(i * hashBytes, hashBytes)))
+                return new(false, cases, $"Office mode {mode} spin hash differs from the reference at batch position {i}, UTF-16LE length {lengths[i]}.");
         }
         return new(true, cases);
     }

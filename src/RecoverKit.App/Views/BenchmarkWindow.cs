@@ -26,6 +26,7 @@ public sealed class BenchmarkWindow : Window
     private static readonly Entry[] Entries =
     [
         new(9400, "Microsoft® Word 2007", "MS Office 2007, SHA1, 128-bit AES"),
+        new(9500, "Microsoft® Word 2010", "MS Office 2010, SHA1, 128-bit AES"),
         new(9600, "Microsoft® PowerPoint 2013-2016", "MS Office 2013+, SHA512, 256-bit AES"),
         new(22000, "WPA Handshake", "WPA/WPA2-PSK, PBKDF2-HMAC-SHA1"),
         new(12500, "RAR 3.x", "RAR 3.x, SHA1, 128-bit AES"),

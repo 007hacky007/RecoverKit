@@ -61,7 +61,7 @@ public sealed partial class DetailedBenchmarkRunner
             gpuAllowed = HashcatRunner.NvidiaBackendError(settings, devices) is null && HashcatRunner.ActiveGpus(settings, devices).Count > 0
                 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
-        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 9400, 12500, 13000, 13600, 22000, 17200, 17210, 29331, 29321, 29322, 29323, 29421, 29422, 29423 } : Array.Empty<int>())
+        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 9400, 9500, 9600, 12500, 13000, 13600, 22000, 17200, 17210, 29331, 29321, 29322, 29323, 29421, 29422, 29423 } : Array.Empty<int>())
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && (v.Name is "avx2" or "avx512" || mode == 29331 && v.Name == "scalar")))
         foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name, mode))
             Add("cpu", $"Wide comparison mode {mode}, {variant.Name}, {count} workers", 12, async token =>
@@ -123,7 +123,7 @@ public sealed partial class DetailedBenchmarkRunner
                 async token => report.Measurements.Add(await ShortGpuAsync(local!, Slot(f, b)!, mode, "backend probe", token)),
                 () => gpuAllowed && Slot(f, b) is not null && Slot(f, 1) is not null);
         }
-        foreach (int mode in new[] { 17210, 12500, 13000, 10500, 9400 })
+        foreach (int mode in new[] { 17210, 12500, 13000, 10500, 9400, 9500, 9600 })
         for (int family = 0; family < 2; family++)
         {
             int f = family;

@@ -123,10 +123,11 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
     public async Task<SessionResult> RunAsync(HashTarget target, string filePath, IReadOnlyList<AttackSpec> steps,
         SessionState? resume, CancellationToken ct)
     {
-        if (target.Modes.Count == 1 && target.Modes[0] == 9400)
+        if (target.Modes.Count == 1 && target.Modes[0] is 9400 or 9500 or 9600)
         {
-            var kernels = target.HashLines.Split('\n').Select(Native.Kernels.Office2007Kernel.TryParse).OfType<Native.Kernels.Office2007Kernel>().ToArray();
-            if (kernels.Length > 0)
+            var lines = target.HashLines.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var kernels = lines.Select(line => Native.NativeKernels.TryCreate(target.Modes[0], line)).OfType<Native.NativeKernel>().ToArray();
+            if (kernels.Length > 0 && kernels.Length == lines.Length)
             {
                 var confirm = target.ConfirmPassword;
                 target.ConfirmPassword = password => kernels.Any(kernel => kernel.Verify(password)) && (confirm?.Invoke(password) ?? true);
@@ -146,7 +147,7 @@ public sealed partial class RecoverySession(HashcatTool? hashcat, Settings setti
         {
             foreach (var mode in target.Modes)
             {
-                bool preserveBytes = mode == 9400 || (mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && target.VolumeCredentials is null
+                bool preserveBytes = mode is 9400 or 9500 or 9600 || (mode is 12500 or 13000 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && target.VolumeCredentials is null
                     && steps.Any(step => step.Kind == AttackKind.Dictionary);
                 var cached = TrueCryptSha512Kernel.ConfirmHits(mode, target.HashLines, target.VolumeCredentials,
                     settings.ExtraArguments, target.ConfirmPassword) is { } confirm

@@ -111,8 +111,8 @@ public static class CpuDiagnosticWorker
             directory = Directory.CreateTempSubdirectory("rk-cpu-worker-").FullName;
             string output = Path.Combine(directory, "result.json");
             var start = SelfStartInfo();
-            if (Math.Abs(mode) == 9400 && variant != "default")
-                start.Environment["RECOVERKIT_OFFICE2007_PATH"] = variant;
+            string? officePath = Math.Abs(mode) switch { 9400 => "RECOVERKIT_OFFICE2007_PATH", 9500 => "RECOVERKIT_OFFICE2010_PATH", 9600 => "RECOVERKIT_OFFICE2013_PATH", _ => null };
+            if (officePath is not null && variant != "default") start.Environment[officePath] = variant;
             if (Math.Abs(mode) is 13600 or 22000 && variant != "default")
                 start.Environment["RECOVERKIT_PBKDF2_SHA1_PATH"] = variant;
             if (TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode)) && variant is not ("default" or "managed"))

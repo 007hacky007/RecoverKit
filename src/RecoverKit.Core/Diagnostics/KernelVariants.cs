@@ -20,6 +20,8 @@ public static class KernelVariants
     private static readonly IReadOnlyDictionary<int, Registration[]> Registry = new Dictionary<int, Registration[]>
     {
         [9400] = Office2007Variants,
+        [9500] = Office2007Variants,
+        [9600] = Pbkdf2Sha512Variants.Where(v => v.Name != "managed").ToArray(),
         [9700] = NativeAndManaged,
         [9800] = NativeAndManaged,
         [10400] = NativeAndManaged,

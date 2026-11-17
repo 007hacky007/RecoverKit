@@ -161,7 +161,7 @@ public static class PerformanceProfiles
     }
 
     public static bool ShouldCalibrate(Settings s, int mode, double candidates, double speed) => s.AutomaticPerformanceCalibration
-        && mode is not (9400 or 13600 or 22000) && !TrueCryptSha512Kernel.SupportsMode(mode)
+        && mode is not (9400 or 9500 or 9600 or 13600 or 22000) && !TrueCryptSha512Kernel.SupportsMode(mode)
         && NativeKernels.Supports(mode) && candidates > 0 && speed > 0 && candidates / speed >= 12
         && s.Strategy == DeviceStrategy.GpuOnly && !s.PerformanceStrategyExplicit && !s.PerformanceThreadsExplicit && s.MaxCpuThreads == 0
         && s.UseNativeCpuEngine && string.IsNullOrWhiteSpace(s.ExtraArguments);

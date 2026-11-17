@@ -95,6 +95,8 @@ public static class OfficeExtractor
             Speed = SpeedClass.VerySlow,
             Utf16Password = true,
         };
+        if (Native.Kernels.OfficeAgileKernel.TryParse(d.Target.HashLines) is { } kernel)
+            d.Target.ConfirmPassword = password => kernel.Verify(password);
     }
 
     private static void ExtractStandard(byte[] info, Detection d)

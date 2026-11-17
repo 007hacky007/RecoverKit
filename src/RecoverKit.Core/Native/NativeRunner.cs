@@ -38,7 +38,7 @@ public sealed class NativeRunner
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
         // A CPU variant timing alone does not establish a win over hashcat's CPU engine.
-        if (!ignoreGpu && (mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.PerformanceChoice?.Engine != "cpu") return null;
+        if (!ignoreGpu && (mode is 9400 or 9500 or 9600 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         // hashcat searches every network; our CPU runners stop on their first hit.
         if (lines.Length != 1) return null;
@@ -112,7 +112,7 @@ public sealed class NativeRunner
         {
             case NativeOutcome.Found:
             {
-                var pw = await RecordFoundAsync(s, MatchedHashLine(kernel, hashLine, result.Password!), result.Password!, r.Mode == 9400 || r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
+                var pw = await RecordFoundAsync(s, MatchedHashLine(kernel, hashLine, result.Password!), result.Password!, r.Mode is 9400 or 9500 or 9600 || r.ConfirmPassword is not null ? r.PasswordCachePath ?? s.PotfilePath : null);
                 TryDelete(restoreFile);
                 return new RunResult { Outcome = RunOutcome.Cracked, ExitCode = 0, Passwords = [pw], LastStatus = last };
             }
@@ -134,7 +134,7 @@ public sealed class NativeRunner
     /// <summary>Writes a found password to the password cache in hashcat's format and returns it decoded.</summary>
     internal static async Task<string> RecordFoundAsync(Settings s, string hashLine, byte[] pw, string? confirmedCache = null)
     {
-        if (hashLine.TrimStart().StartsWith("$office$*2007*", StringComparison.Ordinal))
+        if (hashLine.TrimStart().StartsWith("$office$*", StringComparison.Ordinal))
         {
             if (!s.DontUsePasswordCache) await PasswordConfirmation.AppendAsync(confirmedCache ?? s.PotfilePath, hashLine, pw);
             return HybridRunner.DictionaryPlain(pw);

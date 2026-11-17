@@ -9,7 +9,7 @@ namespace RecoverKit.Core.Native;
 internal static unsafe partial class RkNative
 {
     private const string Lib = "rknative";
-    private const int RequiredVersion = 18;
+    private const int RequiredVersion = 19;
 
     /// <summary>Mirrors RK_FEAT_* in rknative.c. The Arm* bits describe ARMv8 instructions.</summary>
     [Flags]
@@ -62,6 +62,22 @@ internal static unsafe partial class RkNative
 
     [LibraryImport(Lib, EntryPoint = "rk_office2007_executed_paths")]
     public static partial int Office2007ExecutedPaths();
+
+    /// <summary>UTF-16LE candidates to the Agile SHA-1/SHA-512 digest; zero on success.</summary>
+    [LibraryImport(Lib, EntryPoint = "rk_office_agile_spin")]
+    public static partial int OfficeAgileSpin(int mode, byte* pws, int stride, int* lens, int n, byte* salt, uint spins, byte* hashes);
+
+    [LibraryImport(Lib, EntryPoint = "rk_office_agile_selected_path")]
+    public static partial int OfficeAgileSelectedPath(int mode);
+
+    [LibraryImport(Lib, EntryPoint = "rk_office_agile_lanes")]
+    public static partial int OfficeAgileLanes(int mode);
+
+    [LibraryImport(Lib, EntryPoint = "rk_office_agile_selftest_state")]
+    public static partial int OfficeAgileSelfTestState(int mode);
+
+    [LibraryImport(Lib, EntryPoint = "rk_office_agile_executed_paths")]
+    public static partial int OfficeAgileExecutedPaths(int mode);
 
     [LibraryImport(Lib, EntryPoint = "rk_office97_search")]
     public static partial int Office97Search(byte* salt16, byte* enc32, byte* pws, int len, int n, int* hits, int maxHits);

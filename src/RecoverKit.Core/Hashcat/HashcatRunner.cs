@@ -401,26 +401,35 @@ public sealed class HashcatRunner(HashcatTool tool)
         if (NvidiaBackendError(r.Settings, KnownDevices) is { } backendError)
             return new RunResult { Outcome = RunOutcome.Error, Error = backendError };
         r.VolumeCredentials?.ValidateUnchanged();
-        var officeTargets = new List<(string HashLine, Office2007Kernel Kernel)>();
-        if (r.Mode == 9400)
+        var officeTargets = new List<(string HashLine, Native.NativeKernel Kernel)>();
+        if (r.Mode is 9400 or 9500 or 9600)
         {
+            int targetCount = 0;
             try
             {
                 foreach (string line in File.ReadLines(r.HashFile))
                 {
                     string hashLine = line.Trim();
-                    int start = hashLine.IndexOf("$office$*2007*", StringComparison.Ordinal);
+                    if (hashLine.Length == 0) continue;
+                    targetCount++;
+                    int start = hashLine.IndexOf("$office$*", StringComparison.Ordinal);
                     if (start > 0 && hashLine.AsSpan(0, start).Contains(':')) hashLine = hashLine[start..];
-                    if (Office2007Kernel.TryParse(hashLine) is { } kernel) officeTargets.Add((hashLine, kernel));
+                    if (Native.NativeKernels.TryCreate(r.Mode, hashLine) is { } kernel) officeTargets.Add((hashLine, kernel));
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            { return new RunResult { Outcome = RunOutcome.Error, Error = "Office 2007 independent verification target could not be read." }; }
-            if (officeTargets.Count == 0)
-                return new RunResult { Outcome = RunOutcome.Error, Error = "Office 2007 independent verification target could not be parsed." };
-            var callerConfirm = r.ConfirmPassword;
-            r = r with { ConfirmPassword = password => officeTargets.Any(target => target.Kernel.Verify(password))
-                && (callerConfirm?.Invoke(password) ?? true) };
+            { return new RunResult { Outcome = RunOutcome.Error, Error = "Office independent verification target could not be read." }; }
+            if (officeTargets.Count == 0 && r.Mode == 9400)
+                return new RunResult { Outcome = RunOutcome.Error, Error = "Office independent verification target could not be parsed." };
+            // Agile parsing covers hashcat 8's accepted parameters; other variants remain hashcat-only.
+            if (r.Mode is 9500 or 9600 && officeTargets.Count > 0 && officeTargets.Count != targetCount)
+                return new RunResult { Outcome = RunOutcome.Error, Error = "Independent verification does not support all Office target rows. Run supported and unsupported variants separately." };
+            if (officeTargets.Count > 0)
+            {
+                var callerConfirm = r.ConfirmPassword;
+                r = r with { ConfirmPassword = password => officeTargets.Any(target => target.Kernel.Verify(password))
+                    && (callerConfirm?.Invoke(password) ?? true) };
+            }
         }
         if (r.ZipCheckBytes is { } filter)
             return await RunCheckBytesAsync(r, filter, ct);
@@ -617,7 +626,7 @@ public sealed class HashcatRunner(HashcatTool tool)
     }
 
     private async Task<RunResult> RunAttemptAsync(RunRequest r, OutfileConfirmer? confirm, Action<string> output, CancellationToken ct,
-        IReadOnlyList<(string HashLine, Office2007Kernel Kernel)> officeTargets)
+        IReadOnlyList<(string HashLine, Native.NativeKernel Kernel)> officeTargets)
     {
         var args = BuildArguments(r);
         // Older hashcat restores its saved command line, whose device settings come from this request.
@@ -771,7 +780,7 @@ public sealed class HashcatRunner(HashcatTool tool)
             raw = File.Exists(outFile)
                 ? File.ReadAllLines(outFile).Distinct().ToList()
                 : new List<string>();
-        var passwords = raw.Select(p => r.Mode == 9400 ? Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(p))
+        var passwords = raw.Select(p => r.Mode is 9400 or 9500 or 9600 ? Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(p))
             : HashcatTool.DecodePlain(p, r.VolumeCredentials)).Distinct().ToList();
 
         RunOutcome outcome = code switch
@@ -790,13 +799,16 @@ public sealed class HashcatRunner(HashcatTool tool)
             if (confirm.Confirmed is { } plain && !r.Settings.DontUsePasswordCache)
             {
                 byte[] password = PasswordConfirmation.PlainBytes(plain);
-                string? hashLine = r.Mode == 9400 ? officeTargets.FirstOrDefault(target => target.Kernel.Verify(password)).HashLine
+                string? hashLine = officeTargets.Count > 0 ? officeTargets.FirstOrDefault(target => target.Kernel.Verify(password)).HashLine
                     : PasswordConfirmation.FirstHashLine(r.CacheHashFile ?? r.HashFile);
                 if (hashLine is not null) await PasswordConfirmation.AppendAsync(r.PasswordCachePath ?? r.Settings.PotfilePath, hashLine, password);
             }
         }
         else if (outcome == RunOutcome.Cracked && passwords.Count == 0 && !r.Settings.DontUsePasswordCache)
-            passwords = await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);
+            passwords = r.Mode is 9400 or 9500 or 9600
+                ? (await tool.ShowRawAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, preserveBom: true))
+                    .Select(raw => Native.HybridRunner.DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList()
+                : await tool.ShowAsync(r.Mode, r.HashFile, r.PasswordCachePath ?? r.Settings.PotfilePath, r.VolumeCredentials);
         if (stopped && outcome != RunOutcome.Cracked) outcome = RunOutcome.Aborted;
 
         string? error = outcome == RunOutcome.Error ? HashcatOutput.FailureMessage(tail, code) : null;

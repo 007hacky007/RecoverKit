@@ -1,0 +1,242 @@
+Office Agile CPU engine (9500/9600)
+=================================
+
+Scope and correctness
+
+Office 2010 (9500) uses SHA-1, AES-128 and 100000 spins. Office 2013-2021
+(9600) uses SHA-512, AES-256 and 100000 spins. Both accept a 16-byte salt.
+These are exactly the variants accepted by hashcat 8.0.0's modules:
+  https://github.com/hashcat/hashcat/blob/v8.0.0/src/modules/module_09500.c
+  https://github.com/hashcat/hashcat/blob/v8.0.0/src/modules/module_09600.c
+  https://github.com/hashcat/hashcat/blob/v8.0.0/OpenCL/m09500-pure.cl
+  https://github.com/hashcat/hashcat/blob/v8.0.0/OpenCL/m09600-pure.cl
+Independent algorithm reference and encrypted-package generator:
+  https://github.com/nolze/msoffcrypto-tool/blob/master/msoffcrypto/method/ecma376_agile.py
+
+The initial hash is H(salt || UTF16LE(password)). Each spin computes
+H(LE32(counter) || previous_hash), with counters 0 through 99999. Two fixed
+block keys produce the AES verifier keys. The salt is the CBC IV. Both hashcat
+8 kernels compare the first 16 verifier-hash bytes, although their hash lines
+carry 32 encrypted bytes; the CPU reference check follows that comparison.
+
+Office 2010 shares Office 2007's SHA-1 lane and hardware-instruction functions,
+with a configurable spin count. Office 2013 reuses sha512_lanes.h and
+sha512_arm.h compression. Each 68-byte SHA-512 spin needs one compression,
+with constant padding and digest vectors retained across iterations.
+
+Every accelerated path must pass independent Python hashlib known answers for
+all 100000 spins before it runs candidate batches. A failed or still-running
+guard falls back to scalar. Native hits are confirmed through .NET SHA1/SHA512
+and AES before reporting. GPU and cached hits receive managed confirmation too.
+UTF-8, supplementary characters, hashcat's raw F4 edge, empty passwords and the
+256-byte limit share Office 2007's encoder. Results and caches preserve bytes,
+including literal HEX-looking passwords. Unsupported dictionaries are replayed
+through hashcat. Unsupported hash parameters never enter the native plan.
+
+Default dispatch, when the corresponding guard passes:
+  x64 9500: AVX-512 (16 lanes), then SHA-NI (2 streams), AVX2 (8), scalar.
+  x64 9600: AVX-512 (8 lanes), then AVX2 (4), scalar.
+  arm64 9500: ARM SHA-1 (4 streams), then NEON (4 lanes), scalar.
+  arm64 9600: ARM SHA-512 (2 streams), then NEON (2 lanes), scalar.
+Explicit selectors and measured profiles can choose another supported path.
+
+Hybrid defaults match Office 2007: use the CPU next to an active discrete GPU;
+integrated-only systems require an explicit choice or measured hybrid winner.
+CPU-only execution requires a measured winner over hashcat's CPU engine.
+
+M1 Pro measurements
+
+Apple M1 Pro, 10 logical threads (8 performance and 2 efficiency cores), macOS
+27.0.1, .NET 10.0.401, zig 0.15.2, native API 19. Each CPU row contains
+three fresh CLI processes, alternating paths and modes within each thread
+count. Seven-byte candidates, published hashcat targets, no matches, four
+seconds requested and one-second warmup excluded. The selected guard is
+initialized before worker threads start. Rates are candidates/s, medians of
+the rounded CLI rates. CPU measurements run separately from the test suite
+and GPU jobs. Other unrelated host work is not stopped.
+
+Command:
+  RECOVERKIT_HOME=/private/tmp/rk-office-agile-cpu/home RECOVERKIT_OFFICE2010_PATH=PATH dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-native --mode 9500 --threads THREADS --seconds 4 --length 7
+  RECOVERKIT_HOME=/private/tmp/rk-office-agile-cpu/home RECOVERKIT_OFFICE2013_PATH=PATH dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-native --mode 9600 --threads THREADS --seconds 4 --length 7
+
+Mode  Threads  Path             Round 1  Round 2  Round 3  Median  Range
+9500        1  scalar               145      146      145     145  145-146
+9500        1  NEON                 228      229      228     228  228-229
+9500        1  ARM SHA-1            435      439      437     437  435-439
+9500        8  scalar              1044     1050     1072    1050  1044-1072
+9500        8  NEON                1866     1712     1703    1712  1703-1866
+9500        8  ARM SHA-1           3236     3029     2936    3029  2936-3236
+9500       10  scalar              1199     1263     1225    1225  1199-1263
+9500       10  NEON                2129     2375     2347    2347  2129-2375
+9500       10  ARM SHA-1           2986     3388     3351    3351  2986-3388
+9600        1  scalar                52       52       52      52  52-52
+9600        1  NEON                  70       69       70      70  69-70
+9600        1  ARM SHA-512          243      240      245     243  240-245
+9600        8  scalar               385      375      369     375  369-385
+9600        8  NEON                 511      505      511     511  505-511
+9600        8  ARM SHA-512         1775     1782     1797    1782  1775-1797
+9600       10  scalar               384      395      390     390  384-395
+9600       10  NEON                 604      613      612     612  604-613
+9600       10  ARM SHA-512         1857     1751     1776    1776  1751-1857
+
+All accelerated samples reported exactly the requested path and guard: passed.
+ARM SHA-1 was fastest for 9500 and ARM SHA-512 was fastest for 9600 at every
+measured thread count. The 9600 ARM SHA-512 medians were 1782/s at 8 threads
+and 1776/s at 10 threads; these runs show no gain from the last two workers.
+The 9500 multi-thread ranges vary more than the single-thread results. Treat
+these as observed wall-clock rates on a shared host, not idle-machine capacity.
+Raw CLI outputs and cpu-results.json are retained in
+/private/tmp/rk-office-agile-cpu/.
+
+GPU context, measured separately with a private copy of hashcat 8.0.0:
+  hashcat -b -m 9500
+  Apple M1 Pro OpenCL GPU: 20101 H/s, 27.29 ms,
+  Accel 2320, Loops 1021, Threads 64, Vec 1.
+  hashcat -b -m 9600
+  Apple M1 Pro OpenCL GPU: 1724 H/s, 90.89 ms,
+  Accel 672, Loops 1021, Threads 64, Vec 1.
+Both use pure kernels; hashcat's automatic benchmark skips the Metal alias
+and selects Apple OpenCL 1.2, 16 compute units. The GPU measurements overlapped
+the ordinary test suite, so treat them as context under shared-host load.
+They are separate GPU rates, not measured hybrid totals. Do not add CPU and GPU
+rates to claim a gain on this integrated GPU.
+
+The supplied tester reports show 11999/s GPU-only for mode 9600 in RecoverKit
+1.8.0 and 12704/s for a commercial CPU+GPU run on Ryzen 7 9800X3D + RTX 4060.
+These Mac measurements do not predict that machine's CPU contribution. No
+Ryzen/RTX throughput or sustained hybrid gain has been measured here.
+
+Verification
+
+native/build.sh built both win-x64 and osx-arm64 using zig 0.15.2, API 19.
+  dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  Final Release build: 0 warnings, 0 errors.
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false
+  Final suite: 2357 passed, 0 failed, 0 skipped, 4 minutes 8 seconds.
+The final test command reused the freshly built Release binaries (--no-build).
+An earlier full run had one missing embedded SHA1 fixture because its resource
+was added during that build. The final rebuild includes both fixtures and the
+test passes. A clean test compilation reports the existing CA1416 warning in
+CandidateExportTests.cs:227; no new warnings were introduced.
+
+RECOVERKIT_TEST_HASHCAT pointed to the private hashcat 8.0.0 copy:
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~OfficeAgileHashcatTests'
+  26 passed, 0 failed, 0 skipped, 2 minutes 58 seconds.
+This covers published examples, independent vectors, empty and 256-byte
+passwords, Unicode, supplementary and raw F4 bytes, native password caches,
+dictionary rules, CPU/GPU winners and GPU dictionary resume for both modes.
+The ordinary suite excludes Category=Stay and Category=Slow per project
+settings. The Agile Slow tests were explicitly selected above; unrelated Slow
+and Stay suites were not run.
+
+Native differential checks cover every locally available path, spin counts
+0/1/2/255/256/65536/100000, padding boundaries through 512 UTF-16 bytes,
+partial batches and Office 2007 regressions. Guard tests corrupt the final
+word of the final lane and check failed/testing fallback and per-mode state.
+Rosetta scalar tests pass; Rosetta exposes no accelerated x64 features here.
+AVX2, AVX-512 and SHA-NI compile for Windows but still require native x64
+runtime verification. Automatic approval review rejected uploading the Windows
+DLL to the separate test VM because that destination was not explicitly
+authorized. No upload occurred. There are no x64 performance measurements.
+
+Independent Python hashlib/cryptography vectors and msoffcrypto-tool 6.1.0
+encrypted Office 2010 and Office 2013 package fixtures are under
+tests/RecoverKit.Tests/Fixtures/Office. Their generator checks the published
+hashcat examples before writing deterministic fixtures. Both package payloads
+are decrypted with HMAC integrity verification. See README-agile.txt there.
+
+Tester reproduction (PowerShell)
+
+Use a built Release tree with API 19 rknative.dll and a private hashcat 8.0.0
+installation. Start with fresh settings:
+
+  $env:RECOVERKIT_HOME = Join-Path $env:TEMP 'RecoverKit-office-agile-cpu'
+  $env:RECOVERKIT_TEST_HASHCAT = 'C:\bench\hashcat\hashcat.exe'
+  dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~OfficeAgileHashcatTests'
+
+Three fresh-process CPU samples for each path and thread count:
+
+  foreach ($mode in 9500,9600) {
+    $selector = if ($mode -eq 9500) { 'RECOVERKIT_OFFICE2010_PATH' } else { 'RECOVERKIT_OFFICE2013_PATH' }
+    $paths = if ($mode -eq 9500) { @('scalar','avx2','avx512','sha-ni') } else { @('scalar','avx2','avx512') }
+    foreach ($threads in 1,8,16) {
+      foreach ($path in $paths) {
+        Set-Item -Path "Env:$selector" -Value $path
+        1..3 | ForEach-Object {
+          dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-native --mode $mode --threads $threads --seconds 10 --length 7
+        }
+      }
+    }
+    Remove-Item -Path "Env:$selector"
+    & $env:RECOVERKIT_TEST_HASHCAT -b -m $mode
+  }
+
+Only compare a requested accelerated path when the output names that exact
+path and says guard: passed. Unsupported selectors fall back to scalar.
+Record all three rates, their median and range. Automatic x64 dispatch prefers
+AVX-512; a measured profile can select SHA-NI for 9500 if faster on that CPU.
+
+To measure complete GPU-only and hybrid jobs with the RTX selected:
+
+  dotnet run --project src/RecoverKit.Cli -c Release --no-build -- bench-full --hashcat $env:RECOVERKIT_TEST_HASHCAT --sections system,cpu,gpu,hybrid --thorough --out (Join-Path $env:RECOVERKIT_HOME 'office-agile.html')
+
+Compare rows for modes 9500 and 9600. Repeat representative finite recovery
+jobs with hybrid disabled in Preferences > Performance, keeping the same
+target, dictionary/rules or mask, and cache settings. Include GPU startup and
+the CPU tail in whole-job elapsed time. Leave both Office path selectors unset
+when checking measured profile application and the default hybrid behavior.
+
+Files changed
+
+"reports/Benchmark_x64_[AMD Ryzen 7 9800X3D 8-Core Processor]_\304\215tvrtek 12. listopadu 2026_22_52 passcovery.htm"
+CHANGELOG.md
+README.md
+docs/DEVELOPERS.md
+docs/benchmarks/office-agile-cpu.txt
+docs/superpowers/plans/2026-11-17-office-agile-cpu.md
+native/office2007.h
+native/office2007_crypto.h
+native/office2007_lanes.h
+native/office2007_selftest.h
+native/office_agile.h
+native/office_agile_kat.h
+native/office_agile_sha512_lanes.h
+native/rknative.c
+native/tests/office_agile_guard_test.c
+native/tests/office_agile_test.py
+src/RecoverKit.App/Ui/SpeedProbe.cs
+src/RecoverKit.App/Views/BenchmarkWindow.cs
+src/RecoverKit.App/Views/PreferencesWindow.cs
+src/RecoverKit.Cli/Program.cs
+src/RecoverKit.Core/Diagnostics/CpuDiagnosticWorker.cs
+src/RecoverKit.Core/Diagnostics/CpuDiagnostics.cs
+src/RecoverKit.Core/Diagnostics/DetailedBenchmarkRunner.cs
+src/RecoverKit.Core/Diagnostics/KernelVariants.cs
+src/RecoverKit.Core/Diagnostics/PerformanceProfiles.cs
+src/RecoverKit.Core/Diagnostics/ProfileSettings.cs
+src/RecoverKit.Core/Diagnostics/ShortDiagnosticPlan.cs
+src/RecoverKit.Core/Diagnostics/WideCpuChecks.cs
+src/RecoverKit.Core/Diagnostics/WideVectorPaths.cs
+src/RecoverKit.Core/Formats/OfficeExtractor.cs
+src/RecoverKit.Core/Hashcat/HashcatRunner.cs
+src/RecoverKit.Core/Native/HybridRunner.cs
+src/RecoverKit.Core/Native/Kernels/Office2007Kernel.cs
+src/RecoverKit.Core/Native/Kernels/OfficeAgileKernel.cs
+src/RecoverKit.Core/Native/NativeKernels.cs
+src/RecoverKit.Core/Native/NativeRunner.cs
+src/RecoverKit.Core/Native/RkNative.cs
+src/RecoverKit.Core/RecoverySession.cs
+tests/RecoverKit.Tests/Fixtures/Office/README-agile.txt
+tests/RecoverKit.Tests/Fixtures/Office/agile-msoffcrypto-sha1.bin
+tests/RecoverKit.Tests/Fixtures/Office/agile-msoffcrypto-sha512.bin
+tests/RecoverKit.Tests/Fixtures/Office/agile-vectors.json
+tests/RecoverKit.Tests/Fixtures/Office/generate-agile-vectors.py
+tests/RecoverKit.Tests/Office2007HybridTests.cs
+tests/RecoverKit.Tests/OfficeAgileCpuTests.cs
+tests/RecoverKit.Tests/OfficeAgileDiagnosticTests.cs
+tests/RecoverKit.Tests/OfficeAgileHashcatTests.cs
+tests/RecoverKit.Tests/OfficeAgileHybridTests.cs
+tests/RecoverKit.Tests/OfficeAgileRegistrationTests.cs
+tests/RecoverKit.Tests/WpaCpuTests.cs
