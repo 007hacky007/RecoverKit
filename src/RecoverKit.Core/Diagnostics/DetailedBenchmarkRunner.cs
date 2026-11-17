@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -22,7 +23,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
     /// <summary>Dwell time for live ZIP samples. Startup and compilation take additional time.</summary>
     public int Seconds { get; init; } = 3;
     public bool Thorough { get; init; }
-    private static readonly int[] Modes = [9400, 9600, 12500, 13000, 13600, 22000, 10500, 17200, 17210, 29321, 29331];
+    private static readonly int[] Modes = [9400, 9600, 12500, 13000, 13600, 22000, 10500, 17200, 17210, 29321, 29322, 29323, 29421, 29422, 29423, 29331];
 
     internal static string[] SelectSections(IEnumerable<string>? sections)
     {
@@ -310,7 +311,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
         return new[] { reserve, Math.Min(best, limit) }.Distinct().Take(2).ToArray();
     }
 
-    internal static readonly int[] HybridModes = [9400, 13000, 17210, 12500, 13600, 22000];
+    internal static readonly int[] HybridModes = [9400, 13000, 17210, 12500, 13600, 22000, 29321, 29322, 29323, 29421, 29422, 29423];
 
     private void AddHybridSteps(DiagnosticPlan plan, HashcatTool local, DiagnosticReport report, CancellationToken ct)
     {
@@ -338,7 +339,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                 if (mode == 17210) gpu = report.Measurements.Where(r => r.Section == "zip" && r.Mode == mode && r.Target.Contains("17 bytes") && r.Correct).Select(r => r.Speed).DefaultIfEmpty(gpu).Max();
                 if (cpu <= 0) cpu = NativeKernels.TryCreate(mode, NativeKernels.BenchmarkHashes[mode])?.SpeedHint * limit ?? 1000;
                 if (gpu <= 0) gpu = cpu * 2;
-                mask = Thorough && mode is not (9400 or 13600 or 22000)
+                mask = Thorough && (mode is not (9400 or 13600 or 22000) && !TrueCryptSha512Kernel.SupportsMode(mode))
                     ? ["-a", "3", "-1", "ABCDEFGHIJKLMN", string.Concat(Enumerable.Repeat("?1", mode is 13000 or 12500 ? 5 : 9))]
                     : FiniteDiagnosticWorker.SizedMask(cpu + gpu, 12, mode == 22000 ? 8 : 1);
             });
@@ -369,7 +370,7 @@ public sealed partial class DetailedBenchmarkRunner(HashcatTool? tool, Settings 
                         row.Details["Metric"] = "complete candidates / whole-job elapsed";
                         row.Details["Finite"] = "true";
                         row.Details["Adaptive sampling"] = (!Thorough).ToString();
-                        bool hybridDefault = settings.HybridCpuGpu && (mode is not (9400 or 13600 or 22000) || settings.PerformanceStrategyExplicit
+                        bool hybridDefault = settings.HybridCpuGpu && ((mode is not (9400 or 13600 or 22000) && !TrueCryptSha512Kernel.SupportsMode(mode)) || settings.PerformanceStrategyExplicit
                             || physical.Any(d => !d.IsIntegratedGpu));
                         row.Details["Default"] = (gi == 0 && (hybridDefault ? count == HybridRunner.CpuThreads(settings, physical, true) : count == 0)).ToString();
                         rows.Add(row);

@@ -34,8 +34,8 @@ public static class MatchedSpeedProbe
         copy.DontUsePasswordCache = true;
         copy.SessionsDir = directory;
         var attack = new PreparedAttack { Description = "Synthetic matched speed measurement" };
-        attack.Args.AddRange(["-a", "3", "-1", "?u?d?s", string.Concat(Enumerable.Repeat("?1", LengthFor(mode))),
-            "--runtime", Math.Max(3, (int)Math.Ceiling(duration.TotalSeconds)).ToString(), "--restore-disable", "--logfile-disable", "--keep-guessing"]);
+        attack.Args.AddRange(NativeKernels.BenchmarkMaskArguments(mode, LengthFor(mode)));
+        attack.Args.AddRange(["--runtime", Math.Max(3, (int)Math.Ceiling(duration.TotalSeconds)).ToString(), "--restore-disable", "--logfile-disable", "--keep-guessing"]);
         return new RunRequest
         {
             Mode = mode, HashFile = Path.Combine(directory, "synthetic.hash"), Attack = attack,

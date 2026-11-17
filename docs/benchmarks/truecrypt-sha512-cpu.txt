@@ -1,0 +1,313 @@
+TrueCrypt/VeraCrypt SHA-512 CPU engine, 2026-11-16 to 2026-11-17
+
+Scope
+
+Native API 17 adds reusable SHA-512 compression and PBKDF2-HMAC-SHA512.
+The CPU kernel covers emitted modes 29321-29323 and 29421-29423, and legacy
+aliases 6221-6223 / 13721-13723. The second/third modes also test shorter
+cipher chains, with their own XTS key layouts. Header offsets, including
+hidden volumes, do not change the CPU check.
+
+TrueCrypt: AES, Serpent, Twofish; AES-Twofish, Serpent-AES, Twofish-Serpent;
+AES-Twofish-Serpent and Serpent-Twofish-AES.
+VeraCrypt adds Camellia, Kuznyechik; Camellia-Kuznyechik, Camellia-Serpent,
+Kuznyechik-AES, Kuznyechik-Twofish; Kuznyechik-Serpent-Camellia.
+TrueCrypt passwords: 0-64 bytes. VeraCrypt: 0-128 bytes in manual/dictionary
+jobs; the existing extracted-volume target retains its 64-byte cap.
+Every CPU hit is rederived with Bouncy Castle and checked by the managed
+header verifier before reporting. Default single-header SHA-512 GPU and cached
+hits use the same managed confirmation; existing additional confirmations are
+preserved. Credential and extra-argument jobs retain hashcat handling. Kuznyechik uses a local RFC 7801 reference
+because Bouncy Castle 2.7 lacks that cipher.
+
+Keyfile and nondefault PIM jobs retain the existing VolumeCredentials gate:
+the whole job stays on hashcat, including rules, masks and resume. The direct
+kernel/reference supports a fixed PIM and tests 15000 + 1000 * PIM iterations;
+that does not enable CPU partitioning of credential-bearing recovery jobs.
+No candidate subset is assigned to an unsupported CPU variant.
+
+Hybrid defaults to CPU plus a discrete GPU. Integrated-only systems retain
+hashcat unless explicitly selected or a measured profile selects hybrid.
+A CPU-only job requires the existing measured execution-winner gate.
+No commits, staging, publication or changes to other worktrees.
+
+Managed verification
+
+dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  Zero errors, no new warnings. Clean test compilation retains the pre-existing
+  CA1416 warning at CandidateExportTests.cs:227 (File.SetUnixFileMode).
+  Subsequent incremental solution builds report zero warnings and zero errors.
+dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --no-build
+  2133 passed, zero failed, zero skipped, 3 minutes 33 seconds on final production code.
+  The project's default filter excludes Category=Stay and Category=Slow.
+Focused SHA-512 plus Whirlpool checks also passed 98/98 before the last
+benchmark-only change; they included existing Whirlpool slow benchmark cases.
+The final default suite includes the native random boundary test added later.
+Seven managed GPU/cache confirmation regressions passed after four expected
+failures with confirmation removed. Default SHA-512 GPU hits and cached hits
+are confirmed before reporting; keyfile/PIM/extra-argument jobs retain their
+existing hashcat handling. The four affected real GPU/hybrid mask/dictionary
+cases passed again after that hook was added.
+
+A static review found a tiny-job rule that discarded a measured SHA-512 GPU or
+hybrid winner. A failing regression demonstrated both cases; the fix retains
+the winner and the regression passes. Short diagnostics now schedule all six
+modern wide-path comparisons and omit duplicate legacy aliases.
+The full suite initially found the WPA test's exact API16 assertion. It was
+updated to API17 and the full rerun passed.
+
+Real hashcat verification
+
+RECOVERKIT_TEST_HASHCAT pointed at this task's private hashcat 8.0.0 copy.
+The opt-in run passed 19/19: 17 SHA-512 tests and two existing Whirlpool
+matched-probe cases. It covered all six published examples, every cipher and
+cascade listed above, custom PIM, and GPU/hybrid masks and rule dictionaries.
+The published VeraCrypt 1536-bit example initially timed out after three
+minutes. An isolated visible run passed its self-test but had completed only
+86154/500000 iterations when a 20-second attack limit expired. Default startup
+alone took 118 seconds. The final eight-minute correctness budget passed the
+example in 3 minutes 11 seconds. No hashcat self-test or kernel error occurred.
+Grouped generated headers use unique salts: these hashcat modes reject multiple
+headers with one salt. Generated VeraCrypt cases use PIM 1 to check each cipher
+without repeating a 500000-iteration KDF for each independent header.
+
+Native verification and dispatch
+
+Both targets built with native/build.sh and cached Zig 0.15.2:
+  ZIG_GLOBAL_CACHE_DIR=/tmp/recoverkit-zig-cache ZIG=<cached-zig-binary> sh native/build.sh
+  win-x64 and osx-arm64: zero compiler warnings.
+The installed anyzig wrapper could not use its normal compiler cache inside
+the sandbox; using its already-cached compiler and a writable temporary cache
+worked without installing software.
+
+Mac: 240 randomized Python hashlib comparisons across scalar, NEON, ARM SHA-512
+and default, including password/salt lengths 0-256, HMAC boundaries 128/129,
+salt padding boundaries, iterations 1/2/7/1000, output lengths 1/63/64/65/128/192,
+zero and partial groups, output sentinels, invalid arguments and passed guards.
+Windows VM: API 17, features 5 (AVX2 + AES), no .NET runtime installed.
+Four fresh processes, scalar/AVX2/default/requested-AVX512 fallback, passed
+1548 hashlib comparisons over 72 batches per process, plus invalid arguments
+and feature masking. AVX-512 execution is unavailable on this VM.
+
+Default x64 path: AVX-512 eight lanes, otherwise AVX2 four lanes, otherwise scalar.
+Default arm64 path: FEAT_SHA512 two interleaved streams, otherwise NEON two lanes,
+otherwise scalar. Each accelerated implementation has its own independent
+known-answer guard before candidate work; a failed guard uses scalar.
+RECOVERKIT_PBKDF2_SHA512_AVX512=0 disables the wide x64 path.
+RECOVERKIT_PBKDF2_SHA512_PATH selects scalar/neon/arm-sha512/avx2/avx512.
+The selected-path export and executed-path bits distinguish fallbacks; timings
+are rejected if the requested path did not execute.
+
+ARM stream tuning, KDF only
+
+64 candidates/call, eight-byte passwords, 64-byte salt, 1000 iterations,
+64-byte derived key; three 1-second samples, median candidates/s:
+
+Streams   1 thread   8 threads
+1          5275.6     30937.0
+2          9188.9     58328.3
+4          9207.9     49067.6
+8          8981.0     38758.1
+
+Two streams remain the default. Four has a similar single-thread result but
+is 16% slower at eight threads. Eight streams uses more registers and is slower
+at both thread counts. These rates exclude the header check and are separate
+from the recoverkit-cli measurements below.
+
+M1 Pro recoverkit-cli measurements
+
+All 108 accepted native-only samples: six modes, scalar/NEON/ARM SHA-512,
+one and ten threads, three repeats each. Every accelerated row printed the
+requested executed path and a passed guard. Unsupported x64 paths were not
+timed on this Mac. No managed-only throughput claim is made.
+
+Command, with a private RECOVERKIT_HOME and one fresh process per sample:
+  RECOVERKIT_PBKDF2_SHA512_PATH=PATH dotnet src/RecoverKit.Cli/bin/Release/net10.0/recoverkit-cli.dll bench-native --mode MODE --threads THREADS --seconds SECONDS --length 7
+
+Requested duration was 4 seconds for TrueCrypt and 6 for VeraCrypt. The rate
+excludes the first one-second warmup. In-flight batches finish before stopping,
+so VeraCrypt process elapsed time was 6.38-9.24 seconds. Priority was the default Idle;
+threads were not pinned to the M1 Pro's performance/efficiency cores.
+
+CPU samples waited for known concurrent CPU/GPU tests to stop. A process
+monitor checked for active hashcat jobs and heavy dotnet/Python/compiler
+processes during each sample; detected overlaps were discarded and repeated.
+The initial contended pilot and whole-number VeraCrypt pilot were discarded.
+Normal OS activity and scheduling are not eliminated. Short windows on slow
+fallback paths remain sensitive to batch completion; the three runs expose
+that spread rather than hiding it.
+
+All candidates are seven bytes. TrueCrypt uses upper-case/digits/specials at
+every position. VeraCrypt uses the same set at its first six positions and
+AB at the last, retaining a large keyspace with much shorter progress batches.
+CPU, diagnostic-worker and matched GPU probes share this mask definition.
+The scalar native search and managed hit reference still check actual complete
+passwords; this is a benchmark-only mask change. Rates are candidates/s.
+
+Mode  Threads Path          Round 1     Round 2     Round 3      Median
+29321       1 scalar              2025        2044        2065        2044
+29321       1 neon                2746        2776        2813        2776
+29321       1 arm-sha512          8562        8661        8695        8661
+29321      10 scalar             13894       13300       13428       13428
+29321      10 neon               19278       18994       19326       19278
+29321      10 arm-sha512         58737       56618       46690       56618
+29322       1 scalar               989         992         977         989
+29322       1 neon                1360        1362        1329        1360
+29322       1 arm-sha512          4066        4062        3999        4062
+29322      10 scalar              6990        6546        7112        6990
+29322      10 neon                6250        8631        9187        8631
+29322      10 arm-sha512         26402       23697       24828       24828
+29323       1 scalar               660         671         668         668
+29323       1 neon                 912         843         918         912
+29323       1 arm-sha512          2657        2624        2705        2657
+29323      10 scalar              4752        2497        4244        4244
+29323      10 neon                6150        6224        6235        6224
+29323      10 arm-sha512         17368       18123       18333       18123
+29421       1 scalar              4.22        4.23        4.07        4.22
+29421       1 neon                6.07        6.04        6.01        6.04
+29421       1 arm-sha512         19.87       19.89       18.51       19.87
+29421      10 scalar             35.91       34.14       35.70       35.70
+29421      10 neon               46.02       44.97       45.27       45.27
+29421      10 arm-sha512        158.37      158.36      147.07      158.36
+29422       1 scalar              2.05        2.07        1.96        2.05
+29422       1 neon                1.98        2.50        2.96        2.50
+29422       1 arm-sha512          9.45        8.88        9.69        9.45
+29422      10 scalar             16.47       17.70       13.67       16.47
+29422      10 neon               21.65       16.22       20.35       20.35
+29422      10 arm-sha512         74.09       77.32       64.64       74.09
+29423       1 scalar              1.56        1.27        1.60        1.56
+29423       1 neon                2.21        2.21        1.72        2.21
+29423       1 arm-sha512          6.45        6.48        6.42        6.45
+29423      10 scalar              7.87       10.12       12.02       10.12
+29423      10 neon               16.19       16.79       16.16       16.19
+29423      10 arm-sha512         36.00       41.94       49.38       41.94
+
+The fastest measured Mac path was ARM SHA-512. These native-only rates and
+the GPU context below are separate measurements; no sum is a measured hybrid
+result. The real hybrid tests establish recovery correctness, not a sustained
+Ryzen/RTX throughput gain.
+
+M1 Pro GPU context
+
+  hashcat -b -m MODE --backend-ignore-opencl -w 3
+
+All six modes used pure kernels after hashcat's optimized-kernel fallback.
+Reported candidates/s, one benchmark run per mode:
+
+Mode    GPU rate
+29321    31692
+29322    17038
+29323    11448
+29421       44
+29422       20
+29423      n/a (hashcat printed 0 H/s despite exit 0)
+
+The last result is not a measured zero-throughput engine: real password recovery
+for that mode passed. Background CPU tests from other agents were observed
+during this context run; it is not an isolated performance baseline. These
+GPU-only estimates cannot be added to native-only rates to claim a hybrid gain.
+A complete simultaneous throughput comparison remains for the discrete GPU PC.
+
+Windows verification and measurements
+
+Use a private hashcat 8.0.0 copy and the freshly built native DLL. From the
+repository root in PowerShell:
+
+  $env:RECOVERKIT_HOME = Join-Path $env:TEMP 'rk-truecrypt-sha512'
+  $env:RECOVERKIT_TEST_HASHCAT = 'C:\bench\hashcat\hashcat.exe'
+  $cli = 'src\RecoverKit.Cli\bin\Release\net10.0\recoverkit-cli.dll'
+  # With Zig 0.15.2 already installed; rebuild the Windows DLL first.
+  New-Item -ItemType Directory -Force native\bin\win-x64 | Out-Null
+  zig cc -target x86_64-windows-gnu -O3 -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-const-variable -fno-strict-aliasing -shared -o native/bin/win-x64/rknative.dll native/rknative.c
+  dotnet build RecoverKit.sln -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~TrueCryptSha512HashcatTests'
+  dotnet $cli bench-full --hashcat $env:RECOVERKIT_TEST_HASHCAT --sections cpu,gpu,hybrid --thorough --out (Join-Path $env:RECOVERKIT_HOME 'sha512.html')
+
+The six published examples retain hashcat's full default-PIM self-tests.
+Generated headers are grouped by mode with unique salts; VeraCrypt fixtures
+use PIM 1, and only those independent GPU oracle runs skip the redundant
+hashcat internal self-test. Every digest must be recovered as the expected
+password and every outfile line is counted. Native path guards stay enabled.
+The opt-in suite also checks PIM 7 and mask/rule-dictionary GPU/hybrid recovery.
+
+For direct path comparisons on the tester's 16-thread Ryzen:
+
+  foreach ($mode in 29321,29322,29323,29421,29422,29423) {
+    foreach ($threads in 1,16) {
+      foreach ($round in 1..3) {
+        foreach ($path in 'scalar','avx2','avx512') {
+          $env:RECOVERKIT_PBKDF2_SHA512_PATH = $path
+          dotnet $cli bench-native --mode $mode --threads $threads --seconds 10 --length 7
+        }
+      }
+    }
+    & $env:RECOVERKIT_TEST_HASHCAT -b -m $mode -D 2 -w 3
+  }
+  Remove-Item Env:\RECOVERKIT_PBKDF2_SHA512_PATH
+
+Check the printed executed path and guard, not just the requested selector.
+Run the same commands at 15 threads for the CPU's contribution next to the RTX
+4060. Native-only plus GPU-only rates are not a measured simultaneous rate;
+the complete hybrid section measures both running together and includes startup
+and the CPU tail. Compare complete-job elapsed time as well as candidates/s.
+The default measured-choice gates also protect CPU-only and integrated systems.
+To compare hashcat CPU speed where a CPU OpenCL runtime is already available:
+
+  & $env:RECOVERKIT_TEST_HASHCAT -I
+  & $env:RECOVERKIT_TEST_HASHCAT -b -m 29321 -D 1 -w 3
+
+Guard-off regression:
+
+  $env:RECOVERKIT_PBKDF2_SHA512_AVX512 = '0'
+  dotnet test tests/RecoverKit.Tests -c Release -p:NuGetAudit=false --filter 'FullyQualifiedName~TrueCryptSha512Tests'
+  Remove-Item Env:\RECOVERKIT_PBKDF2_SHA512_AVX512
+
+Limits
+
+No Zen 5/RTX 4060 rates or AVX-512 execution results were measured here. The
+supplied tester GPU baseline and commercial comparison are not remeasured by
+these Mac/VM checks. No throughput extrapolation to that PC is claimed.
+Keyfile and PIM recovery jobs intentionally remain on hashcat; direct PIM
+reference tests do not change that planner boundary.
+
+Files changed
+
+native/rknative.c
+native/sha512_lanes.h
+native/sha512_arm.h
+native/pbkdf2_sha512.h
+native/pbkdf2_sha512_lanes.h
+native/pbkdf2_sha512_selftest.h
+src/RecoverKit.Core/Native/Kernels/TrueCryptSha512Kernel.cs
+src/RecoverKit.Core/Native/Kernels/TrueCryptHeaderCheck.cs
+src/RecoverKit.Core/Native/Kernels/KuznyechikEngine.cs
+src/RecoverKit.Core/Native/Kernels/TrueCryptWhirlpoolKernel.cs
+src/RecoverKit.Core/Native/NativeKernels.cs
+src/RecoverKit.Core/Native/RkNative.cs
+src/RecoverKit.Core/Native/HybridRunner.cs
+src/RecoverKit.Core/Native/NativeRunner.cs
+src/RecoverKit.Core/RecoverySession.cs
+src/RecoverKit.Core/Diagnostics/KernelVariants.cs
+src/RecoverKit.Core/Diagnostics/CpuDiagnostics.cs
+src/RecoverKit.Core/Diagnostics/CpuDiagnosticWorker.cs
+src/RecoverKit.Core/Diagnostics/WideCpuChecks.cs
+src/RecoverKit.Core/Diagnostics/WideVectorPaths.cs
+src/RecoverKit.Core/Diagnostics/DetailedBenchmarkRunner.cs
+src/RecoverKit.Core/Diagnostics/ShortDiagnosticPlan.cs
+src/RecoverKit.Core/Diagnostics/MatchedSpeedProbe.cs
+src/RecoverKit.Core/Diagnostics/ProfileSettings.cs
+src/RecoverKit.Core/Diagnostics/PerformanceProfiles.cs
+src/RecoverKit.App/Ui/SpeedProbe.cs
+src/RecoverKit.App/Views/PreferencesWindow.cs
+src/RecoverKit.Cli/Program.cs
+tests/RecoverKit.Tests/TrueCryptSha512Tests.cs
+tests/RecoverKit.Tests/TrueCryptSha512ConfirmationTests.cs
+tests/RecoverKit.Tests/TrueCryptSha512DiagnosticTests.cs
+tests/RecoverKit.Tests/TrueCryptSha512IntegrationTests.cs
+tests/RecoverKit.Tests/TrueCryptSha512HashcatTests.cs
+tests/RecoverKit.Tests/WpaCpuTests.cs
+README.md
+CHANGELOG.md
+docs/DEVELOPERS.md
+docs/benchmarks/truecrypt-sha512-cpu.txt

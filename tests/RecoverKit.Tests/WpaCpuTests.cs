@@ -47,7 +47,7 @@ public class WpaCpuTests
     public void NativeApiExecutesEveryKnownAnswer()
     {
         if (!RkNative.Available) return;
-        Assert.Equal(17, RkNative.ApiVersion);
+        Assert.Equal(18, RkNative.ApiVersion);
         foreach (string line in Lines)
         {
             RkNative.ResetExecutedPaths(22000);

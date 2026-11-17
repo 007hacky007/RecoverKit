@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text;
@@ -122,10 +123,10 @@ public sealed class HybridRunner
         var gpus = HashcatRunner.ActiveGpus(settings, devices);
         if (gpus.Count == 0) return null;
         // Shared power and memory made these kernels slower over complete jobs on integrated GPUs.
-        if (mode is 9400 or 13600 or 22000 && gpus.All(d => d.IsIntegratedGpu)
+        if ((mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && gpus.All(d => d.IsIntegratedGpu)
             && settings.PerformanceChoice?.Engine != "hybrid" && !settings.PerformanceStrategyExplicit) return null;
         bool cpuAddsTooLittle = settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode);
-        if (mode is 9400 or 13000 or 12500 or 10700 or 13600 or 22000 or 29331 && settings.UseNativeCpuEngine && credentials is null
+        if ((mode is 9400 or 13000 or 12500 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.UseNativeCpuEngine && credentials is null
             && partial is null && attack.Stdin is null && string.IsNullOrWhiteSpace(settings.ExtraArguments)
             && !hashLines.Trim().Contains('\n') && DictionaryAttack.Parse(attack.Args) is { } dictionary
             && NativeKernels.TryCreate(mode, hashLines.Trim()) is { } kernel)
@@ -176,6 +177,8 @@ public sealed class HybridRunner
     /// <summary>Runs a hybrid step with hashcat as the GPU side.</summary>
     public async Task<RunResult> RunAsync(HybridPlan plan, string hashLine, RunRequest r, HashcatTool tool, CancellationToken ct)
     {
+        r = r with { ConfirmPassword = TrueCryptSha512Kernel.ConfirmHits(r.Mode, hashLine,
+            r.VolumeCredentials, r.Settings.ExtraArguments, r.ConfirmPassword) };
         var runner = new HashcatRunner(tool) { KnownDevices = Devices, FalsePositives = FalsePositives };
         runner.OutputLine += l => OutputLine?.Invoke(l);
         GuardEvents?.Invoke(runner);

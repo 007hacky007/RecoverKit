@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -37,7 +38,7 @@ public sealed class NativeRunner
         bool gpu = HashcatRunner.ActiveGpus(settings, devices).Count > 0;
         if (gpu && !ignoreGpu && settings.Strategy != DeviceStrategy.CpuOnly && settings.PerformanceChoice?.Engine != "cpu") return null;
         // A CPU variant timing alone does not establish a win over hashcat's CPU engine.
-        if (!ignoreGpu && mode is 9400 or 13600 or 22000 && settings.PerformanceChoice?.Engine != "cpu") return null;
+        if (!ignoreGpu && (mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.PerformanceChoice?.Engine != "cpu") return null;
         var lines = hashLines.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         // hashcat searches every network; our CPU runners stop on their first hit.
         if (lines.Length != 1) return null;
@@ -103,7 +104,8 @@ public sealed class NativeRunner
             if (previous is { } pc)
                 try { proc.PriorityClass = pc; } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         }
-        if (r.Mode == 29331) OutputLine?.Invoke($"Built-in CPU engine Whirlpool path: {NativeKernels.CpuPath(r.Mode, actualOnly: true)}");
+        if (r.Mode == 29331 || TrueCryptSha512Kernel.SupportsMode(r.Mode))
+            OutputLine?.Invoke($"Built-in CPU engine path: {NativeKernels.CpuPath(r.Mode, actualOnly: true)}");
         DebugLog.Info($"Native engine finished: {result.Outcome}, {result.Tested:N0} candidates in {sw.Elapsed.TotalSeconds:F1} s");
 
         switch (result.Outcome)

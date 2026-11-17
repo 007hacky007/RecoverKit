@@ -9,6 +9,10 @@ All notable changes to RecoverKit. Downloads are on the
 - A built-in CPU engine for Office 2007, with scalar, AVX2, AVX-512, SHA-NI, NEON and ARM SHA-1
   paths. Masks and dictionaries with rules share work with hashcat by default on discrete GPUs;
   integrated-only systems need an explicit choice or a measured hybrid win.
+- Built-in CPU recovery for TrueCrypt and VeraCrypt PBKDF2-SHA512 headers, including cipher
+  cascades, hidden headers, masks and rule dictionaries. It runs next to hashcat by default on
+  discrete GPUs; integrated-only systems retain hashcat unless hybrid is explicitly selected or
+  measured faster. Keyfiles and custom PIM jobs stay on hashcat.
 
 ### Changed
 - On macOS, PDF R3/R4 128-bit GPU recovery uses a hashcat 8.0.0 kernel with compiler-selected RC4

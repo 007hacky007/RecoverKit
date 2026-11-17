@@ -64,7 +64,7 @@ public static class CpuDiagnostics
     internal static int[] ThreadCounts(Settings settings, string variant, int mode = 0)
     {
         int limit = settings.MaxCpuThreads > 0 ? Math.Min(settings.MaxCpuThreads, Environment.ProcessorCount) : Environment.ProcessorCount;
-        return (variant is "avx2" or "avx512" || mode == 29331 && variant == "scalar" ? new[] { 1, SystemFacts.PhysicalCores(), Environment.ProcessorCount }
+        return (variant is "avx2" or "avx512" || (mode == 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && variant == "scalar" ? new[] { 1, SystemFacts.PhysicalCores(), Environment.ProcessorCount }
             : new[] { SystemFacts.PhysicalCores(), Environment.ProcessorCount }).Select(n => Math.Min(n, limit)).Distinct().Order().ToArray();
     }
 
@@ -83,17 +83,18 @@ public static class CpuDiagnostics
         report.System["Office 2007 self-test (report process)"] = NativeKernels.WideSelfTestState(9400);
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
+        report.System["PBKDF2 SHA-512 selected-path self-test (report process)"] = NativeKernels.WideSelfTestState(29321);
         report.System["PBKDF2 SHA-1 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(22000);
         report.System["Whirlpool AVX-512 self-test (report process; runs only when turned on in Preferences)"] = NativeKernels.WideSelfTestState(29331);
     }
 
     internal static void WorkerStates(DiagnosticReport report)
     {
-        foreach (int mode in new[] { 9400, 12500, 13000, 13600, 22000, 29331 })
+        foreach (int mode in new[] { 9400, 12500, 13000, 13600, 22000, 29321, 29322, 29323, 29421, 29422, 29423, 29331 })
         {
             string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
                 .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
-            string name = mode switch { 9400 => "Office 2007", 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", _ => "Whirlpool" };
+            string name = mode switch { 9400 => "Office 2007", 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", 29331 => "Whirlpool", _ => $"SHA-512 mode {mode}" };
             report.System[$"{name} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
         }
     }
@@ -104,6 +105,8 @@ public static class CpuDiagnostics
         var repeats = new List<(string Label, Func<Task> Run, Func<bool> Needed)>();
         foreach (int mode in NativeKernels.BenchmarkHashes.Keys)
         {
+            // Legacy SHA-512 mode aliases use the same kernels and fixtures as the six current modes.
+            if (mode < 29300 && TrueCryptSha512Kernel.SupportsMode(mode)) continue;
             var rows = new List<DiagnosticMeasurement>();
             foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
             foreach (int threads in ThreadCounts(settings, variant.Name, mode))
@@ -178,7 +181,7 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
-            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || mode is 9400 or 13600 or 22000 && RkNative.Available)
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || (mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && RkNative.Available)
             {
                 var wide = WideCpuChecks.Check(mode);
                 return wide with { Cases = wide.Cases + 7 };

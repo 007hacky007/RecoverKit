@@ -1,3 +1,4 @@
+using RecoverKit.Core.Native.Kernels;
 using System.Diagnostics;
 using System.Globalization;
 using RecoverKit.Core.Hashcat;
@@ -60,7 +61,7 @@ public sealed partial class DetailedBenchmarkRunner
             gpuAllowed = HashcatRunner.NvidiaBackendError(settings, devices) is null && HashcatRunner.ActiveGpus(settings, devices).Count > 0
                 && !settings.GpuTempGuard && settings.GpuDutyPercent == 100 && await PowerLimitSatisfiedAsync().WaitAsync(token);
         });
-        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 9400, 12500, 13000, 13600, 22000, 17200, 17210, 29331 } : Array.Empty<int>())
+        foreach (int mode in CpuDiagnostics.HasWidePaths ? new[] { 9400, 12500, 13000, 13600, 22000, 17200, 17210, 29331, 29321, 29322, 29323, 29421, 29422, 29423 } : Array.Empty<int>())
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported && (v.Name is "avx2" or "avx512" || mode == 29331 && v.Name == "scalar")))
         foreach (int count in CpuDiagnostics.ThreadCounts(settings, variant.Name, mode))
             Add("cpu", $"Wide comparison mode {mode}, {variant.Name}, {count} workers", 12, async token =>
@@ -74,7 +75,7 @@ public sealed partial class DetailedBenchmarkRunner
                 CpuDiagnostics.WorkerStates(report);
             });
         int threads = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads : Environment.ProcessorCount;
-        var cpuModes = NativeKernels.BenchmarkHashes.Keys.Where(m => m > 0).ToList();
+        var cpuModes = NativeKernels.BenchmarkHashes.Keys.Where(m => m > 0 && (m >= 29300 || !TrueCryptSha512Kernel.SupportsMode(m))).ToList();
         foreach (int mode in cpuModes)
         foreach (var variant in KernelVariants.ForMode(mode).Where(v => v.Supported))
         {

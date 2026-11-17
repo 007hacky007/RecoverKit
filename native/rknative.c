@@ -40,7 +40,7 @@
 #define RK_VEC 1                /* the 16-lane MD5 / SHA-1 kernels and the RC4 filters */
 #endif
 
-#define RK_API_VERSION 17
+#define RK_API_VERSION 18
 
 enum
 {
@@ -417,8 +417,9 @@ static atomic_int g_rar3_paths = 0, g_pbkdf2_paths = 0, g_pbkdf2_sha1_paths = 0;
 static atomic_int g_rar3_wide_test = 0, g_pbkdf2_wide_test = 0, g_pbkdf2_sha1_wide_test = 0;
 static atomic_int g_whirl_paths = 0, g_whirl_wide_test = 0, g_whirl_avx512 = 0;
 static atomic_int g_office2007_paths = 0;
+static atomic_int g_pbkdf2_sha512_paths = 0;
 
-enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16, RK_PATH_ARM_SHA1 = 32, RK_PATH_SHANI = 64 };
+enum { RK_PATH_SCALAR = 1, RK_PATH_AVX2 = 2, RK_PATH_AVX512 = 4, RK_PATH_NEON = 8, RK_PATH_ARM_SHA256 = 16, RK_PATH_ARM_SHA1 = 32, RK_PATH_SHANI = 64, RK_PATH_ARM_SHA512 = 128 };
 
 static int wide_switched_off(const char* name)
 {
@@ -447,6 +448,8 @@ RK_EXPORT void rk_reset_executed_paths(int mode)
     else if (mode == 13000) atomic_store(&g_pbkdf2_paths, 0);
     else if (mode == 29331) atomic_store(&g_whirl_paths, 0);
     else if (mode == 13600 || mode == 22000) atomic_store(&g_pbkdf2_sha1_paths, 0);
+    else if ((mode >= 29321 && mode <= 29323) || (mode >= 29421 && mode <= 29423)
+        || (mode >= 6221 && mode <= 6223) || (mode >= 13721 && mode <= 13723)) atomic_store(&g_pbkdf2_sha512_paths, 0);
 }
 
 #if RK_X64
@@ -3438,6 +3441,7 @@ RK_EXPORT int rk_pbkdf2_sha256(const uint8_t* pws, int stride, const int* lens, 
 
 #include "pbkdf2_sha1.h"
 #include "office2007.h"
+#include "pbkdf2_sha512.h"
 
 /*
  * RAR 5 password check (hashcat 13000). The archive's KDF runs PBKDF2-HMAC-SHA256 with 2^lg2

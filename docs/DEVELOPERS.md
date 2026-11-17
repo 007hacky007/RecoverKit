@@ -811,6 +811,37 @@ processes with `RECOVERKIT_PBKDF2_SHA1_PATH=scalar|neon|arm-sha1|avx2|avx512`; u
 selectors fall back safely, and diagnostics reject a requested path that did not execute.
 Both modes appear in the detailed benchmark's Wide vector paths table on AVX-512 systems.
 
+PBKDF2-HMAC-SHA512 (native API 18, `native/pbkdf2_sha512.h`) uses reusable compression in
+`native/sha512_lanes.h`: 8 candidates with AVX-512, 4 with AVX2, 2 with NEON, or scalar.
+Apple silicon with FEAT_SHA512 uses the ARM SHA-512 instructions. HMAC inner/outer states are
+prepared once per candidate; subsequent HMAC messages have fixed 64-byte data and padding.
+Every accelerated path checks independent known answers before first use and falls back to scalar
+on failure. `rk_pbkdf2_sha512` supports arbitrary salts, iteration counts and output lengths;
+`rk_pbkdf2_sha512_path` reports the selected path, while executed-path bits record actual work.
+Select a path in a fresh process with `RECOVERKIT_PBKDF2_SHA512_PATH=scalar|neon|arm-sha512|avx2|avx512`.
+`RECOVERKIT_PBKDF2_SHA512_AVX512=0` disables AVX-512. Diagnostics reject fallback timings.
+
+TrueCrypt/VeraCrypt SHA-512 (`TrueCryptSha512Kernel`) registers modes 29321-29323 and
+29421-29423, with legacy aliases 6221-6223 and 13721-13723. It derives up to three 64-byte PBKDF2 blocks: TrueCrypt uses 1,000 iterations,
+VeraCrypt 500,000 by default. `TrueCryptHeaderCheck` is shared with Whirlpool and checks XTS
+cipher chains, the TRUE/VERA signature, key-area CRC and header CRC for header version 4+.
+Every fast-path hit is confirmed by the managed reference with Bouncy Castle PBKDF2 and ciphers.
+Default single-header GPU and cached hits use that confirmation too; prior confirmations are
+composed with it. Credential and extra-argument jobs retain their hashcat handling.
+Kuznyechik has a local implementation checked against the RFC 7801 known answer and hashcat.
+The mode's shorter cipher chains are also tested. Extracted hidden headers use the same code.
+TrueCrypt accepts up to 64 password bytes; VeraCrypt accepts up to 128 for manual/dictionary
+jobs, while the volume extraction UI retains its existing 64-byte limit.
+A missing native library retains managed recovery. All jobs carrying `VolumeCredentials`
+(keyfiles or a nondefault PIM) stay wholly with hashcat, including dictionaries and resumes.
+Direct reference tests cover fixed PIM derivation (15,000 + 1,000 * PIM), without enabling
+CPU partitioning of credential-bearing jobs.
+Hybrid planning follows WinZip/WPA's discrete/integrated GPU and measured CPU-only gates.
+`TrueCryptSha512Tests`, `TrueCryptSha512DiagnosticTests` and `TrueCryptSha512IntegrationTests`
+cover the KDF, header checks, path reporting, planners and resume partitioning.
+`TrueCryptSha512HashcatTests` is the opt-in real hashcat suite (`RECOVERKIT_TEST_HASHCAT`).
+Measurements and Windows commands are in [SHA-512 CPU measurements](benchmarks/truecrypt-sha512-cpu.txt).
+
 WinZip AES (`WinZipAesKernel`, 13600) supports strengths 128/192/256 and passwords up to
 256 bytes. Its filter derives only block 2/3/4 containing the two-byte verifier. Every survivor
 must pass the complete ciphertext HMAC-SHA1 authentication code through the managed reference.
@@ -956,7 +987,7 @@ builds; its first comment gives build commands.
 
 File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for Office
 2007 (9400), RAR 5 (13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600),
-WPA (22000) and TrueCrypt Whirlpool (29331).
+WPA (22000), TrueCrypt Whirlpool (29331), and TrueCrypt/VeraCrypt SHA-512 (29321-29323, 29421-29423).
 `DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
 through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
 `$HEX[...]` output. Binary recovered passwords retain `$HEX[...]` when UTF-8 text would lose bytes.
