@@ -117,16 +117,16 @@ public sealed class HybridRunner
     public static HybridPlan? Plan(int mode, string hashLines, PreparedAttack attack, Settings settings,
         IReadOnlyList<BackendDevice>? devices, VolumeCredentials? credentials = null, ZipPartialTarget? partial = null, bool resumeDictionary = false)
     {
-        if (mode == 9400 && !Kernels.Office2007Kernel.NativeFast) return null;
+        if (mode == 9400 && !Kernels.Office2007Kernel.NativeFast || mode is 9500 or 9600 && !OfficeAgileKernel.NativeFast) return null;
         if (settings.PerformanceChoice?.Engine is "cpu" or "gpu") return null;
         if (!settings.HybridCpuGpu || settings.Strategy is not (DeviceStrategy.GpuOnly or DeviceStrategy.GpuAndCpu)) return null;
         var gpus = HashcatRunner.ActiveGpus(settings, devices);
         if (gpus.Count == 0) return null;
         // Shared power and memory made these kernels slower over complete jobs on integrated GPUs.
-        if ((mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && gpus.All(d => d.IsIntegratedGpu)
+        if ((mode is 9400 or 9500 or 9600 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && gpus.All(d => d.IsIntegratedGpu)
             && settings.PerformanceChoice?.Engine != "hybrid" && !settings.PerformanceStrategyExplicit) return null;
         bool cpuAddsTooLittle = settings.PerformanceChoice?.Engine != "hybrid" && CpuAddsTooLittle(settings, devices, mode);
-        if ((mode is 9400 or 13000 or 12500 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.UseNativeCpuEngine && credentials is null
+        if ((mode is 9400 or 9500 or 9600 or 13000 or 12500 or 10700 or 13600 or 22000 or 29331 || TrueCryptSha512Kernel.SupportsMode(mode)) && settings.UseNativeCpuEngine && credentials is null
             && partial is null && attack.Stdin is null && string.IsNullOrWhiteSpace(settings.ExtraArguments)
             && !hashLines.Trim().Contains('\n') && DictionaryAttack.Parse(attack.Args) is { } dictionary
             && NativeKernels.TryCreate(mode, hashLines.Trim()) is { } kernel)
@@ -290,8 +290,8 @@ public sealed class HybridRunner
                     case LengthOutcome.Found:
                         TryDelete(restoreFile);
                         if (plan.Dictionary is not null) TryDelete(LeftoverFile(r.SessionDir, r.SessionName));
-                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, NativeRunner.MatchedHashLine(plan.Kernel, hashLine, cpuPw), cpuPw, r.Mode == 9400 || r.ConfirmPassword is not null || plan.Dictionary is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
-                        if (r.Mode == 9400 || plan.Dictionary is not null)
+                        var pw = job.FoundByCpu is { } cpuPw ? [await NativeRunner.RecordFoundAsync(s, NativeRunner.MatchedHashLine(plan.Kernel, hashLine, cpuPw), cpuPw, r.Mode is 9400 or 9500 or 9600 || r.ConfirmPassword is not null || plan.Dictionary is not null ? r.PasswordCachePath ?? s.PotfilePath : null)] : job.FoundByGpu;
+                        if (r.Mode is 9400 or 9500 or 9600 || plan.Dictionary is not null)
                         {
                             if (job.FoundByCpu is { } bytes) pw = [DictionaryPlain(bytes)];
                             else if (job.FoundByGpuRaw.Count > 0) pw = job.FoundByGpuRaw.Select(raw => DictionaryPlain(PasswordConfirmation.PlainBytes(raw))).ToList();

@@ -541,7 +541,7 @@ public sealed class Office2007HybridTests
         return detection.Target!;
     }
 
-    private static HashcatTool OfficeOutputTool(string dir, string rawPassword)
+    internal static HashcatTool OfficeOutputTool(string dir, string rawPassword)
     {
         string exe = Path.Combine(dir, "hashcat");
         File.WriteAllText(Path.Combine(dir, "show.raw"), rawPassword + "\n", new UTF8Encoding(false));
@@ -562,7 +562,7 @@ public sealed class Office2007HybridTests
         return HashcatTool.Locate(exe, dir, dir)!;
     }
 
-    private sealed class DictionaryGpu(ConcurrentDictionary<string, int> seen) : IGpuRange
+    internal sealed class DictionaryGpu(ConcurrentDictionary<string, int> seen) : IGpuRange
     {
         public Task<long?> KeyspaceAsync(IReadOnlyList<string> args, CancellationToken ct) => throw new NotSupportedException();
         public async Task<GpuRangeResult> RunAsync(HashcatOrder order, long skip, long count, IReadOnlyCollection<int> exclude,
@@ -581,7 +581,7 @@ public sealed class Office2007HybridTests
         }
     }
 
-    private sealed class RecordingKernel(NativeKernel inner, ConcurrentDictionary<string, int> seen) : NativeKernel
+    internal sealed class RecordingKernel(NativeKernel inner, ConcurrentDictionary<string, int> seen) : NativeKernel
     {
         public Action? OnTest { get; init; }
         public override string Name => inner.Name;
@@ -616,7 +616,7 @@ public sealed class Office2007HybridTests
         }
     }
 
-    private sealed class RecordingGpu(ConcurrentDictionary<string, int> seen) : IGpuRange
+    internal sealed class RecordingGpu(ConcurrentDictionary<string, int> seen) : IGpuRange
     {
         public Task<long?> KeyspaceAsync(IReadOnlyList<string> args, CancellationToken ct)
         {

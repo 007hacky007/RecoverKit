@@ -81,6 +81,8 @@ public static class CpuDiagnostics
         report.System["Logical threads"] = Environment.ProcessorCount.ToString();
         report.System["CPU thread budget"] = settings.MaxCpuThreads > 0 ? settings.MaxCpuThreads.ToString() : "all logical threads";
         report.System["Office 2007 self-test (report process)"] = NativeKernels.WideSelfTestState(9400);
+        report.System["Office 2010 self-test (report process)"] = NativeKernels.WideSelfTestState(9500);
+        report.System["Office 2013 self-test (report process)"] = NativeKernels.WideSelfTestState(9600);
         report.System["RAR3 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(12500);
         report.System["RAR5 AVX-512 self-test (report process)"] = NativeKernels.WideSelfTestState(13000);
         report.System["PBKDF2 SHA-512 selected-path self-test (report process)"] = NativeKernels.WideSelfTestState(29321);
@@ -90,11 +92,11 @@ public static class CpuDiagnostics
 
     internal static void WorkerStates(DiagnosticReport report)
     {
-        foreach (int mode in new[] { 9400, 12500, 13000, 13600, 22000, 29321, 29322, 29323, 29421, 29422, 29423, 29331 })
+        foreach (int mode in new[] { 9400, 9500, 9600, 12500, 13000, 13600, 22000, 29321, 29322, 29323, 29421, 29422, 29423, 29331 })
         {
             string states = string.Join(", ", report.Measurements.Where(r => r.Mode == mode && r.Variant == "avx512")
                 .Select(r => r.Details.GetValueOrDefault("self-test state")).Where(v => v is not null).Distinct());
-            string name = mode switch { 9400 => "Office 2007", 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", 29331 => "Whirlpool", _ => $"SHA-512 mode {mode}" };
+            string name = mode switch { 9400 => "Office 2007", 9500 => "Office 2010", 9600 => "Office 2013", 12500 => "RAR3", 13000 => "RAR5", 13600 => "WinZip AES", 22000 => "WPA", 29331 => "Whirlpool", _ => $"SHA-512 mode {mode}" };
             report.System[$"{name} AVX-512 self-test (workers)"] = states.Length == 0 ? "not run" : states;
         }
     }
@@ -181,7 +183,7 @@ public static class CpuDiagnostics
             for (int i = 0; i < last.Length; i++)
                 if (kernel.Verify([.. prefix, last[i]])) { want = i; break; }
             if (worker.Search(prefix, last) != want) return new(false, 7, "Search differs after a prefix change.");
-            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || (mode is 9400 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && RkNative.Available)
+            if (mode is 12500 or 13000 && variant is "avx2" or "avx512" || mode == 29331 || (mode is 9400 or 9500 or 9600 or 13600 or 22000 || TrueCryptSha512Kernel.SupportsMode(mode)) && RkNative.Available)
             {
                 var wide = WideCpuChecks.Check(mode);
                 return wide with { Cases = wide.Cases + 7 };

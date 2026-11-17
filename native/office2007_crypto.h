@@ -1,7 +1,7 @@
 #if RK_X64
 #define O7_SHANI __attribute__((target("sha,sse2")))
 #define O7_SHA_STREAMS 2
-O7_SHANI static void office2007_iter_shani(uint32_t (*hash)[5])
+O7_SHANI static void office2007_iter_shani(uint32_t (*hash)[5], uint32_t spins)
 {
     __m128i x[O7_SHA_STREAMS], xe[O7_SHA_STREAMS];
     const __m128i iv=_mm_set_epi32(0x67452301u,0xefcdab89u,0x98badcfeu,0x10325476u);
@@ -11,7 +11,7 @@ O7_SHANI static void office2007_iter_shani(uint32_t (*hash)[5])
         x[l]=_mm_set_epi32(hash[l][0],hash[l][1],hash[l][2],hash[l][3]);
         xe[l]=_mm_set_epi32(hash[l][4],0,0,0);
     }
-    for (uint32_t i=0;i<50000;i++)
+    for (uint32_t i=0;i<spins;i++)
     {
         __m128i m[O7_SHA_STREAMS][4], abcd[O7_SHA_STREAMS], previous[O7_SHA_STREAMS];
         for (int l=0;l<O7_SHA_STREAMS;l++)
@@ -52,12 +52,12 @@ O7_SHANI static void office2007_iter_shani(uint32_t (*hash)[5])
 }
 #elif RK_ARM64
 #define O7_SHA_STREAMS 4
-__attribute__((target("sha2"))) static void office2007_iter_armsha1(uint32_t (*hash)[5])
+__attribute__((target("sha2"))) static void office2007_iter_armsha1(uint32_t (*hash)[5], uint32_t spins)
 {
     uint32x4_t x[O7_SHA_STREAMS]; uint32_t xe[O7_SHA_STREAMS];
     const uint32x4_t iv=vld1q_u32(SHA1_IV);
     for (int l=0;l<O7_SHA_STREAMS;l++) { x[l]=vld1q_u32(hash[l]); xe[l]=hash[l][4]; }
-    for (uint32_t i=0;i<50000;i++)
+    for (uint32_t i=0;i<spins;i++)
     {
         uint32x4_t m[O7_SHA_STREAMS][4], abcd[O7_SHA_STREAMS]; uint32_t e[O7_SHA_STREAMS];
         for (int l=0;l<O7_SHA_STREAMS;l++)

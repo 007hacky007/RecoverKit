@@ -107,7 +107,7 @@ try
             Console.WriteLine($"Built-in CPU engine, {threads} threads, {RecoverKit.Core.Native.NativeKernels.CpuFeatures()}");
             foreach (var mode in modes)
             {
-                if (Math.Abs(mode) == 9400) _ = RecoverKit.Core.Native.NativeKernels.CpuPath(mode);
+                if (Math.Abs(mode) is 9400 or 9500 or 9600) _ = RecoverKit.Core.Native.NativeKernels.CpuPath(mode);
                 RecoverKit.Core.Native.NativeKernels.ResetCpuPath(mode);
                 void Measure()
                 {
@@ -116,7 +116,7 @@ try
                         .ToString(Math.Abs(mode) is >= 29421 and <= 29423 or >= 13721 and <= 13723 ? "N2" : "N0");
                     Console.WriteLine($"mode {mode,6}: {rate} p/s" +
                     (Math.Abs(mode) is 17200 or 17210 ? $" [{RecoverKit.Core.Native.NativeKernels.ZipCryptoPath}]" :
-                        (Math.Abs(mode) is 9400 or 12500 or 13000 or 13600 or 22000 or 29331 || RecoverKit.Core.Native.Kernels.TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode))) ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
+                        (Math.Abs(mode) is 9400 or 9500 or 9600 or 12500 or 13000 or 13600 or 22000 or 29331 || RecoverKit.Core.Native.Kernels.TrueCryptSha512Kernel.SupportsMode(Math.Abs(mode))) ? $" [{RecoverKit.Core.Native.NativeKernels.CpuPath(mode, actualOnly: true)}; guard: {RecoverKit.Core.Native.NativeKernels.WideSelfTestState(mode)}]" : ""));
                 }
                 Measure();
                 // Include the experimental native row on CPUs whose default stays managed.

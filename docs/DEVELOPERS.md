@@ -798,7 +798,25 @@ spin digests with .NET across partial batches and UTF-16LE password lengths thro
 Office 2007 appears in CPU diagnostics, wide vector comparisons and finite hybrid benchmarks.
 Hybrid uses the same discrete-GPU defaults and measured CPU-only gate as WinZip AES and WPA.
 `Office2007HybridTests` covers planning, exact path checks, UTF-8 dictionary partitioning and
-resume checkpoints. Office 2010/2013 and newer encryption modes continue to use hashcat.
+resume checkpoints.
+
+Office Agile (`OfficeAgileKernel`, modes 9500/9600, native API 19) supports the hashcat 8
+variants: Office 2010 with SHA-1/AES-128 and Office 2013-2021 with SHA-512/AES-256,
+16-byte salt and 100,000 spins. Other Agile parameter combinations stay on hashcat.
+The native `rk_office_agile_spin` export accepts the mode and spin count and returns each
+candidate's digest. The managed verifier derives the AES-CBC verifier keys and independently
+checks every native or GPU hit. It shares Office 2007's UTF-8 conversion and retains exact
+candidate bytes in results and confirmed password caches, including literal `$HEX[...]` text.
+Office 2010 reuses Office 2007's SHA-1 lanes. Office 2013 provides scalar, AVX2, AVX-512,
+NEON and ARM SHA-512 paths. Every accelerated path has a full-spin known-answer guard and
+reports its observed path; diagnostics reject fallback timings. Use
+`RECOVERKIT_OFFICE2010_PATH=scalar|avx2|avx512|sha-ni|neon|arm-sha1` or
+`RECOVERKIT_OFFICE2013_PATH=scalar|avx2|avx512|neon|arm-sha512` to compare paths.
+`RECOVERKIT_OFFICE2010_AVX512=0` and `RECOVERKIT_OFFICE2013_AVX512=0` disable the respective
+wide path. These selectors are separate from the PBKDF2 selectors.
+Both modes follow Office 2007's discrete-GPU hybrid default, measured CPU-only gate,
+dictionary partitioning and resume handling. `OfficeAgileHybridTests` checks these gates
+and coverage; `OfficeAgileDiagnosticTests` checks variant registration and observed paths.
 
 PBKDF2-HMAC-SHA1 (native API 16, `native/pbkdf2_sha1.h`) shares the same 16-lane batch
 bound. It reuses scalar SHA-1 for HMAC setup and U1, then runs the fixed 20-byte HMAC loop
@@ -986,7 +1004,7 @@ builds; its first comment gives build commands.
 ## Hybrid CPU + GPU
 
 File dictionaries (`-a 0`, optionally with chained `-r` files) also use this scheduler for Office
-2007 (9400), RAR 5 (13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600),
+2007/2010/2013 (9400/9500/9600), RAR 5 (13000), encrypted-header RAR 3 (12500), PDF R6 (10700), WinZip AES (13600),
 WPA (22000), TrueCrypt Whirlpool (29331), and TrueCrypt/VeraCrypt SHA-512 (29321-29323, 29421-29423).
 `DictionaryAttack` obtains base and amplified counts from hashcat, then exports each CPU batch
 through the same binary's `--stdout --skip --limit`. Binary candidates stay bytes, including
@@ -1127,7 +1145,7 @@ CPU slows the GPU. RAR 3 on an M1 Pro: the GPU ran 8,000-11,000/s next to the CP
 last hybrid attack on a mode measured the CPU below a quarter of hashcat's speed, later attacks on
 that mode run hashcat alone (logged; `HybridRunner.CpuAddsTooLittle`). PDF R6, where the CPU is
 five times faster than this GPU, keeps both.
-Office 2007, WinZip AES and WPA additionally require an explicit strategy choice or a measured
+Office 2007-2021, WinZip AES and WPA additionally require an explicit strategy choice or a measured
 hybrid profile when every active GPU is integrated. Their default is hybrid when any active GPU is discrete.
 
 Integrated GPU next to a discrete one: it ties up a CPU thread (hashcat's host thread) and shares

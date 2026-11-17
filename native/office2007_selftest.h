@@ -32,7 +32,7 @@ static int office2007_selftest(office2007_iter_fn fn, int lanes)
             for (int q=0;q<O7_TEST_LENGTHS[ql];q++) pw[q]=(uint8_t)(q%2==0?33+(ql*17+q*7)%94:0);
             office2007_initial(pw,O7_TEST_LENGTHS[ql],salt,h[l]);
         }
-        fn(h);
+        fn(h,50000);
         for (int l=0;l<m;l++) if (memcmp(h[l],O7_TEST_ANSWERS[b+l],20)!=0) return 0;
     }
     return 1;

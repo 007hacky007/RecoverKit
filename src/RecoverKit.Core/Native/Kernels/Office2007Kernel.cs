@@ -35,7 +35,7 @@ public sealed unsafe class Office2007Kernel : NativeKernel, INativeFilter
         catch (FormatException) { return null; }
     }
 
-    private static int Encode(ReadOnlySpan<byte> password, Span<byte> utf16)
+    internal static int Encode(ReadOnlySpan<byte> password, Span<byte> utf16)
     {
         int written = 0;
         while (!password.IsEmpty)

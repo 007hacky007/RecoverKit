@@ -6,12 +6,12 @@
 #define O7_LANE(v,l) (v)[l]
 #endif
 #define O7_ROL(x,n) (((x) << (n)) | ((x) >> (32-(n))))
-O7_FN static void O7_F(office2007_iter)(uint32_t (*hash)[5])
+O7_FN static void O7_F(office2007_iter)(uint32_t (*hash)[5], uint32_t spins)
 {
     const O7_V z = {0};
     O7_V x[5];
     for (int j=0;j<5;j++) for (int l=0;l<O7_L;l++) O7_LANE(x[j],l)=hash[l][j];
-    for (uint32_t i=0;i<50000;i++)
+    for (uint32_t i=0;i<spins;i++)
     {
         O7_V w[16];
         w[0]=z+__builtin_bswap32(i);
