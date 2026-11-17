@@ -6,7 +6,6 @@ All notable changes to RecoverKit. Downloads are on the
 ## [Unreleased]
 
 ### Added
-
 - Built-in CPU recovery for Office 2010 and Office 2013-2021 Agile encryption (modes 9500/9600),
   with native SHA-1/SHA-512 paths and independent managed verification. Masks and rule dictionaries
   share work with hashcat on discrete GPUs; diagnostics compare the selected paths before timing.
