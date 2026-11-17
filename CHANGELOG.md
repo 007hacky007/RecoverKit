@@ -5,6 +5,8 @@ All notable changes to RecoverKit. Downloads are on the
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-17
+
 ### Added
 - Built-in CPU recovery for Office 2010 and Office 2013-2021 Agile encryption (modes 9500/9600),
   with native SHA-1/SHA-512 paths and independent managed verification. Masks and rule dictionaries
@@ -410,6 +412,7 @@ First release, for Windows.
 - Guaranteed 40-bit key search for Office 97-2003 and early PDF files.
 - Benchmark with an HTML report, word list and Wi-Fi table generators, and update checks on request.
 
+[1.9.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.9.1
 [1.8.0]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.8.0
 [1.7.2]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.2
 [1.7.1]: https://github.com/007hacky007/RecoverKit/releases/tag/v1.7.1
